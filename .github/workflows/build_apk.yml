@@ -18,14 +18,22 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Configurar Flutter
+      - name: Configurar Flutter (Version Estable Moderna)
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.24.0'
+          cache: true
 
-      - name: Generar estructura de Android
-        run: flutter create --org com.softballworld.lineup --project-name softball_world_lineup .
+      - name: Generar estructura de Android y configurar SDK
+        run: |
+          flutter create --org com.softballworld.lineup --project-name softball_world_lineup .
+          # Asegurar que compile con Android 35
+          if [ -f android/app/build.gradle ]; then
+            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' android/app/build.gradle || true
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle || true
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle || true
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
+          fi
 
       - name: Instalar dependencias
         run: flutter pub get
