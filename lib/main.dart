@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-// FUNCIÓN OFICIAL PARA ABRIR WHATSAPP DIRECTO EN ANDROID
+// CONEXIÓN DIRECTA CON WHATSAPP EN ANDROID
 Future<void> sendToWhatsApp(String message) async {
   final Uri url = Uri.parse("https://api.whatsapp.com/send?text=${Uri.encodeComponent(message)}");
   try {
@@ -23,7 +23,7 @@ Future<void> main() async {
       anonKey: 'sb_publishable_gOqSMC3ouDYNDu-mxLmYzQ_LSyCq',
     );
   } catch (e) {
-    debugPrint("Modo seguro activo: $e");
+    debugPrint("Modo seguro local: $e");
   }
 
   runApp(const SoftballWorldApp());
@@ -50,9 +50,9 @@ class SoftballWorldApp extends StatelessWidget {
   }
 }
 
-// -------------------------------------------------------------------------
-// 1. SPLASH: PANTALLA DE APERTURA CON LOGO OFICIAL
-// -------------------------------------------------------------------------
+// =========================================================================
+// 1. SPLASH: APERTURA CON LOGO OFICIAL
+// =========================================================================
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
 
@@ -124,7 +124,7 @@ class SplashScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  const Text("República Dominicana · Santo Domingo · Cibao", style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  const Text("República Dominicana · Internacional", style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               ),
             ),
@@ -135,9 +135,9 @@ class SplashScreen extends StatelessWidget {
   }
 }
 
-// -------------------------------------------------------------------------
-// 2. INICIO DE SESIÓN / REGISTRO REAL CON ELECCIÓN DE ROL
-// -------------------------------------------------------------------------
+// =========================================================================
+// 2. INICIO DE SESIÓN / REGISTRO PERMANENTE
+// =========================================================================
 class AuthLoginScreen extends StatefulWidget {
   const AuthLoginScreen({super.key});
 
@@ -148,13 +148,13 @@ class AuthLoginScreen extends StatefulWidget {
 class _AuthLoginScreenState extends State<AuthLoginScreen> {
   final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
-  void _selectRoleAndProceed(String method) {
+  void _openRoleSetupModal(String method) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF16202C),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => OnboardingRoleSheet(method: method),
+      builder: (ctx) => const OnboardingRoleSheet(),
     );
   }
 
@@ -173,29 +173,25 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
               const SizedBox(height: 14),
               const Text("INICIA SESIÓN O REGÍSTRATE", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1)),
               const SizedBox(height: 4),
-              const Text("Elige cómo deseas entrar para configurar tus accesos:", style: TextStyle(color: Colors.white60, fontSize: 12), textAlign: TextAlign.center),
+              const Text("Tu cuenta se guarda de forma permanente en la nube", style: TextStyle(color: Colors.white60, fontSize: 12), textAlign: TextAlign.center),
               const Spacer(),
 
-              _socialBtn(icon: Icons.g_mobiledata, iconColor: Colors.redAccent, text: "Continuar con Google", onTap: () => _selectRoleAndProceed("Google")),
+              _socialBtn(icon: Icons.g_mobiledata, iconColor: Colors.redAccent, text: "Continuar con Google", onTap: () => _openRoleSetupModal("Google")),
               const SizedBox(height: 10),
-              _socialBtn(icon: Icons.apple, iconColor: Colors.white, text: "Continuar con Apple", onTap: () => _selectRoleAndProceed("Apple")),
+              _socialBtn(icon: Icons.apple, iconColor: Colors.white, text: "Continuar con Apple", onTap: () => _openRoleSetupModal("Apple")),
               const SizedBox(height: 10),
               OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50), side: const BorderSide(color: Colors.white24), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                 icon: const Icon(Icons.sms, color: Colors.amber, size: 18),
                 label: const Text("Entrar con Teléfono o Correo", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                onPressed: () => _selectRoleAndProceed("Teléfono"),
+                onPressed: () => _openRoleSetupModal("Teléfono"),
               ),
               const SizedBox(height: 16),
               TextButton(
                 onPressed: () {
-                  // Entra como fanático directo
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(builder: (ctx) => const MainAppMasterHub(userRole: "fan", userName: "Fanático Invitado")),
-                  );
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (ctx) => const MainAppMasterHub(userRole: "fan", userName: "Fanático Invitado", teamName: "Fanático")));
                 },
-                child: const Text("Explorar como Fanático Invitado (Sin Cuenta)", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12, decoration: TextDecoration.underline)),
+                child: const Text("Explorar como Fanático Invitado (Solo Lectura)", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12, decoration: TextDecoration.underline)),
               ),
               const Spacer(),
             ],
@@ -222,55 +218,59 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
 }
 
 // -------------------------------------------------------------------------
-// SELECCIÓN DE ROL (DEFINE LO QUE PUEDE HACER CADA USUARIO)
+// REGISTRO DE ROL
 // -------------------------------------------------------------------------
 class OnboardingRoleSheet extends StatefulWidget {
-  final String method;
-  const OnboardingRoleSheet({super.key, required this.method});
+  const OnboardingRoleSheet({super.key});
 
   @override
   State<OnboardingRoleSheet> createState() => _OnboardingRoleSheetState();
 }
 
 class _OnboardingRoleSheetState extends State<OnboardingRoleSheet> {
-  String selectedRole = "manager"; // 'manager', 'player', 'fan'
-  final nameCtrl = TextEditingController(text: "Mánager");
+  String selectedRole = "manager";
+  final nameCtrl = TextEditingController(text: "Mánager General");
+  final teamCtrl = TextEditingController(text: "Plataneros de La Vega");
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(22),
-      height: 520,
+      height: 560,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text("CONFIGURAR TU PERFIL", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 15)),
+              const Text("REGISTRO DE USUARIO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 15)),
               IconButton(icon: const Icon(Icons.close, color: Colors.white60), onPressed: () => Navigator.pop(context)),
             ],
           ),
-          const Text("Indica tu función para darte los permisos correctos:", style: TextStyle(color: Colors.white60, fontSize: 11)),
+          const Text("Indica tu nombre y función para configurar tus accesos:", style: TextStyle(color: Colors.white60, fontSize: 11)),
           const SizedBox(height: 12),
 
           TextField(
             controller: nameCtrl,
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            decoration: const InputDecoration(
-              labelText: "Tu Nombre Completo",
-              labelStyle: TextStyle(color: Colors.white70),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.amber)),
-            ),
+            decoration: const InputDecoration(labelText: "Tu Nombre Completo", labelStyle: TextStyle(color: Colors.white70)),
           ),
-
-          const SizedBox(height: 16),
-
-          _roleOption("manager", "Soy Mánager / Dirigente", "Crear mi equipo, inscribir roster, armar lineup y agendar retos.", Icons.shield),
           const SizedBox(height: 8),
-          _roleOption("player", "Soy Pelotero / Jugador", "Ver mi promedio, mi carnet con ID y compartir cromito.", Icons.sports_baseball),
+
+          if (selectedRole == "manager")
+            TextField(
+              controller: teamCtrl,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              decoration: const InputDecoration(labelText: "Nombre de tu Equipo", labelStyle: TextStyle(color: Colors.white70)),
+            ),
+
+          const SizedBox(height: 14),
+
+          _roleCard("manager", "Soy Mánager / Dirigente", "Crear equipo, roster, alinear, agendar retos y anotar en el play.", Icons.shield),
           const SizedBox(height: 8),
-          _roleOption("fan", "Soy Fanático", "Solo ver juegos en vivo y seguir el torneo.", Icons.favorite),
+          _roleCard("player", "Soy Pelotero / Jugador", "Tener mi carnet con ID (RD-XXXX), ver mi promedio y compartir cromito.", Icons.sports_baseball),
+          const SizedBox(height: 8),
+          _roleCard("fan", "Soy Fanático o Familiar", "Seguir las transmisiones en vivo sin alterar números.", Icons.favorite),
 
           const Spacer(),
 
@@ -280,10 +280,11 @@ class _OnboardingRoleSheetState extends State<OnboardingRoleSheet> {
               style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
               onPressed: () {
                 final user = nameCtrl.text.trim().isEmpty ? "Usuario" : nameCtrl.text.trim();
+                final team = teamCtrl.text.trim().isEmpty ? "Equipo Oficial" : teamCtrl.text.trim();
                 Navigator.pop(context);
                 Navigator.pushReplacement(
                   context,
-                  MaterialPageRoute(builder: (ctx) => MainAppMasterHub(userRole: selectedRole, userName: user)),
+                  MaterialPageRoute(builder: (ctx) => MainAppMasterHub(userRole: selectedRole, userName: user, teamName: team)),
                 );
               },
               child: const Text("GUARDAR Y ENTRAR A LA APP", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900)),
@@ -294,7 +295,7 @@ class _OnboardingRoleSheetState extends State<OnboardingRoleSheet> {
     );
   }
 
-  Widget _roleOption(String id, String title, String subtitle, IconData icon) {
+  Widget _roleCard(String id, String title, String subtitle, IconData icon) {
     final isSelected = selectedRole == id;
     return InkWell(
       onTap: () => setState(() => selectedRole = id),
@@ -310,13 +311,10 @@ class _OnboardingRoleSheetState extends State<OnboardingRoleSheet> {
             Icon(icon, color: isSelected ? Colors.amber : Colors.white70),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                  Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 10)),
-                ],
-              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+              ]),
             ),
           ],
         ),
@@ -325,13 +323,14 @@ class _OnboardingRoleSheetState extends State<OnboardingRoleSheet> {
   }
 }
 
-// -------------------------------------------------------------------------
-// 3. HUB PRINCIPAL (CON BOTÓN DE SALIR Y CONTROL DE ROLES)
-// -------------------------------------------------------------------------
+// =========================================================================
+// 3. HUB PRINCIPAL (4 PESTAÑAS)
+// =========================================================================
 class MainAppMasterHub extends StatefulWidget {
-  final String userRole; // 'manager', 'player', 'fan'
+  final String userRole;
   final String userName;
-  const MainAppMasterHub({super.key, this.userRole = "manager", this.userName = "Mánager"});
+  final String teamName;
+  const MainAppMasterHub({super.key, this.userRole = "manager", this.userName = "Mánager General", this.teamName = "Plataneros de La Vega"});
 
   @override
   State<MainAppMasterHub> createState() => _MainAppMasterHubState();
@@ -340,7 +339,12 @@ class MainAppMasterHub extends StatefulWidget {
 class _MainAppMasterHubState extends State<MainAppMasterHub> {
   int _currentIndex = 0;
 
-  // CERRAR SESIÓN / SALIR DE TODO
+  // Estado del partido activo compartido
+  String activeGamePin = "PLAY-742";
+  String activeHomeTeam = "Metros de Santiago";
+  String activeAwayTeam = "Plataneros de La Vega";
+  String activePlay = "Play Club Miramar (SD)";
+
   void _logout() {
     showDialog(
       context: context,
@@ -363,15 +367,43 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     );
   }
 
+  // Activa un partido desde la Agenda hacia la Pizarra
+  void _launchGameFromSchedule(String pin, String home, String away, String play) {
+    setState(() {
+      activeGamePin = pin;
+      activeHomeTeam = home;
+      activeAwayTeam = away;
+      activePlay = play;
+      _currentIndex = 1; // Salta de inmediato a la Pizarra
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(backgroundColor: Colors.teal.shade800, content: Text("⚾ ¡Partido $pin activado en vivo!")),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final List<Widget> screens = [
       MasterHomeTab(
-        onPlayNowTap: () => setState(() => _currentIndex = 1), // ¡A JUGAR AHORA! manda a la Pizarra
+        onPlayNowTap: () => setState(() => _currentIndex = 1),
+        onJoinWithPin: (pin) {
+          setState(() {
+            activeGamePin = pin;
+            _currentIndex = 1;
+          });
+        },
       ),
-      const MasterScoreboardTab(),
-      const MasterScheduleTab(),
-      MasterTeamTab(userRole: widget.userRole, userName: widget.userName),
+      MasterScoreboardTab(
+        userRole: widget.userRole,
+        gamePin: activeGamePin,
+        homeTeam: activeHomeTeam,
+        awayTeam: activeAwayTeam,
+        stadium: activePlay,
+      ),
+      MasterScheduleTab(
+        onActivateMatch: _launchGameFromSchedule,
+      ),
+      MasterTeamTab(userRole: widget.userRole, userName: widget.userName, initialTeamName: widget.teamName),
     ];
 
     String roleBadge = "MÁNAGER";
@@ -391,17 +423,16 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
               child: Text(roleBadge, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 9)),
             ),
             const SizedBox(width: 8),
-            Text(widget.userName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white)),
+            Expanded(child: Text(widget.userName, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white))),
           ],
         ),
         actions: [
-          // BOTÓN DE SALIR / CERRAR SESIÓN
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent, size: 20),
             tooltip: "Cerrar Sesión",
             onPressed: _logout,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
         ],
       ),
       body: IndexedStack(index: _currentIndex, children: screens),
@@ -421,12 +452,13 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
   }
 }
 
-// -------------------------------------------------------------------------
-// PESTAÑA 1: INICIO (CON BOTÓN ¡A JUGAR AHORA! CONECTADO)
-// -------------------------------------------------------------------------
+// =========================================================================
+// PESTAÑA 1: INICIO (PATROCINADORES + MODAL DE ENTRAR CON PIN O JUGAR)
+// =========================================================================
 class MasterHomeTab extends StatefulWidget {
   final VoidCallback onPlayNowTap;
-  const MasterHomeTab({super.key, required this.onPlayNowTap});
+  final Function(String) onJoinWithPin;
+  const MasterHomeTab({super.key, required this.onPlayNowTap, required this.onJoinWithPin});
 
   @override
   State<MasterHomeTab> createState() => _MasterHomeTabState();
@@ -455,6 +487,91 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
     super.dispose();
   }
 
+  // DIÁLOGO PARA ENTRAR CON EL PIN DE SALA EN EL PLAY
+  void _openJoinPinDialog() {
+    final pinCtrl = TextEditingController(text: "PLAY-742");
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16202C),
+        title: Row(
+          children: const [
+            Icon(Icons.key, color: Colors.amber, size: 20),
+            SizedBox(width: 8),
+            Text("Unirse a Partido con PIN", style: TextStyle(color: Colors.amber, fontSize: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Escribe el PIN que te dio el otro mánager para enlazar tu teléfono:", style: TextStyle(color: Colors.white70, fontSize: 11)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: pinCtrl,
+              textCapitalization: TextCapitalization.characters,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 2),
+              decoration: const InputDecoration(labelText: "PIN DEL JUEGO", labelStyle: TextStyle(color: Colors.white60)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCELAR")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.onJoinWithPin(pinCtrl.text.trim().toUpperCase());
+            },
+            child: const Text("ENLAZAR MI CELULAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openPlaySelectionModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF16202C),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(20),
+        height: 260,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("⚾ SALTAR AL TERRENO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 4),
+            const Text("Elige cómo vas a llevar este partido:", style: TextStyle(color: Colors.white60, fontSize: 11)),
+            const SizedBox(height: 16),
+            ListTile(
+              tileColor: const Color(0xFF0F172A),
+              leading: const Icon(Icons.add_circle, color: Colors.amber),
+              title: const Text("Crear Partido Nuevo (Generar PIN)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              subtitle: const Text("Para que el otro dugout se conecte contigo", style: TextStyle(color: Colors.white54, fontSize: 10)),
+              onTap: () {
+                Navigator.pop(ctx);
+                widget.onPlayNowTap();
+              },
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              tileColor: const Color(0xFF0F172A),
+              leading: const Icon(Icons.key, color: Colors.tealAccent),
+              title: const Text("Unirse con PIN de Juego (Teléfono 2)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              subtitle: const Text("Escribe el PIN para enlazar este teléfono", style: TextStyle(color: Colors.white54, fontSize: 10)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openJoinPinDialog();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
@@ -474,13 +591,23 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
               ],
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(3, (i) => Container(
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width: i == _currentBanner ? 16 : 6,
+              height: 4,
+              decoration: BoxDecoration(color: i == _currentBanner ? Colors.amber : Colors.white24, borderRadius: BorderRadius.circular(2)),
+            )),
+          ),
+          const SizedBox(height: 16),
 
-          // BOTÓN ¡A JUGAR AHORA! (AHORA SÍ FUNCIONA Y TE MANDA A LA PIZARRA)
+          // BOTÓN ¡A JUGAR AHORA! ABRE OPCIONES DE ENLACE
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: InkWell(
-              onTap: widget.onPlayNowTap, // Salta directo a la Pizarra
+              onTap: _openPlaySelectionModal,
               borderRadius: BorderRadius.circular(16),
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
@@ -498,53 +625,13 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text("¡A JUGAR AHORA!", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 19)),
-                          Text("Toca aquí para abrir la pizarra y anotar", style: TextStyle(color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold)),
+                          Text("Crear partido, enlazar celulares o unirse con PIN", style: TextStyle(color: Colors.black87, fontSize: 10, fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
                     Icon(Icons.arrow_forward_ios, color: Colors.black, size: 18),
                   ],
                 ),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 18),
-
-          // LÍDER NACIONAL VIRAL
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF121B27),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.amber.shade700.withAlpha(120)),
-              ),
-              child: Row(
-                children: [
-                  const CircleAvatar(
-                    radius: 22,
-                    backgroundImage: NetworkImage("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80"),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text("Juan Pérez #14", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                        Text("Plataneros de La Vega · ID: RD-8420", style: TextStyle(color: Colors.white60, fontSize: 10)),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: const [
-                      Text(".615", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w900, fontSize: 20)),
-                      Text("LÍDER NACIONAL", style: TextStyle(color: Colors.amber, fontSize: 8, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ],
               ),
             ),
           ),
@@ -578,19 +665,33 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
   }
 }
 
-// -------------------------------------------------------------------------
-// PESTAÑA 2: PIZARRA OFICIAL EN VIVO (CON CONTROLES Y BOX SCORE)
-// -------------------------------------------------------------------------
+// =========================================================================
+// PESTAÑA 2: PIZARRA OFICIAL EN VIVO (ENLAZADA POR PIN DE SALA)
+// =========================================================================
 class MasterScoreboardTab extends StatefulWidget {
-  const MasterScoreboardTab({super.key});
+  final String userRole;
+  final String gamePin;
+  final String homeTeam;
+  final String awayTeam;
+  final String stadium;
+
+  const MasterScoreboardTab({
+    super.key,
+    required this.userRole,
+    required this.gamePin,
+    required this.homeTeam,
+    required this.awayTeam,
+    required this.stadium,
+  });
 
   @override
   State<MasterScoreboardTab> createState() => _MasterScoreboardTabState();
 }
 
 class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
-  String visitor = "La Vega";
-  String home = "Santiago";
+  // Dugout asignado a este teléfono
+  String myDugoutSide = "Local"; // 'Local' o 'Visitante'
+
   int inning = 6;
   bool isTop = false;
 
@@ -602,15 +703,82 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
   int visErr = 2; int homErr = 1;
 
   int balls = 1; int strikes = 2; int outs = 2;
-  bool on1B = true; bool on2B = false; bool on3B = false;
 
-  void _finishGameAndGoToBoxScore() {
+  String batter = "Juan Pérez #14";
+  String pitcher = "Luis Severino #40";
+
+  void _openChangePitcherDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF16202C),
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(18),
+        height: 320,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("🔄 CAMBIO DE LANZADOR (RELEVO)", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
+            const SizedBox(height: 8),
+            Text("Lanzador que sale: $pitcher", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 12),
+            ...["Carlos Martínez #18 (Relevo)", "Pedro Strop #46 (Cerrador)"].map((p) => ListTile(
+              dense: true,
+              leading: const Icon(Icons.sports, color: Colors.tealAccent),
+              title: Text(p, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              trailing: const Icon(Icons.check, color: Colors.amber),
+              onTap: () {
+                setState(() => pitcher = p);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(backgroundColor: Colors.teal, content: Text("⚾ Entra $p a lanzar.")));
+              },
+            )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openPinchHitterDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF16202C),
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(18),
+        height: 320,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("🔄 BATEADOR EMERGENTE (PH)", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
+            const SizedBox(height: 8),
+            Text("Bateador que sale: $batter", style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 12),
+            ...["Edwin Encarnación #10 (PH)", "Gary Sánchez #24 (PH)"].map((b) => ListTile(
+              dense: true,
+              leading: const Icon(Icons.sports_baseball, color: Colors.amber),
+              title: Text(b, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              trailing: const Icon(Icons.check, color: Colors.amber),
+              onTap: () {
+                setState(() => batter = b);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(backgroundColor: Colors.orange.shade800, content: Text("⚾ Entra $b como emergente.")));
+              },
+            )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _finishGame() {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (ctx) => MasterBoxScoreScreen(
-          visitor: visitor, home: home, visRuns: visRuns, homRuns: homRuns,
-          visHits: visHits, homHits: homHits, visErr: visErr, homErr: homErr,
+          visitor: widget.awayTeam, home: widget.homeTeam,
+          visRuns: visRuns, homRuns: homRuns,
+          visHits: visHits, homHits: homHits,
+          visErr: visErr, homErr: homErr,
+          gamePin: widget.gamePin,
         ),
       ),
     );
@@ -618,15 +786,39 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
 
   @override
   Widget build(BuildContext context) {
+    final bool canScore = widget.userRole != "fan";
+
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1722),
-        title: const Text("⚾ PIZARRA EN VIVO", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("⚾ SALA EN VIVO: ${widget.gamePin}", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Colors.amber)),
+            Text("📍 ${widget.stadium}", style: const TextStyle(color: Colors.white54, fontSize: 10)),
+          ],
+        ),
         actions: [
+          // Selector de Dugout para el teléfono
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(color: const Color(0xFF16202C), borderRadius: BorderRadius.circular(6)),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: myDugoutSide,
+                dropdownColor: const Color(0xFF0F172A),
+                style: const TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                items: ["Local", "Visitante"].map((s) => DropdownMenuItem(value: s, child: Text("Dugout $s"))).toList(),
+                onChanged: (v) => setState(() => myDugoutSide = v!),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4)),
-            onPressed: _finishGameAndGoToBoxScore,
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+            onPressed: _finishGame,
             child: const Text("FINALIZAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
           ),
           const SizedBox(width: 8),
@@ -635,6 +827,7 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
       body: SafeArea(
         child: Column(
           children: [
+            // Pizarra MLB de 6 entradas
             Container(
               margin: const EdgeInsets.all(10),
               padding: const EdgeInsets.all(8),
@@ -655,14 +848,14 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
                     const Center(child: Text("E", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 11))),
                   ]),
                   TableRow(children: [
-                    Text(visitor, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+                    Text(widget.awayTeam, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
                     ...visInnings.map((r) => Center(child: Text(r != null ? "$r" : "-", style: const TextStyle(color: Colors.white70, fontSize: 11)))),
                     Center(child: Text("$visRuns", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 12))),
                     Center(child: Text("$visHits", style: const TextStyle(color: Colors.white, fontSize: 11))),
                     Center(child: Text("$visErr", style: const TextStyle(color: Colors.orangeAccent, fontSize: 11))),
                   ]),
                   TableRow(children: [
-                    Text(home, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+                    Text(widget.homeTeam, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
                     ...homInnings.map((r) => Center(child: Text(r != null ? "$r" : "-", style: const TextStyle(color: Colors.white70, fontSize: 11)))),
                     Center(child: Text("$homRuns", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 12))),
                     Center(child: Text("$homHits", style: const TextStyle(color: Colors.white, fontSize: 11))),
@@ -671,6 +864,8 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
                 ],
               ),
             ),
+
+            // Conteo B-S-O
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 10),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -689,19 +884,79 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
                 ],
               ),
             ),
-            const SizedBox(height: 14),
+
+            // Duelo Bateador vs Pitcher (CON CAMBIOS EN VIVO)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               child: Row(
                 children: [
-                  Expanded(child: _btn("BOLA", const Color(0xFF10B981), () => setState(() => balls = (balls + 1) % 4))),
+                  Expanded(
+                    child: InkWell(
+                      onTap: canScore ? _openPinchHitterDialog : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: const Color(0xFF16202C), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.amber.shade700)),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            const Icon(Icons.sports_baseball, color: Colors.amber, size: 12),
+                            const SizedBox(width: 4),
+                            Expanded(child: Text(batter, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11))),
+                          ]),
+                          const Text("Toca para cambio de emergente (PH)", style: TextStyle(color: Colors.white38, fontSize: 8)),
+                        ]),
+                      ),
+                    ),
+                  ),
                   const SizedBox(width: 6),
-                  Expanded(child: _btn("STRIKE", const Color(0xFFEF4444), () => setState(() => strikes = (strikes + 1) % 3))),
-                  const SizedBox(width: 6),
-                  Expanded(child: _btn("HIT (+1 C)", const Color(0xFF223040), () => setState(() => homRuns++))),
+                  Expanded(
+                    child: InkWell(
+                      onTap: canScore ? _openChangePitcherDialog : null,
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(color: const Color(0xFF16202C), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.tealAccent)),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            const Icon(Icons.sports, color: Colors.tealAccent, size: 12),
+                            const SizedBox(width: 4),
+                            Expanded(child: Text(pitcher, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11))),
+                          ]),
+                          const Text("Toca para traer relevo del bullpen", style: TextStyle(color: Colors.white38, fontSize: 8)),
+                        ]),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
+
+            // Botonera de juego
+            if (canScore) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Column(
+                  children: [
+                    Row(children: [
+                      Expanded(child: _btn("BOLA", const Color(0xFF10B981), () => setState(() => balls = (balls + 1) % 4))),
+                      const SizedBox(width: 6),
+                      Expanded(child: _btn("STRIKE", const Color(0xFFEF4444), () => setState(() => strikes = (strikes + 1) % 3))),
+                      const SizedBox(width: 6),
+                      Expanded(child: _btn("OUT (F8)", const Color(0xFFF59E0B), () => setState(() => outs = (outs + 1) % 3))),
+                    ]),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      Expanded(child: _btn("HIT (+1 C)", const Color(0xFF223040), () => setState(() => homRuns++))),
+                      const SizedBox(width: 6),
+                      Expanded(child: _btn("JONRÓN (+2 C)", const Color(0xFF8B5CF6), () => setState(() => homRuns += 2))),
+                    ]),
+                  ],
+                ),
+              ),
+            ] else ...[
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text("🔒 Transmisión en tiempo real (Modo solo lectura)", style: TextStyle(color: Colors.tealAccent, fontSize: 11)),
+              ),
+            ],
           ],
         ),
       ),
@@ -715,19 +970,31 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
   );
 }
 
-// BOX SCORE CON BOTÓN QUE ABRE WHATSAPP
-class MasterBoxScoreScreen extends StatelessWidget {
+// BOX SCORE CON DOBLE FIRMA DE AMBOS TELÉFONOS
+class MasterBoxScoreScreen extends StatefulWidget {
   final String visitor; final String home; final int visRuns; final int homRuns;
   final int visHits; final int homHits; final int visErr; final int homErr;
-  const MasterBoxScoreScreen({super.key, required this.visitor, required this.home, required this.visRuns, required this.homRuns, required this.visHits, required this.homHits, required this.visErr, required this.homErr});
+  final String gamePin;
+
+  const MasterBoxScoreScreen({super.key, required this.visitor, required this.home, required this.visRuns, required this.homRuns, required this.visHits, required this.homHits, required this.visErr, required this.homErr, required this.gamePin});
+
+  @override
+  State<MasterBoxScoreScreen> createState() => _MasterBoxScoreScreenState();
+}
+
+class _MasterBoxScoreScreenState extends State<MasterBoxScoreScreen> {
+  bool homeSigned = false;
+  bool visitorSigned = false;
 
   @override
   Widget build(BuildContext context) {
-    final bool visWon = visRuns > homRuns;
+    final bool visWon = widget.visRuns > widget.homRuns;
+    final bool isApproved = homeSigned && visitorSigned;
+
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(backgroundColor: const Color(0xFF0F1722), title: const Text("BOX SCORE OFICIAL", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15))),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
@@ -736,32 +1003,68 @@ class MasterBoxScoreScreen extends StatelessWidget {
               decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(14)),
               child: Column(
                 children: [
-                  const Text("FINAL DEL JUEGO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text("FINAL DEL JUEGO · PIN: ${widget.gamePin}", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
                   const SizedBox(height: 12),
                   Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-                    Column(children: [Text(visitor, style: const TextStyle(color: Colors.white70, fontSize: 15)), Text("$visRuns", style: TextStyle(color: visWon ? Colors.greenAccent : Colors.white, fontSize: 36, fontWeight: FontWeight.w900))]),
+                    Column(children: [Text(widget.visitor, style: const TextStyle(color: Colors.white70, fontSize: 14)), Text("${widget.visRuns}", style: TextStyle(color: visWon ? Colors.greenAccent : Colors.white, fontSize: 34, fontWeight: FontWeight.w900))]),
                     const Text("VS", style: TextStyle(color: Colors.white24, fontSize: 14)),
-                    Column(children: [Text(home, style: const TextStyle(color: Colors.white70, fontSize: 15)), Text("$homRuns", style: TextStyle(color: !visWon ? Colors.greenAccent : Colors.white, fontSize: 36, fontWeight: FontWeight.w900))]),
+                    Column(children: [Text(widget.home, style: const TextStyle(color: Colors.white70, fontSize: 14)), Text("${widget.homRuns}", style: TextStyle(color: !visWon ? Colors.greenAccent : Colors.white, fontSize: 34, fontWeight: FontWeight.w900))]),
                   ]),
                   const Divider(color: Colors.white24, height: 20),
-                  Text("Ganador Oficial: ${visWon ? visitor : home}", style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
+                  Text("Ganador Oficial: ${visWon ? widget.visitor : widget.home}", style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 14),
+
+            // DOBLE FIRMA DE AMBOS DUGOTS
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: const Color(0xFF16202C), borderRadius: BorderRadius.circular(12), border: Border.all(color: isApproved ? Colors.greenAccent : Colors.amber)),
+              child: Column(
+                children: [
+                  Text(isApproved ? "✅ JUEGO OFICIALIZADO POR AMBOS DUGOTS" : "FIRMA DE ACTA DE AMBOS DUGOTS", style: TextStyle(color: isApproved ? Colors.greenAccent : Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: homeSigned ? Colors.green.shade800 : const Color(0xFF0F172A)),
+                          onPressed: () => setState(() => homeSigned = !homeSigned),
+                          child: Text(homeSigned ? "Local: Firmado ✅" : "Firmar Local", style: const TextStyle(fontSize: 10, color: Colors.white)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(backgroundColor: visitorSigned ? Colors.green.shade800 : const Color(0xFF0F172A)),
+                          onPressed: () => setState(() => visitorSigned = !visitorSigned),
+                          child: Text(visitorSigned ? "Visitante: Firmado ✅" : "Firmar Visitante", style: const TextStyle(fontSize: 10, color: Colors.white)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF25D366), padding: const EdgeInsets.symmetric(vertical: 14)),
                 icon: const Icon(Icons.share, color: Colors.white),
-                label: const Text("COMPARTIR RESUMEN POR WHATSAPP", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                label: const Text("COMPARTIR RESUMEN EN WHATSAPP", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 onPressed: () {
                   sendToWhatsApp(
                     "⚾ ¡FINAL DEL JUEGO! - Softball World Lineup ⚾\n\n"
-                    "🏆 Ganador: ${visWon ? visitor : home}\n"
-                    "• $visitor: $visRuns Carreras | $visHits Hits\n"
-                    "• $home: $homRuns Carreras | $homHits Hits\n\n"
-                    "Sigue el torneo en vivo en Softball World Lineup.",
+                    "🏆 Ganador: ${visWon ? widget.visitor : widget.home}\n"
+                    "• ${widget.visitor}: ${widget.visRuns} Carreras | ${widget.visHits} Hits\n"
+                    "• ${widget.home}: ${widget.homRuns} Carreras | ${widget.homHits} Hits\n\n"
+                    "PIN de Juego: ${widget.gamePin}\n"
+                    "Estado: ${isApproved ? 'Oficializado con doble firma' : 'Pendiente de firma'}\n\n"
+                    "Sigue el torneo en la app oficial.",
                   );
                 },
               ),
@@ -773,39 +1076,44 @@ class MasterBoxScoreScreen extends StatelessWidget {
   }
 }
 
-// -------------------------------------------------------------------------
-// PESTAÑA 3: AGENDA Y RETOS (CALENDARIO DE DÍAS Y RELOJ MANUAL)
-// -------------------------------------------------------------------------
+// =========================================================================
+// PESTAÑA 3: AGENDA & RETOS (CON BOTÓN DE ACTIVAR PARTIDO DIRECTO)
+// =========================================================================
 class MasterScheduleTab extends StatefulWidget {
-  const MasterScheduleTab({super.key});
+  final Function(String pin, String home, String away, String play)? onActivateMatch;
+  const MasterScheduleTab({super.key, this.onActivateMatch});
 
   @override
   State<MasterScheduleTab> createState() => _MasterScheduleTabState();
 }
 
 class _MasterScheduleTabState extends State<MasterScheduleTab> {
-  DateTime selectedDate = DateTime(2026, 11, 14); // Sábado
+  DateTime selectedDate = DateTime(2026, 11, 14); // Sábado 14
   TimeOfDay selectedTime = const TimeOfDay(hour: 19, minute: 45); // 7:45 PM
+  String rival = "Metros de Santiago";
+  String stadium = "Play Club Miramar (SD)";
+  String format = "Doble Juego (2 Partidos)";
 
   List<Map<String, String>> matches = [
     {
       "date": "Sábado 14 de Noviembre · 7:45 PM (Noche 💡)",
-      "matchup": "Plataneros de La Vega vs Metros de Santiago",
-      "play": "Play Club Miramar (SD) · PIN: PLAY-742",
-      "status": "CONFIRMADO ✅"
+      "home": "Metros de Santiago",
+      "away": "Plataneros de La Vega",
+      "play": "Play Club Miramar (SD)",
+      "pin": "PLAY-742",
+      "status": "PROGRAMADO"
     },
     {
       "date": "Miércoles 18 de Noviembre · 8:15 PM (Noche 💡)",
-      "matchup": "Titanes de Moca vs Plataneros de La Vega",
-      "play": "Play de Villa Rosa (La Vega) · PIN: PLAY-810",
-      "status": "CONFIRMADO ✅"
+      "home": "Titanes de Moca",
+      "away": "Plataneros de La Vega",
+      "play": "Play de Villa Rosa (La Vega)",
+      "pin": "PLAY-810",
+      "status": "PROGRAMADO"
     },
   ];
 
   void _openScheduleDialog() {
-    String rival = "Metros de Santiago";
-    String stadium = "Play Club Miramar (SD)";
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -818,97 +1126,160 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
             final minute = selectedTime.minute.toString().padLeft(2, '0');
             final period = selectedTime.period == DayPeriod.am ? "AM" : "PM";
             final formattedTime = "$hour:$minute $period";
+            final dayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
             return Container(
               padding: const EdgeInsets.all(20),
-              height: 520,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text("📅 PROGRAMAR NUEVO RETO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
-                      IconButton(icon: const Icon(Icons.close, color: Colors.white60), onPressed: () => Navigator.pop(ctx)),
-                    ],
-                  ),
-                  const Text("Elige el día, pon la hora en el reloj y elige el play:", style: TextStyle(color: Colors.white60, fontSize: 11)),
-                  const SizedBox(height: 14),
+              height: 640,
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("📅 PROGRAMAR NUEVO RETO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+                        IconButton(icon: const Icon(Icons.close, color: Colors.white60), onPressed: () => Navigator.pop(ctx)),
+                      ],
+                    ),
+                    const Text("Elige el día, pon la hora en el reloj y elige el play:", style: TextStyle(color: Colors.white60, fontSize: 11)),
+                    const SizedBox(height: 14),
 
-                  // RELOJ MANUAL INTERACTIVO
-                  InkWell(
-                    onTap: () async {
-                      final picked = await showTimePicker(context: context, initialTime: selectedTime);
-                      if (picked != null) setModalState(() => selectedTime = picked);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: const Color(0xFF0B1118), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber)),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    // CALENDARIO DEL MES (1 AL 30)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: const Color(0xFF0B1118), borderRadius: BorderRadius.circular(10)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.access_time, color: Colors.amber, size: 24),
-                              const SizedBox(width: 10),
-                              Text("Hora: $formattedTime", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18)),
-                            ],
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(color: Colors.amber, borderRadius: BorderRadius.circular(6)),
-                            child: const Text("CAMBIAR HORA", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 10)),
+                          const Text("NOVIEMBRE 2026 (DESLIZA Y TOCA UN DÍA):", style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            height: 60,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: 30,
+                              itemBuilder: (c, i) {
+                                final d = i + 1;
+                                final date = DateTime(2026, 11, d);
+                                final isSel = selectedDate.day == d;
+                                return GestureDetector(
+                                  onTap: () => setModalState(() => selectedDate = date),
+                                  child: Container(
+                                    width: 48,
+                                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                                    decoration: BoxDecoration(
+                                      color: isSel ? Colors.amber : const Color(0xFF16202C),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: isSel ? Colors.white : Colors.white12),
+                                    ),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Text(dayNames[date.weekday % 7], style: TextStyle(color: isSel ? Colors.black : Colors.white60, fontSize: 9, fontWeight: FontWeight.bold)),
+                                        Text("$d", style: TextStyle(color: isSel ? Colors.black : Colors.white, fontSize: 15, fontWeight: FontWeight.w900)),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ),
 
-                  const SizedBox(height: 14),
+                    const SizedBox(height: 12),
 
-                  DropdownButtonFormField<String>(
-                    value: rival,
-                    dropdownColor: const Color(0xFF0F172A),
-                    style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
-                    decoration: const InputDecoration(labelText: "Equipo Rival", labelStyle: TextStyle(color: Colors.white70)),
-                    items: ["Metros de Santiago", "Titanes de Moca", "Cacaoteros de SFM", "Guerreros de Los Prados"].map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
-                    onChanged: (v) => setModalState(() => rival = v!),
-                  ),
-
-                  const SizedBox(height: 10),
-
-                  DropdownButtonFormField<String>(
-                    value: stadium,
-                    dropdownColor: const Color(0xFF0F172A),
-                    style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
-                    decoration: const InputDecoration(labelText: "Play / Estadio", labelStyle: TextStyle(color: Colors.white70)),
-                    items: ["Play Club Miramar (SD)", "Play de Villa Rosa (La Vega)", "Play Chiquito (Santiago)"].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
-                    onChanged: (v) => setModalState(() => stadium = v!),
-                  ),
-
-                  const Spacer(),
-
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                      icon: const Icon(Icons.send, color: Colors.black),
-                      label: Text("AGENDAR JUEGO A LAS $formattedTime", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 12)),
-                      onPressed: () {
-                        setState(() {
-                          matches.insert(0, {
-                            "date": "Sábado · $formattedTime",
-                            "matchup": "Tu Equipo vs $rival",
-                            "play": "$stadium · PIN: PLAY-${100 + matches.length}",
-                            "status": "RETO ENVIADO ⏳"
-                          });
-                        });
-                        Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Colors.teal, content: Text("⚾ ¡Reto agendado con éxito!")));
+                    // RELOJ MANUAL INTERACTIVO
+                    InkWell(
+                      onTap: () async {
+                        final picked = await showTimePicker(context: context, initialTime: selectedTime);
+                        if (picked != null) setModalState(() => selectedTime = picked);
                       },
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: const Color(0xFF0B1118), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber)),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.access_time, color: Colors.amber, size: 24),
+                                const SizedBox(width: 10),
+                                Text("Hora: $formattedTime", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18)),
+                              ],
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(color: Colors.amber, borderRadius: BorderRadius.circular(6)),
+                              child: const Text("CAMBIAR HORA", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 10)),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+
+                    const SizedBox(height: 12),
+
+                    DropdownButtonFormField<String>(
+                      value: format,
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                      decoration: const InputDecoration(labelText: "Formato del Reto", labelStyle: TextStyle(color: Colors.white70)),
+                      items: ["Doble Juego (2 Partidos)", "Juego Sencillo (1 Partido)", "Triangular (3 Equipos)"].map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+                      onChanged: (v) => setModalState(() => format = v!),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    DropdownButtonFormField<String>(
+                      value: rival,
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                      decoration: const InputDecoration(labelText: "Equipo Rival", labelStyle: TextStyle(color: Colors.white70)),
+                      items: ["Metros de Santiago", "Titanes de Moca", "Cacaoteros de SFM", "Guerreros de Los Prados"].map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+                      onChanged: (v) => setModalState(() => rival = v!),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    DropdownButtonFormField<String>(
+                      value: stadium,
+                      dropdownColor: const Color(0xFF0F172A),
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                      decoration: const InputDecoration(labelText: "Play / Estadio", labelStyle: TextStyle(color: Colors.white70)),
+                      items: ["Play Club Miramar (SD)", "Play de Villa Rosa (La Vega)", "Play Chiquito (Santiago)"].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                      onChanged: (v) => setModalState(() => stadium = v!),
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                        icon: const Icon(Icons.send, color: Colors.black),
+                        label: Text("AGENDAR PARA EL DÍA ${selectedDate.day} A LAS $formattedTime", style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11)),
+                        onPressed: () {
+                          final dayName = dayNames[selectedDate.weekday % 7];
+                          setState(() {
+                            matches.insert(0, {
+                              "date": "$dayName ${selectedDate.day} de Noviembre · $formattedTime",
+                              "home": rival,
+                              "away": "Plataneros de La Vega",
+                              "play": stadium,
+                              "pin": "PLAY-${100 + matches.length}",
+                              "status": "PROGRAMADO"
+                            });
+                          });
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Colors.teal, content: Text("⚾ ¡Reto agendado exitosamente!")));
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -940,9 +1311,9 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
         itemBuilder: (ctx, i) {
           final m = matches[i];
           return Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.blueGrey.shade800)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -950,12 +1321,33 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(m["date"]!, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
-                    Text(m["status"]!, style: const TextStyle(color: Colors.tealAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(color: Colors.teal.shade900, borderRadius: BorderRadius.circular(4)),
+                      child: Text("PIN: ${m["pin"]!}", style: const TextStyle(color: Colors.tealAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(m["matchup"]!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                Text(m["play"]!, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                const SizedBox(height: 6),
+                Text("${m["away"]!} vs ${m["home"]!}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 2),
+                Text("📍 ${m["play"]!}", style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                const SizedBox(height: 10),
+
+                // BOTÓN QUE CONECTA LA AGENDA CON LA PIZARRA DIRECTO
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal.shade700, padding: const EdgeInsets.symmetric(vertical: 10)),
+                    icon: const Icon(Icons.play_arrow, color: Colors.white, size: 18),
+                    label: const Text("🟢 ACTIVAR Y COMENZAR PARTIDO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+                    onPressed: () {
+                      if (widget.onActivateMatch != null) {
+                        widget.onActivateMatch!(m["pin"]!, m["home"]!, m["away"]!, m["play"]!);
+                      }
+                    },
+                  ),
+                ),
               ],
             ),
           );
@@ -965,20 +1357,21 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
   }
 }
 
-// -------------------------------------------------------------------------
-// PESTAÑA 4: MI EQUIPO (CON GESTIÓN REAL PARA MÁNAGERS Y CARNET PARA PELOTEROS)
-// -------------------------------------------------------------------------
+// =========================================================================
+// PESTAÑA 4: MI EQUIPO (ROSTER, ID RD-XXXX, CREAR EQUIPO Y LINEUP)
+// =========================================================================
 class MasterTeamTab extends StatefulWidget {
-  final String userRole; // 'manager', 'player', 'fan'
+  final String userRole;
   final String userName;
-  const MasterTeamTab({super.key, required this.userRole, required this.userName});
+  final String initialTeamName;
+  const MasterTeamTab({super.key, required this.userRole, required this.userName, required this.initialTeamName});
 
   @override
   State<MasterTeamTab> createState() => _MasterTeamTabState();
 }
 
 class _MasterTeamTabState extends State<MasterTeamTab> {
-  String teamName = "Los Plataneros de La Vega";
+  late String teamName;
   String province = "La Vega";
   bool pitcherHits = false;
   int batters = 10;
@@ -990,7 +1383,37 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     {"name": "Teóscar Hernández", "num": "37", "pos": "LF (7)", "id": "RD-5090", "type": "Refuerzo"},
   ];
 
-  // AGREGAR POR ID
+  @override
+  void initState() {
+    super.initState();
+    teamName = widget.initialTeamName;
+  }
+
+  void _editTeamName() {
+    final ctrl = TextEditingController(text: teamName);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16202C),
+        title: const Text("Nombre de tu Equipo", style: TextStyle(color: Colors.amber, fontSize: 15)),
+        content: TextField(controller: ctrl, style: const TextStyle(color: Colors.white)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCELAR")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+            onPressed: () {
+              if (ctrl.text.isNotEmpty) {
+                setState(() => teamName = ctrl.text.trim());
+                Navigator.pop(ctx);
+              }
+            },
+            child: const Text("GUARDAR", style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openAddByIdDialog() {
     final idCtrl = TextEditingController();
     showDialog(
@@ -1002,7 +1425,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
           controller: idCtrl,
           textCapitalization: TextCapitalization.characters,
           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 2),
-          decoration: const InputDecoration(hintText: "Ej: RD-9901", hintStyle: TextStyle(color: Colors.white30)),
+          decoration: const InputDecoration(hintText: "Ej: RD-9901"),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCELAR")),
@@ -1024,7 +1447,6 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     );
   }
 
-  // AGREGAR JUGADOR NUEVO MANUAL
   void _openAddManualPlayerDialog() {
     final nameCtrl = TextEditingController();
     final numCtrl = TextEditingController();
@@ -1062,7 +1484,6 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
 
   @override
   Widget build(BuildContext context) {
-    // VISTA DEL PELOTERO (SU CARNET PERSONAL)
     if (widget.userRole == "player") {
       return Padding(
         padding: const EdgeInsets.all(16),
@@ -1078,15 +1499,13 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                   const CircleAvatar(radius: 40, backgroundImage: NetworkImage("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80")),
                   const SizedBox(height: 10),
                   Text(widget.userName, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                  const Text("Plataneros de La Vega · Equipo Oficial", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  Text("$teamName · Equipo Oficial", style: const TextStyle(color: Colors.white54, fontSize: 11)),
                   const SizedBox(height: 14),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(color: const Color(0xFF080D14), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.tealAccent)),
                     child: const Text("ID: RD-8420", style: TextStyle(color: Colors.tealAccent, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 2)),
                   ),
-                  const SizedBox(height: 10),
-                  const Text("Comparte este ID con cualquier mánager para que te agregue a su equipo:", style: TextStyle(color: Colors.white38, fontSize: 10), textAlign: TextAlign.center),
                 ],
               ),
             ),
@@ -1107,13 +1526,11 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
       );
     }
 
-    // VISTA DEL MÁNAGER / DIRIGENTE (CONTROL TOTAL DEL ROSTER Y LINEUP)
     return SingleChildScrollView(
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Tarjeta del Equipo
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.amber)),
@@ -1127,13 +1544,13 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                     Text("📍 $province · ${roster.length} Jugadores en Roster", style: const TextStyle(color: Colors.white54, fontSize: 10)),
                   ]),
                 ),
+                IconButton(icon: const Icon(Icons.edit, color: Colors.amber, size: 18), onPressed: _editTeamName),
               ],
             ),
           ),
 
           const SizedBox(height: 12),
 
-          // Botones de acción del Mánager
           Row(
             children: [
               Expanded(
@@ -1158,7 +1575,6 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
 
           const SizedBox(height: 14),
 
-          // Switch BD vs Picher
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(8)),
@@ -1173,7 +1589,6 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
 
           const SizedBox(height: 10),
 
-          // Selector 9 a 12 bateadores
           Row(
             children: [9, 10, 11, 12].map((cnt) => Expanded(
               child: Padding(
