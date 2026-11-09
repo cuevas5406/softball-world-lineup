@@ -1,0 +1,40 @@
+name: Compilar APK Android - Softball World Lineup
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.24.0'
+
+      - name: Generar estructura de Android
+        run: flutter create --org com.softballworld.lineup --project-name softball_world_lineup .
+
+      - name: Instalar dependencias
+        run: flutter pub get
+
+      - name: Compilar APK para celular
+        run: flutter build apk --release
+
+      - name: Guardar instalador APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Softball-World-Lineup-Instalador
+          path: build/app/outputs/flutter-apk/app-release.apk
