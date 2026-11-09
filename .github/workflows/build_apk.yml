@@ -24,14 +24,14 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Generar estructura Android y dar permiso de Internet
+      - name: Configurar Android e Integracion con WhatsApp
         run: |
           flutter create --org com.softballworld.lineup --project-name softball_world_lineup .
           
-          # 1. DAR PERMISO DE INTERNET EN ANDROID
+          # Permisos de Internet y comunicacion con WhatsApp
           sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>' android/app/src/main/AndroidManifest.xml
+          sed -i '/<\/manifest>/i \    <queries>\n        <package android:name="com.whatsapp"\/>\n        <intent>\n            <action android:name="android.intent.action.VIEW"\/>\n            <data android:scheme="https"\/>\n        <\/intent>\n    <\/queries>' android/app/src/main/AndroidManifest.xml
 
-          # 2. CONFIGURAR SDK MODERNO
           if [ -f android/app/build.gradle ]; then
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' android/app/build.gradle || true
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle || true
@@ -39,7 +39,7 @@ jobs:
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
           fi
 
-          # 3. DESCARGAR TU LOGO OFICIAL COMO ÍCONO DE LA APP
+          # Icono oficial de la app
           curl -o android/app/src/main/res/mipmap-hdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
           curl -o android/app/src/main/res/mipmap-mdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
           curl -o android/app/src/main/res/mipmap-xhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
@@ -49,7 +49,7 @@ jobs:
       - name: Instalar dependencias
         run: flutter pub get
 
-      - name: Compilar APK Oficial para Celular
+      - name: Compilar APK Oficial
         run: flutter build apk --release
 
       - name: Guardar instalador APK
