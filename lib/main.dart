@@ -2,11 +2,21 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+// FUNCIÓN PARA ABRIR WHATSAPP DIRECTAMENTE EN EL CELULAR
+Future<void> sendToWhatsApp(String message) async {
+  final Uri url = Uri.parse("https://api.whatsapp.com/send?text=${Uri.encodeComponent(message)}");
+  try {
+    await launchUrl(url, mode: LaunchMode.externalApplication);
+  } catch (e) {
+    debugPrint("Error abriendo WhatsApp: $e");
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // CONEXIÓN OFICIAL A TU SUPABASE
   try {
     await Supabase.initialize(
       url: 'https://epqyabaegmyjtwqezvbc.supabase.co',
@@ -41,7 +51,7 @@ class SoftballWorldApp extends StatelessWidget {
 }
 
 // -------------------------------------------------------------------------
-// 1. APERTURA (SPLASH CON TU ESCUDO OFICIAL Y FOTO DE MIRAMAR)
+// 1. SPLASH: BIENVENIDA CON EL ESCUDO
 // -------------------------------------------------------------------------
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
@@ -95,35 +105,27 @@ class SplashScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 18),
-                  const Text(
-                    "SOFTBALL WORLD LINEUP",
-                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 2),
-                    textAlign: TextAlign.center,
-                  ),
+                  const Text("SOFTBALL WORLD LINEUP", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 2), textAlign: TextAlign.center),
                   const SizedBox(height: 4),
                   const Text("La Plataforma Oficial del Sóftbol", style: TextStyle(color: Colors.amberAccent, fontSize: 13, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 32),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.amber,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        elevation: 6,
-                      ),
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
                       icon: const Icon(Icons.arrow_forward, color: Colors.black),
                       label: const Text("ENTRAR AL TERRENO", style: TextStyle(color: Colors.black, fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 1)),
                       onPressed: () {
+                        // AHORA PASA A LA PANTALLA DE CREAR CUENTA / LOGIN
                         Navigator.pushReplacement(
                           context,
-                          MaterialPageRoute(builder: (ctx) => const MainAppMasterHub()),
+                          MaterialPageRoute(builder: (ctx) => const AuthLoginScreen()),
                         );
                       },
                     ),
                   ),
                   const SizedBox(height: 10),
-                  const Text("República Dominicana · Internacional", style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  const Text("República Dominicana · Santo Domingo · Cibao", style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
               ),
             ),
@@ -135,7 +137,181 @@ class SplashScreen extends StatelessWidget {
 }
 
 // -------------------------------------------------------------------------
-// 2. HUB PRINCIPAL (4 PESTAÑAS 100% FUNCIONALES)
+// 2. PANTALLA DE INICIO DE SESIÓN / CREAR CUENTA
+// -------------------------------------------------------------------------
+class AuthLoginScreen extends StatefulWidget {
+  const AuthLoginScreen({super.key});
+
+  @override
+  State<AuthLoginScreen> createState() => _AuthLoginScreenState();
+}
+
+class _AuthLoginScreenState extends State<AuthLoginScreen> {
+  final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
+
+  void _onLoginRoleSelect() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF16202C),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) => const OnboardingRoleSelectionSheet(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF080D14),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Spacer(),
+              Image.network(logoUrl, height: 110, fit: BoxFit.contain, errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball, color: Colors.amber, size: 60)),
+              const SizedBox(height: 14),
+              const Text("INICIA SESIÓN O CREA TU CUENTA", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1)),
+              const SizedBox(height: 4),
+              const Text("Guarda tu promedio, tu carnet y gestiona tu equipo", style: TextStyle(color: Colors.white60, fontSize: 12), textAlign: TextAlign.center),
+              const Spacer(),
+
+              // Botón Google
+              _socialBtn(icon: Icons.g_mobiledata, iconColor: Colors.redAccent, text: "Continuar con Google", onTap: _onLoginRoleSelect),
+              const SizedBox(height: 10),
+              // Botón Apple
+              _socialBtn(icon: Icons.apple, iconColor: Colors.white, text: "Continuar con Apple", onTap: _onLoginRoleSelect),
+              const SizedBox(height: 10),
+              // Teléfono
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50), side: const BorderSide(color: Colors.white24), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                icon: const Icon(Icons.sms, color: Colors.amber, size: 18),
+                label: const Text("Entrar con Teléfono o Correo", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                onPressed: _onLoginRoleSelect,
+              ),
+
+              const SizedBox(height: 16),
+
+              // ENTRAR COMO INVITADO
+              TextButton(
+                onPressed: () {
+                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (ctx) => const MainAppMasterHub()));
+                },
+                child: const Text("Explorar como Fanático Invitado", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12, decoration: TextDecoration.underline)),
+              ),
+              const Spacer(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _socialBtn({required IconData icon, required Color iconColor, required String text, required VoidCallback onTap}) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF16202C), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), side: const BorderSide(color: Colors.white12)),
+      onPressed: onTap,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: iconColor, size: 24),
+          const SizedBox(width: 10),
+          Text(text, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------------------
+// 3. SELECCIÓN DE ROL (PELOTERO, DIRIGENTE, FANÁTICO)
+// -------------------------------------------------------------------------
+class OnboardingRoleSelectionSheet extends StatefulWidget {
+  const OnboardingRoleSelectionSheet({super.key});
+
+  @override
+  State<OnboardingRoleSelectionSheet> createState() => _OnboardingRoleSelectionSheetState();
+}
+
+class _OnboardingRoleSelectionSheetState extends State<OnboardingRoleSelectionSheet> {
+  String selectedRole = "player";
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      height: 480,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text("¿QUÉ ROL TIENES EN EL SÓFTBOL?", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 15)),
+              IconButton(icon: const Icon(Icons.close, color: Colors.white60), onPressed: () => Navigator.pop(context)),
+            ],
+          ),
+          const Text("Configura tu acceso a la aplicación:", style: TextStyle(color: Colors.white60, fontSize: 11)),
+          const SizedBox(height: 14),
+
+          _roleCard("player", "Soy Pelotero", "Quiero mi carnet ID, ver mi promedio y compartir cromitos.", Icons.sports_baseball),
+          const SizedBox(height: 8),
+          _roleCard("manager", "Soy Dirigente o Anotador", "Quiero gestionar mi roster, armar lineup y anotar juegos.", Icons.edit_note),
+          const SizedBox(height: 8),
+          _roleCard("fan", "Soy Fanático", "Solo quiero ver resultados en vivo y estadísticas.", Icons.favorite),
+
+          const Spacer(),
+
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.pushReplacement(context, MaterialPageRoute(builder: (ctx) => const MainAppMasterHub()));
+              },
+              child: const Text("ENTRAR AL TERRENO", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _roleCard(String id, String title, String subtitle, IconData icon) {
+    final isSelected = selectedRole == id;
+    return InkWell(
+      onTap: () => setState(() => selectedRole = id),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.amber.withAlpha(25) : const Color(0xFF0B1118),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: isSelected ? Colors.amber : Colors.white12, width: 1.5),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: isSelected ? Colors.amber : Colors.white70),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text(subtitle, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------------------
+// 4. HUB PRINCIPAL (4 PESTAÑAS)
 // -------------------------------------------------------------------------
 class MainAppMasterHub extends StatefulWidget {
   const MainAppMasterHub({super.key});
@@ -176,7 +352,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
 }
 
 // -------------------------------------------------------------------------
-// PESTAÑA 1: INICIO (CARRUSEL ALEX MONO + ¡A JUGAR! + CROMITO)
+// PESTAÑA: INICIO (CROMITO CON WHATSAPP REAL)
 // -------------------------------------------------------------------------
 class MasterHomeTab extends StatefulWidget {
   const MasterHomeTab({super.key});
@@ -256,6 +432,7 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
               ],
             ),
             const SizedBox(height: 18),
+            // BOTÓN QUE ABRE WHATSAPP DE VERDAD
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -264,7 +441,16 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
                 label: const Text("COMPARTIR CROMITO EN WHATSAPP", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
                 onPressed: () {
                   Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF25D366), content: Text("⚾ Cromito listo para compartir")));
+                  // MENSAJE OFICIAL QUE VIAJA DIRECTO A WHATSAPP
+                  sendToWhatsApp(
+                    "⚾ ¡Mira mis números en Softball World Lineup! ⚾\n\n"
+                    "👤 Jugador: Juan Pérez #14\n"
+                    "🛡️ Equipo: Plataneros de La Vega\n"
+                    "🏆 Rango: #1 Nacional en RD 🥇\n"
+                    "📊 Promedio: .615 AVE | 5 Jonrones | 14 Empujadas\n"
+                    "🆔 Mi ID de Pelotero: RD-8420\n\n"
+                    "Descarga la app oficial de sóftbol.",
+                  );
                 },
               ),
             ),
@@ -283,12 +469,7 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
         elevation: 0,
         title: Row(
           children: [
-            Image.network(
-              logoUrl,
-              height: 32,
-              fit: BoxFit.contain,
-              errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball, color: Colors.amber, size: 24),
-            ),
+            Image.network(logoUrl, height: 32, fit: BoxFit.contain, errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball, color: Colors.amber, size: 24)),
             const SizedBox(width: 8),
             const Text("SOFTBALL WORLD LINEUP", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: 1.2, color: Colors.white)),
           ],
@@ -298,7 +479,6 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
         child: Column(
           children: [
             const SizedBox(height: 10),
-            // CARRUSEL ROTATIVO DE PATROCINADORES
             SizedBox(
               height: 120,
               child: PageView(
@@ -355,7 +535,7 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
 
             const SizedBox(height: 18),
 
-            // LÍDER NACIONAL CLICKEABLE
+            // LÍDER CLICKEABLE
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: InkWell(
@@ -396,23 +576,6 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
                 ),
               ),
             ),
-
-            const SizedBox(height: 20),
-
-            // DIRECTORIO DE PLAYS
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text("ESTADIOS DESTACADOS:", style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
-                  const SizedBox(height: 8),
-                  _playTile("Play Club Miramar", "Santo Domingo · Con luces nocturnas 💡"),
-                  const SizedBox(height: 6),
-                  _playTile("Play de Villa Rosa", "La Vega · Grama natural y graderías"),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -443,23 +606,6 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
       ),
     );
   }
-
-  Widget _playTile(String name, String desc) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(8)),
-      child: Row(
-        children: [
-          const Icon(Icons.stadium, color: Colors.purpleAccent, size: 20),
-          const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-            Text(desc, style: const TextStyle(color: Colors.amber, fontSize: 10)),
-          ])),
-        ],
-      ),
-    );
-  }
 }
 
 class _MiniStat extends StatelessWidget {
@@ -473,7 +619,7 @@ class _MiniStat extends StatelessWidget {
 }
 
 // -------------------------------------------------------------------------
-// PESTAÑA 2: PIZARRA OFICIAL EN VIVO (MLB LINE SCORE Y CONTROLES)
+// PESTAÑA: PIZARRA OFICIAL EN VIVO
 // -------------------------------------------------------------------------
 class MasterScoreboardTab extends StatefulWidget {
   const MasterScoreboardTab({super.key});
@@ -498,55 +644,6 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
   int balls = 1; int strikes = 2; int outs = 2;
   bool on1B = true; bool on2B = false; bool on3B = false;
 
-  void _openOutSelector() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF16202C),
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(16),
-        height: 380,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("REGISTRO DE BATAZO / JUGADA", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
-            const SizedBox(height: 10),
-            const Text("FALLOS AL CAMPO (1 TOQUE):", style: TextStyle(color: Colors.white60, fontSize: 10, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              children: ["Fallo al 8 (Center)", "Fallo al 7 (Left)", "Fallo al 9 (Right)", "Fallo al 6 (Siore)"]
-                  .map((f) => ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0F172A), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          setState(() { if (outs < 2) outs++; else outs = 0; });
-                        },
-                        child: Text(f, style: const TextStyle(fontSize: 10, color: Colors.white)),
-                      ))
-                  .toList(),
-            ),
-            const SizedBox(height: 12),
-            const Text("ROLATA O TIRO (2 TOQUES):", style: TextStyle(color: Colors.amberAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              children: ["6-3 (SS a 1B)", "4-3 (2B a 1B)", "5-2 (3B a Home)", "3U (Pisa 1B)"]
-                  .map((r) => ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          setState(() { if (outs < 2) outs++; else outs = 0; });
-                        },
-                        child: Text(r, style: const TextStyle(fontSize: 10, color: Colors.white)),
-                      ))
-                  .toList(),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _finishGameAndGoToBoxScore() {
     Navigator.push(
       context,
@@ -567,13 +664,6 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
         backgroundColor: const Color(0xFF0F1722),
         title: const Text("⚾ PIZARRA OFICIAL EN VIVO", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
         actions: [
-          Container(
-            margin: const EdgeInsets.symmetric(vertical: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(color: Colors.teal.withAlpha(40), borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.tealAccent)),
-            child: const Text("🟢 EN VIVO", style: TextStyle(color: Colors.tealAccent, fontSize: 9, fontWeight: FontWeight.bold)),
-          ),
-          const SizedBox(width: 8),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4)),
             onPressed: _finishGameAndGoToBoxScore,
@@ -644,37 +734,16 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
                 ],
               ),
             ),
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: const Color(0xFF16202C), borderRadius: BorderRadius.circular(8)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: const [
-                  Text("Bateando: Juan Pérez #14 (de 2-1 · .500)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
-                  Text("P: L. Severino (1.2 IP · 2 K)", style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                ],
-              ),
-            ),
+            const SizedBox(height: 14),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Column(
+              child: Row(
                 children: [
-                  Row(children: [
-                    Expanded(child: _btn("BOLA", const Color(0xFF10B981), () => setState(() => balls = (balls + 1) % 4))),
-                    const SizedBox(width: 6),
-                    Expanded(child: _btn("STRIKE", const Color(0xFFEF4444), () => setState(() => strikes = (strikes + 1) % 3))),
-                    const SizedBox(width: 6),
-                    Expanded(child: _btn("BATAZO / OUT", const Color(0xFFF59E0B), _openOutSelector)),
-                  ]),
-                  const SizedBox(height: 6),
-                  Row(children: [
-                    Expanded(child: _btn("HIT (H)", const Color(0xFF223040), () => setState(() => visRuns++))),
-                    const SizedBox(width: 6),
-                    Expanded(child: _btn("DOBLE (H2)", const Color(0xFF223040), () {})),
-                    const SizedBox(width: 6),
-                    Expanded(child: _btn("JONRÓN (HR)", const Color(0xFF8B5CF6), () => setState(() => homRuns += 2))),
-                  ]),
+                  Expanded(child: _btn("BOLA", const Color(0xFF10B981), () => setState(() => balls = (balls + 1) % 4))),
+                  const SizedBox(width: 6),
+                  Expanded(child: _btn("STRIKE", const Color(0xFFEF4444), () => setState(() => strikes = (strikes + 1) % 3))),
+                  const SizedBox(width: 6),
+                  Expanded(child: _btn("HIT (+1 C)", const Color(0xFF223040), () => setState(() => visRuns++))),
                 ],
               ),
             ),
@@ -693,7 +762,7 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
   );
 }
 
-// BOX SCORE OFICIAL
+// BOX SCORE CON BOTÓN QUE ABRE WHATSAPP DE VERDAD
 class MasterBoxScoreScreen extends StatelessWidget {
   final String visitor; final String home; final int visRuns; final int homRuns;
   final int visHits; final int homHits; final int visErr; final int homErr;
@@ -728,13 +797,25 @@ class MasterBoxScoreScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
+            // BOTÓN QUE ABRE WHATSAPP EN EL CELULAR
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF25D366), padding: const EdgeInsets.symmetric(vertical: 14)),
                 icon: const Icon(Icons.share, color: Colors.white),
                 label: const Text("COMPARTIR RESUMEN POR WHATSAPP", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF25D366), content: Text("⚾ Reporte oficial listo para grupos de WhatsApp"))),
+                onPressed: () {
+                  sendToWhatsApp(
+                    "⚾ ¡FINAL DEL JUEGO! - Softball World Lineup ⚾\n\n"
+                    "🏆 Ganador: ${visWon ? visitor : home}\n\n"
+                    "Marcador Oficial:\n"
+                    "• $visitor: $visRuns Carreras | $visHits Hits | $visErr Errores\n"
+                    "• $home: $homRuns Carreras | $homHits Hits | $homErr Errores\n\n"
+                    "⚾ PG: ${visWon ? 'Carlos Martínez' : 'Luis Severino'}\n"
+                    "⚾ PP: ${visWon ? 'Luis Severino' : 'Carlos Martínez'}\n\n"
+                    "Sigue el torneo en vivo en Softball World Lineup.",
+                  );
+                },
               ),
             ),
           ],
@@ -745,183 +826,52 @@ class MasterBoxScoreScreen extends StatelessWidget {
 }
 
 // -------------------------------------------------------------------------
-// PESTAÑA 3: AGENDA & RETOS (CON RELOJ MANUAL)
+// PESTAÑAS: AGENDA Y EQUIPO
 // -------------------------------------------------------------------------
-class MasterScheduleTab extends StatefulWidget {
+class MasterScheduleTab extends StatelessWidget {
   const MasterScheduleTab({super.key});
-
-  @override
-  State<MasterScheduleTab> createState() => _MasterScheduleTabState();
-}
-
-class _MasterScheduleTabState extends State<MasterScheduleTab> {
-  TimeOfDay selectedTime = const TimeOfDay(hour: 19, minute: 45);
-
-  void _pickTime() async {
-    final picked = await showTimePicker(context: context, initialTime: selectedTime);
-    if (picked != null) setState(() => selectedTime = picked);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final hour = selectedTime.hourOfPeriod == 0 ? 12 : selectedTime.hourOfPeriod;
-    final minute = selectedTime.minute.toString().padLeft(2, '0');
-    final period = selectedTime.period == DayPeriod.am ? "AM" : "PM";
-
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(backgroundColor: const Color(0xFF0F1722), title: const Text("📅 AGENDA & RETOS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15))),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text("PROGRAMAR JORNADA CON HORARIO MANUAL:", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text("Hora Exacta Elegida:", style: TextStyle(color: Colors.white54, fontSize: 10)),
-                    Text("$hour:$minute $period", style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
-                  ]),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-                    onPressed: _pickTime,
-                    child: const Text("CAMBIAR HORA", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text("PARTIDOS AGENDADOS:", style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
-            const SizedBox(height: 8),
-            _matchTile("Sábado 14 de Noviembre · 7:45 PM (Noche 💡)", "Plataneros de La Vega vs Metros de Santiago", "Play Club Miramar (SD) · PIN: PLAY-742"),
-            const SizedBox(height: 8),
-            _matchTile("Miércoles 18 de Noviembre · 8:15 PM (Noche 💡)", "Titanes de Moca vs Plataneros de La Vega", "Play de Villa Rosa (La Vega) · PIN: PLAY-810"),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _matchTile(String date, String teams, String play) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(10)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(date, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
-          const SizedBox(height: 4),
-          Text(teams, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-          Text(play, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+      body: ListView(
+        padding: const EdgeInsets.all(14),
+        children: const [
+          ListTile(
+            tileColor: Color(0xFF121B27),
+            title: Text("Sábado 14 de Noviembre · 7:45 PM (Noche 💡)", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+            subtitle: Text("Plataneros de La Vega vs Metros de Santiago\nPlay Club Miramar (SD) · PIN: PLAY-742", style: TextStyle(color: Colors.white70, fontSize: 11)),
+          ),
         ],
       ),
     );
   }
 }
 
-// -------------------------------------------------------------------------
-// PESTAÑA 4: MI EQUIPO (ROSTER, CARNET ID Y BATEADORES)
-// -------------------------------------------------------------------------
-class MasterTeamTab extends StatefulWidget {
+class MasterTeamTab extends StatelessWidget {
   const MasterTeamTab({super.key});
-
-  @override
-  State<MasterTeamTab> createState() => _MasterTeamTabState();
-}
-
-class _MasterTeamTabState extends State<MasterTeamTab> {
-  bool pitcherHits = false;
-  int batters = 10;
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(backgroundColor: const Color(0xFF0F1722), title: const Text("👥 MI EQUIPO & ROSTER", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15))),
-      body: SingleChildScrollView(
+      body: ListView(
         padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.tealAccent)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: const [
-                    Text("TU ID UNIVERSAL DE PELOTERO:", style: TextStyle(color: Colors.white54, fontSize: 9)),
-                    Text("RD-8420", style: TextStyle(color: Colors.tealAccent, fontSize: 20, fontWeight: FontWeight.w900)),
-                    Text("Equipo: Plataneros de La Vega", style: TextStyle(color: Colors.amber, fontSize: 10)),
-                  ]),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF25D366), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
-                    onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(backgroundColor: Color(0xFF25D366), content: Text("ID copiado para enviar por WhatsApp"))),
-                    child: const Text("ENVIAR ID", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(8)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(pitcherHits ? "El picher batea hoy (P)" : "Batea un Designado (BD) por el picher", style: TextStyle(color: pitcherHits ? Colors.tealAccent : Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                  Switch(value: pitcherHits, activeColor: Colors.tealAccent, onChanged: (v) => setState(() => pitcherHits = v)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [9, 10, 11, 12].map((cnt) => Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2),
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: batters == cnt ? Colors.amber : const Color(0xFF121B27)),
-                    onPressed: () => setState(() => batters = cnt),
-                    child: Text("$cnt ${cnt > 9 ? '(+EP)' : ''}", style: TextStyle(color: batters == cnt ? Colors.black : Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              )).toList(),
-            ),
-            const SizedBox(height: 14),
-            const Text("ORDEN AL BATE DEL DOMINGO:", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
-            const SizedBox(height: 6),
-            _lineupSlot("1° Bate", "Juan Pérez #14", "CF (8) · ID: RD-8420"),
-            _lineupSlot("2° Bate", "Manny Cabrera #24", "SS (6) · ID: RD-2041"),
-            _lineupSlot("3° Bate", "David Ortiz #34", "1B (3) · ID: RD-3400"),
-            _lineupSlot("9° Bate", pitcherHits ? "Carlos Martínez #18" : "Teóscar Hernández #37", pitcherHits ? "P (1)" : "BD (Designado)"),
-            if (batters >= 10) _lineupSlot("Bateador Extra 1", "Ketel Marte #4", "EP1", isEp: true),
-            if (batters >= 11) _lineupSlot("Bateador Extra 2", "Gary Sánchez #24", "EP2", isEp: true),
-            if (batters >= 12) _lineupSlot("Bateador Extra 3", "Willy Adames #2", "EP3", isEp: true),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _lineupSlot(String slot, String name, String pos, {bool isEp = false}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(6), border: Border.all(color: isEp ? Colors.amber.shade800 : Colors.white10)),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
-            Text(slot, style: const TextStyle(color: Colors.white38, fontSize: 9)),
-          ]),
-          Text(pos, style: TextStyle(color: isEp ? Colors.amber : Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+          ListTile(
+            tileColor: const Color(0xFF121B27),
+            leading: const CircleAvatar(backgroundColor: Colors.amber, child: Text("14", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold))),
+            title: const Text("Juan Pérez", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            subtitle: const Text("ID: RD-8420 · CF (8)", style: TextStyle(color: Colors.tealAccent, fontSize: 11)),
+            trailing: ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF25D366), padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
+              onPressed: () {
+                sendToWhatsApp("⚾ Mánager, agrégame a tu roster de sóftbol. Mi ID universal de pelotero es: RD-8420 (Juan Pérez)");
+              },
+              child: const Text("ENVIAR ID", style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+            ),
+          ),
         ],
       ),
     );
