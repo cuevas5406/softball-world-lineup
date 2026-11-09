@@ -18,16 +18,20 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Configurar Flutter (Version Estable Moderna)
+      - name: Configurar Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Generar estructura de Android y configurar SDK
+      - name: Generar estructura Android y dar permiso de Internet
         run: |
           flutter create --org com.softballworld.lineup --project-name softball_world_lineup .
-          # Asegurar que compile con Android 35
+          
+          # 1. DAR PERMISO DE INTERNET EN ANDROID
+          sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>' android/app/src/main/AndroidManifest.xml
+
+          # 2. CONFIGURAR SDK MODERNO
           if [ -f android/app/build.gradle ]; then
             sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' android/app/build.gradle || true
             sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle || true
@@ -35,10 +39,17 @@ jobs:
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
           fi
 
+          # 3. DESCARGAR TU LOGO OFICIAL COMO ÍCONO DE LA APP
+          curl -o android/app/src/main/res/mipmap-hdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
+          curl -o android/app/src/main/res/mipmap-mdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
+          curl -o android/app/src/main/res/mipmap-xhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
+          curl -o android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
+          curl -o android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
+
       - name: Instalar dependencias
         run: flutter pub get
 
-      - name: Compilar APK para celular
+      - name: Compilar APK Oficial para Celular
         run: flutter build apk --release
 
       - name: Guardar instalador APK
