@@ -6,7 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 // URL y Claves de tu servidor Supabase
 const String kSupabaseUrl = 'https://epqyabaegmyjtwqezvbc.supabase.co';
-const String kSupabaseAnonKey = 'sb_publishable_gOqSMC3ouDYNDu-mxLmYzQ_LSyCq';
+const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
 
 // FUNCIÓN PARA ABRIR ENLACES EXTERNOS (WHATSAPP O WEB DE PATROCINADORES)
 Future<void> openExternalUrl(String urlString) async {
@@ -20,6 +20,10 @@ Future<void> openExternalUrl(String urlString) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (kSupabaseAnonKey.isEmpty) {
+    debugPrint('Falta SUPABASE_PUBLISHABLE_KEY en la compilación.');
+  }
 
   try {
     await Supabase.initialize(
@@ -362,6 +366,8 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
   bool isRegistering = true;
   bool isSubmitting = false;
   bool obscurePassword = true;
+  String? feedbackMessage;
+  bool feedbackIsError = false;
   String selectedRole = "manager";
 
   final nameCtrl = TextEditingController();
@@ -382,12 +388,10 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
 
   void _showMessage(String message, {bool error = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: error ? Colors.red.shade800 : const Color(0xFF263746),
-      ),
-    );
+    setState(() {
+      feedbackMessage = message;
+      feedbackIsError = error;
+    });
   }
 
   Future<void> _submit() async {
@@ -412,7 +416,10 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
       return;
     }
 
-    setState(() => isSubmitting = true);
+    setState(() {
+      isSubmitting = true;
+      feedbackMessage = null;
+    });
     try {
       final auth = Supabase.instance.client.auth;
       if (isRegistering) {
@@ -465,6 +472,17 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (feedbackMessage != null)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    color: feedbackIsError ? const Color(0xFF5A2020) : const Color(0xFF203C31),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(feedbackMessage!, style: const TextStyle(color: Colors.white)),
+                ),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
