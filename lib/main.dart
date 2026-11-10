@@ -49,8 +49,96 @@ class SoftballWorldApp extends StatelessWidget {
           surface: Color(0xFF16202C),
         ),
       ),
-      home: const SplashScreen(),
+      home: const AuthTestGate(),
     );
+  }
+}
+
+// FASE 1 - PRUEBA AISLADA DE AUTENTICACIÓN.
+// No otorga permisos ni consulta una tabla profiles inexistente.
+class AuthTestGate extends StatefulWidget {
+  const AuthTestGate({super.key});
+  @override
+  State<AuthTestGate> createState() => _AuthTestGateState();
+}
+
+class _AuthTestGateState extends State<AuthTestGate> {
+  StreamSubscription<AuthState>? _subscription;
+  Session? _session;
+  bool _showLogin = false;
+  bool _available = true;
+
+  @override
+  void initState() {
+    super.initState();
+    try {
+      final auth = Supabase.instance.client.auth;
+      _session = auth.currentSession;
+      _subscription = auth.onAuthStateChange.listen((event) {
+        if (!mounted) return;
+        setState(() => _session = event.session);
+      }, onError: (Object error) {
+        debugPrint('Error de escucha de sesión: $error');
+      });
+    } catch (error) {
+      _available = false;
+      debugPrint('Supabase no inicializado: $error');
+    }
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_available) {
+      return const Scaffold(body: Center(child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Text('No se pudo iniciar Supabase. Comprueba la conexión y reinicia la aplicación.', textAlign: TextAlign.center),
+      )));
+    }
+    final user = _session?.user;
+    if (user != null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Prueba de autenticación')),
+        body: SafeArea(child: Center(child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.verified_user, color: Colors.amber, size: 64),
+            const SizedBox(height: 16),
+            const Text('Sesión iniciada en Supabase', textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
+            const SizedBox(height: 12),
+            Text(user.email ?? 'Usuario autenticado', textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            const Text('El acceso al Hub y los permisos de mánager siguen pendientes de configurar perfiles.',
+              textAlign: TextAlign.center),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () async {
+                try {
+                  await Supabase.instance.client.auth.signOut();
+                } catch (error) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No se pudo cerrar la sesión. Inténtalo otra vez.')),
+                  );
+                }
+              },
+              icon: const Icon(Icons.logout),
+              label: const Text('Cerrar sesión'),
+            ),
+          ]),
+        ))),
+      );
+    }
+    if (!_showLogin) {
+      return SplashScreen(onContinue: () => setState(() => _showLogin = true));
+    }
+    return const AuthLoginScreen();
   }
 }
 
@@ -58,7 +146,8 @@ class SoftballWorldApp extends StatelessWidget {
 // 1. APERTURA (SPLASH CON LOGO RECORTADO TRANSPARENTE)
 // =========================================================================
 class SplashScreen extends StatelessWidget {
-  const SplashScreen({super.key});
+  final VoidCallback onContinue;
+  const SplashScreen({super.key, required this.onContinue});
 
   final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
@@ -119,12 +208,7 @@ class SplashScreen extends StatelessWidget {
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
                       icon: const Icon(Icons.arrow_forward, color: Colors.black),
                       label: const Text("ENTRAR AL TERRENO", style: TextStyle(color: Colors.black, fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 1)),
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(builder: (ctx) => const AuthLoginScreen()),
-                        );
-                      },
+                      onPressed: onContinue,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -152,13 +236,21 @@ class AuthLoginScreen extends StatefulWidget {
 class _AuthLoginScreenState extends State<AuthLoginScreen> {
   final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
-  void _openRegisterFlow(String method) {
+  void _openCredentialsFlow() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF16202C),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (ctx) => const FullTeamRegistrationSheet(),
+    );
+  }
+
+  void _showProviderPending(String provider) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$provider todavía no está configurado. Usa correo electrónico.')),
     );
   }
 
@@ -173,29 +265,57 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Spacer(),
-              Image.network(logoUrl, height: 110, fit: BoxFit.contain, errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball, color: Colors.amber, size: 60)),
+              Image.network(
+                logoUrl,
+                height: 110,
+                fit: BoxFit.contain,
+                errorBuilder: (ctx, err, stack) =>
+                    const Icon(Icons.sports_baseball, color: Colors.amber, size: 60),
+              ),
               const SizedBox(height: 14),
-              const Text("INICIA SESIÓN O REGÍSTRATE", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1)),
+              const Text(
+                "INICIA SESIÓN O REGÍSTRATE",
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1),
+              ),
               const SizedBox(height: 4),
-              const Text("Tu cuenta y tu equipo quedan registrados en la base de datos", style: TextStyle(color: Colors.white60, fontSize: 12), textAlign: TextAlign.center),
+              const Text(
+                "Tu cuenta se protegerá con autenticación de Supabase",
+                style: TextStyle(color: Colors.white60, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
               const Spacer(),
-
-              _btn(Icons.g_mobiledata, Colors.redAccent, "Continuar con Google", () => _openRegisterFlow("Google")),
+              _btn(Icons.g_mobiledata, Colors.redAccent, "Continuar con Google",
+                  () => _showProviderPending("Google")),
               const SizedBox(height: 10),
-              _btn(Icons.apple, Colors.white, "Continuar con Apple", () => _openRegisterFlow("Apple")),
+              _btn(Icons.apple, Colors.white, "Continuar con Apple",
+                  () => _showProviderPending("Apple")),
               const SizedBox(height: 10),
               OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50), side: const BorderSide(color: Colors.white24), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                icon: const Icon(Icons.sms, color: Colors.amber, size: 18),
-                label: const Text("Entrar con Teléfono o Correo", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                onPressed: () => _openRegisterFlow("Teléfono"),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  minimumSize: const Size(double.infinity, 50),
+                  side: const BorderSide(color: Colors.white24),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.email_outlined, color: Colors.amber, size: 18),
+                label: const Text(
+                  "Entrar o registrarme con correo",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                onPressed: _openCredentialsFlow,
               ),
               const SizedBox(height: 16),
               TextButton(
                 onPressed: () {
-                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (ctx) => const MainAppMasterHub(userRole: "fan", userName: "Fanático", teamName: "Sin Equipo", teamProvince: "N/A")));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Modo invitado pendiente de revisión de permisos. Usa correo para esta prueba.'),
+                  ));
                 },
-                child: const Text("Explorar como Fanático Invitado (Solo Lectura)", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12, decoration: TextDecoration.underline)),
+                child: const Text(
+                  "Explorar como Fanático Invitado (Solo Lectura)",
+                  style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12, decoration: TextDecoration.underline),
+                ),
               ),
               const Spacer(),
             ],
@@ -207,14 +327,30 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
 
   Widget _btn(IconData ic, Color col, String txt, VoidCallback tap) {
     return ElevatedButton(
-      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF16202C), foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), side: const BorderSide(color: Colors.white12)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF16202C),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        minimumSize: const Size(double.infinity, 50),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        side: const BorderSide(color: Colors.white12),
+      ),
       onPressed: tap,
-      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(ic, color: col, size: 24), const SizedBox(width: 10), Text(txt, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))]),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(ic, color: col, size: 24),
+          const SizedBox(width: 10),
+          Text(txt, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        ],
+      ),
     );
   }
 }
 
-// FORMULARIO COMPLETO: REGISTRO DE CUENTA Y DATOS REALES DEL EQUIPO (Punto 6)
+// Registro e inicio de sesión con correo electrónico.
+// La creación del perfil y del equipo queda pendiente de una estructura
+// profiles/relaciones confirmada; nunca se asignan permisos desde el cliente.
 class FullTeamRegistrationSheet extends StatefulWidget {
   const FullTeamRegistrationSheet({super.key});
 
@@ -223,114 +359,252 @@ class FullTeamRegistrationSheet extends StatefulWidget {
 }
 
 class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
+  bool isRegistering = true;
+  bool isSubmitting = false;
+  bool obscurePassword = true;
   String selectedRole = "manager";
+
   final nameCtrl = TextEditingController();
+  final emailCtrl = TextEditingController();
+  final passwordCtrl = TextEditingController();
   final teamNameCtrl = TextEditingController();
   final provinceCtrl = TextEditingController();
 
   @override
+  void dispose() {
+    nameCtrl.dispose();
+    emailCtrl.dispose();
+    passwordCtrl.dispose();
+    teamNameCtrl.dispose();
+    provinceCtrl.dispose();
+    super.dispose();
+  }
+
+  void _showMessage(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: error ? Colors.red.shade800 : const Color(0xFF263746),
+      ),
+    );
+  }
+
+  Future<void> _submit() async {
+    final email = emailCtrl.text.trim();
+    final password = passwordCtrl.text;
+
+    if (email.isEmpty || !email.contains('@')) {
+      _showMessage('Escribe un correo electrónico válido.', error: true);
+      return;
+    }
+    if (password.length < 6) {
+      _showMessage('La contraseña debe tener al menos 6 caracteres.', error: true);
+      return;
+    }
+    if (isRegistering && nameCtrl.text.trim().isEmpty) {
+      _showMessage('Escribe tu nombre completo.', error: true);
+      return;
+    }
+    if (isRegistering && selectedRole == 'manager' &&
+        (teamNameCtrl.text.trim().isEmpty || provinceCtrl.text.trim().isEmpty)) {
+      _showMessage('Completa el nombre del equipo y la provincia.', error: true);
+      return;
+    }
+
+    setState(() => isSubmitting = true);
+    try {
+      final auth = Supabase.instance.client.auth;
+      if (isRegistering) {
+        final response = await auth.signUp(
+          email: email,
+          password: password,
+          data: {
+            'full_name': nameCtrl.text.trim(),
+            // Es una solicitud de rol, NO un permiso autorizado.
+            'requested_role': selectedRole,
+          },
+        );
+
+        if (!mounted) return;
+        if (response.session == null) {
+          _showMessage('Cuenta creada. Revisa tu correo y confirma la dirección antes de iniciar sesión.');
+        } else {
+          _showMessage('Cuenta creada y autenticada. El perfil de la aplicación aún debe configurarse.');
+        }
+      } else {
+        await auth.signInWithPassword(email: email, password: password);
+        if (!mounted) return;
+        _showMessage('Inicio de sesión correcto. La vinculación del perfil está pendiente.');
+      }
+    } on AuthException catch (e) {
+      _showMessage(e.message, error: true);
+    } on PostgrestException catch (e) {
+      _showMessage('Error de datos: ${e.message}', error: true);
+    } catch (e) {
+      _showMessage('No se pudo completar la operación. Comprueba tu conexión e inténtalo de nuevo.', error: true);
+      debugPrint('Error de autenticación: $e');
+    } finally {
+      if (mounted) setState(() => isSubmitting = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(22),
-      height: 600,
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text("CREAR TU CUENTA Y EQUIPO", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 15)),
-                IconButton(icon: const Icon(Icons.close, color: Colors.white60), onPressed: () => Navigator.pop(context)),
-              ],
-            ),
-            const Text("Ingresa los datos reales para guardar tu equipo en la base de datos:", style: TextStyle(color: Colors.white60, fontSize: 11)),
-            const SizedBox(height: 14),
-
-            TextField(
-              controller: nameCtrl,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              decoration: const InputDecoration(labelText: "Tu Nombre Completo", labelStyle: TextStyle(color: Colors.white70)),
-            ),
-            const SizedBox(height: 8),
-
-            // Rol
-            Row(
-              children: [
-                ChoiceChip(
-                  label: const Text("Soy Mánager"),
-                  selected: selectedRole == "manager",
-                  selectedColor: Colors.amber,
-                  onSelected: (v) => setState(() => selectedRole = "manager"),
-                ),
-                const SizedBox(width: 8),
-                ChoiceChip(
-                  label: const Text("Soy Pelotero"),
-                  selected: selectedRole == "player",
-                  selectedColor: Colors.amber,
-                  onSelected: (v) => setState(() => selectedRole = "player"),
-                ),
-              ],
-            ),
-
-            if (selectedRole == "manager") ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: teamNameCtrl,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                decoration: const InputDecoration(labelText: "Nombre de tu Equipo", labelStyle: TextStyle(color: Colors.white70)),
+    return SafeArea(
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 180),
+        padding: EdgeInsets.only(
+          left: 22,
+          right: 22,
+          top: 22,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 22,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      isRegistering ? 'CREAR TU CUENTA' : 'INICIAR SESIÓN',
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 15),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white60),
+                    onPressed: isSubmitting ? null : () => Navigator.pop(context),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
+              if (isRegistering) ...[
+                _field(nameCtrl, 'Tu nombre completo', textCapitalization: TextCapitalization.words),
+                const SizedBox(height: 10),
+              ],
+              _field(emailCtrl, 'Correo electrónico', keyboardType: TextInputType.emailAddress),
+              const SizedBox(height: 10),
               TextField(
-                controller: provinceCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(labelText: "Provincia o Municipio de Origen", labelStyle: TextStyle(color: Colors.white70)),
+                controller: passwordCtrl,
+                obscureText: obscurePassword,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  labelText: 'Contraseña (mínimo 6 caracteres)',
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  suffixIcon: IconButton(
+                    onPressed: () => setState(() => obscurePassword = !obscurePassword),
+                    icon: Icon(obscurePassword ? Icons.visibility : Icons.visibility_off, color: Colors.white60),
+                  ),
+                ),
+              ),
+              if (isRegistering) ...[
+                const SizedBox(height: 14),
+                const Text('Tipo de cuenta solicitado', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Soy Mánager'),
+                      selected: selectedRole == 'manager',
+                      selectedColor: Colors.amber,
+                      onSelected: isSubmitting ? null : (v) => setState(() => selectedRole = 'manager'),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Soy Pelotero'),
+                      selected: selectedRole == 'player',
+                      selectedColor: Colors.amber,
+                      onSelected: isSubmitting ? null : (v) => setState(() => selectedRole = 'player'),
+                    ),
+                  ],
+                ),
+                if (selectedRole == 'manager') ...[
+                  const SizedBox(height: 10),
+                  _field(teamNameCtrl, 'Nombre de tu equipo'),
+                  const SizedBox(height: 10),
+                  _field(provinceCtrl, 'Provincia o municipio'),
+                ],
+              ],
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: isSubmitting ? null : _submit,
+                  child: isSubmitting
+                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                      : Text(
+                          isRegistering ? 'CREAR CUENTA' : 'INICIAR SESIÓN',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton(
+                  onPressed: isSubmitting ? null : () => setState(() => isRegistering = !isRegistering),
+                  child: Text(
+                    isRegistering ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate',
+                    style: const TextStyle(color: Colors.amber),
+                  ),
+                ),
+              ),
+              if (!isRegistering)
+                Center(
+                  child: TextButton(
+                    onPressed: isSubmitting ? null : () async {
+                      final email = emailCtrl.text.trim();
+                      if (email.isEmpty || !email.contains('@')) {
+                        _showMessage('Escribe tu correo para enviarte el enlace de recuperación.', error: true);
+                        return;
+                      }
+                      try {
+                        await Supabase.instance.client.auth.resetPasswordForEmail(email);
+                        _showMessage('Si el correo está registrado, recibirás instrucciones para recuperar tu contraseña.');
+                      } on AuthException catch (e) {
+                        _showMessage(e.message, error: true);
+                      } catch (e) {
+                        _showMessage('No se pudo enviar la solicitud. Inténtalo más tarde.', error: true);
+                      }
+                    },
+                    child: const Text('Olvidé mi contraseña', style: TextStyle(color: Colors.white70)),
+                  ),
+                ),
+              const SizedBox(height: 8),
+              const Text(
+                'El equipo y los permisos se vincularán después de configurar y verificar tu perfil.',
+                style: TextStyle(color: Colors.white38, fontSize: 10),
+                textAlign: TextAlign.center,
               ),
             ],
-
-            const SizedBox(height: 24),
-
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                onPressed: () async {
-                  final userName = nameCtrl.text.trim().isEmpty ? "Mánager" : nameCtrl.text.trim();
-                  final tName = teamNameCtrl.text.trim().isEmpty ? "Mi Equipo" : teamNameCtrl.text.trim();
-                  final tProv = provinceCtrl.text.trim().isEmpty ? "República Dominicana" : provinceCtrl.text.trim();
-
-                  // Guardar el equipo en Supabase de verdad (Puntos 5 y 6)
-                  if (selectedRole == "manager" && teamNameCtrl.text.trim().isNotEmpty) {
-                    try {
-                      await Supabase.instance.client.from('teams').insert({
-                        'name': tName,
-                        'province': tProv,
-                        'manager_name': userName,
-                      });
-                    } catch (e) {
-                      debugPrint("Guardado local/nube: $e");
-                    }
-                  }
-
-                  if (!mounted) return;
-                  Navigator.pop(context);
-                  Navigator.pushReplacement(
-                    context,
-                    MaterialPageRoute(
-                      builder: (ctx) => MainAppMasterHub(
-                        userRole: selectedRole,
-                        userName: userName,
-                        teamName: tName,
-                        teamProvince: tProv,
-                      ),
-                    ),
-                  );
-                },
-                child: const Text("GUARDAR Y ENTRAR A LA APP", style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900)),
-              ),
-            ),
-          ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _field(
+    TextEditingController controller,
+    String label, {
+    TextInputType keyboardType = TextInputType.text,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      textCapitalization: textCapitalization,
+      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white70),
       ),
     );
   }
@@ -376,8 +650,15 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     });
   }
 
-  void _logout() {
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (ctx) => const AuthLoginScreen()));
+  Future<void> _logout() async {
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo cerrar la sesión.')),
+      );
+    }
   }
 
   @override
