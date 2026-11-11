@@ -6,7 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 // URL y Claves de tu servidor Supabase
 const String kSupabaseUrl = 'https://epqyabaegmyjtwqezvbc.supabase.co';
-const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_PUBLISHABLE_KEY');
+const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
 
 // FUNCIÓN PARA ABRIR ENLACES EXTERNOS (WHATSAPP O WEB DE PATROCINADORES)
 Future<void> openExternalUrl(String urlString) async {
