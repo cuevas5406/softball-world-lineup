@@ -49,8 +49,12 @@ jobs:
       - name: Instalar dependencias
         run: flutter pub get
 
+ 
       - name: Compilar APK Oficial
-        run: flutter build apk --release
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: flutter build apk --release --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+
 
       - name: Guardar instalador APK
         uses: actions/upload-artifact@v4
