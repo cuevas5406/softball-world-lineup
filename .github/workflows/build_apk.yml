@@ -52,8 +52,12 @@ jobs:
  
       - name: Compilar APK Oficial
         env:
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: flutter build apk --release --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+          SUPABASE_ANON_KEY: ${{ secrets.SWL_LAB_PUBLISHABLE_KEY }}
+        run: |
+          test -n "$SUPABASE_ANON_KEY" || { echo "Falta SWL_LAB_PUBLISHABLE_KEY"; exit 1; }
+          flutter build apk --release \
+            --dart-define=SUPABASE_URL=https://wgeziptdoabyicufnrfk.supabase.co \
+            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 
 
       - name: Guardar instalador APK
