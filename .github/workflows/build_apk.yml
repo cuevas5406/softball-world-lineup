@@ -48,6 +48,39 @@ jobs:
           curl -fL -o android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
           curl -fL -o android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
 
+      - name: Registrar retorno de autenticacion Android
+        run: |
+          python3 - <<'PYAUTH'
+          from pathlib import Path
+          from xml.etree import ElementTree as ET
+
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
+          tree = ET.parse(manifest)
+          root = tree.getroot()
+          android = '{http://schemas.android.com/apk/res/android}'
+          application = root.find('application')
+          if application is None:
+              raise SystemExit('AndroidManifest.xml sin application')
+          activity = next((a for a in application.findall('activity')
+                           if a.get(android + 'name') in ('.MainActivity', 'com.softballworld.lineup.MainActivity')), None)
+          if activity is None:
+              raise SystemExit('No se encontro MainActivity para configurar el deep link')
+          exists = False
+          for filt in activity.findall('intent-filter'):
+              for data in filt.findall('data'):
+                  if data.get(android + 'scheme') == 'com.softballworld.lineup' and data.get(android + 'host') == 'login-callback':
+                      exists = True
+          if not exists:
+              filt = ET.SubElement(activity, 'intent-filter')
+              ET.SubElement(filt, 'action', {android + 'name': 'android.intent.action.VIEW'})
+              ET.SubElement(filt, 'category', {android + 'name': 'android.intent.category.DEFAULT'})
+              ET.SubElement(filt, 'category', {android + 'name': 'android.intent.category.BROWSABLE'})
+              ET.SubElement(filt, 'data', {android + 'scheme': 'com.softballworld.lineup', android + 'host': 'login-callback'})
+          tree.write(manifest, encoding='utf-8', xml_declaration=True)
+          print('Deep link Android registrado: com.softballworld.lineup://login-callback')
+          PYAUTH
+
       - name: Instalar dependencias
         run: flutter pub get
 
