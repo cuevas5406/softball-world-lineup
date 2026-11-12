@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 const String kSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
 const String kLabUrl = 'https://wgeziptdoabyicufnrfk.supabase.co';
+// Debe coincidir con AndroidManifest.xml y la allowlist de Supabase LAB.
+const String kAuthRedirectUrl = 'com.softballworld.lineup://login-callback';
 
 // FUNCIÓN PARA ABRIR ENLACES EXTERNOS (WHATSAPP O WEB DE PATROCINADORES)
 Future<void> openExternalUrl(String urlString) async {
@@ -431,6 +433,7 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
         final response = await auth.signUp(
           email: email,
           password: password,
+          emailRedirectTo: kAuthRedirectUrl,
           data: {
             'full_name': nameCtrl.text.trim(),
             // Es una solicitud de rol, NO un permiso autorizado.
@@ -440,7 +443,7 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
 
         if (!mounted) return;
         if (response.session == null) {
-          _showMessage('Cuenta creada. Revisa tu correo y confirma la dirección antes de iniciar sesión.');
+          _showMessage('Cuenta creada. Confirma el correo desde este teléfono para regresar a la aplicación. Si el enlace no abre la app, revisa Redirect URLs de Supabase LAB.');
         } else {
           _showMessage('Cuenta creada y autenticada. El perfil de la aplicación aún debe configurarse.');
         }
