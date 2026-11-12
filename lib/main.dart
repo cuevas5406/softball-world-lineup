@@ -5,8 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 // URL y Claves de tu servidor Supabase
-const String kSupabaseUrl = 'https://epqyabaegmyjtwqezvbc.supabase.co';
+const String kSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+const String kLabUrl = 'https://wgeziptdoabyicufnrfk.supabase.co';
 
 // FUNCIÓN PARA ABRIR ENLACES EXTERNOS (WHATSAPP O WEB DE PATROCINADORES)
 Future<void> openExternalUrl(String urlString) async {
@@ -21,8 +22,13 @@ Future<void> openExternalUrl(String urlString) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (kSupabaseAnonKey.isEmpty) {
-    debugPrint('Falta SUPABASE_PUBLISHABLE_KEY en la compilación.');
+  // Fail closed: nunca permitir que una compilación de pruebas escriba en producción.
+  if (kSupabaseUrl != kLabUrl || kSupabaseAnonKey.isEmpty) {
+    runApp(const MaterialApp(home: Scaffold(body: Center(child: Padding(
+      padding: EdgeInsets.all(24),
+      child: Text('Configuración de LAB ausente o incorrecta. Esta versión no se conectará a producción.', textAlign: TextAlign.center),
+    )))));
+    return;
   }
 
   try {
@@ -30,11 +36,10 @@ Future<void> main() async {
       url: kSupabaseUrl,
       anonKey: kSupabaseAnonKey,
     );
+    runApp(const SoftballWorldApp());
   } catch (e) {
-    debugPrint("Modo seguro activo: $e");
+    runApp(const MaterialApp(home: Scaffold(body: Center(child: Text('No se pudo iniciar la conexión con LAB.')))));
   }
-
-  runApp(const SoftballWorldApp());
 }
 
 class SoftballWorldApp extends StatelessWidget {
@@ -1237,7 +1242,7 @@ class MasterTeamTab extends StatefulWidget {
 }
 
 class _MasterTeamTabState extends State<MasterTeamTab> {
-  // Lista de jugadores limpia (sin datos de prueba falsos)
+  // Roster LOCAL de demostración: no está persistido ni autoriza fichajes reales.
   List<Map<String, String>> roster = [];
 
   void _addPlayerManual() {
@@ -1353,6 +1358,9 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
 
             const SizedBox(height: 12),
 
+            const Text('MODO DEMOSTRACIÓN: los peloteros añadidos aquí no se guardan en Supabase.',
+              style: TextStyle(color: Colors.orangeAccent, fontSize: 11)),
+            const SizedBox(height: 8),
             // Botones de acción del Mánager
             Row(
               children: [
