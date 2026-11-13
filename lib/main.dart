@@ -341,6 +341,8 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
               const SizedBox(height: 10),
               SelectableText(_notice!),
             ],
+            const SizedBox(height: 16),
+            const SwlPlayersLabPanel(),
             const Divider(height: 28),
             Row(children: [
               const Expanded(child: Text('Equipos visibles', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -372,6 +374,215 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// FASE 1 — registro y fichaje independientes; toda escritura exige confirmación.
+// Los permisos efectivos los determina Supabase, no el rol solicitado en Flutter.
+class SwlPlayersLabPanel extends StatefulWidget {
+  const SwlPlayersLabPanel({super.key});
+  @override
+  State<SwlPlayersLabPanel> createState() => _SwlPlayersLabPanelState();
+}
+
+class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
+  final _first = TextEditingController();
+  final _last = TextEditingController();
+  final _jersey = TextEditingController();
+  final _position = TextEditingController();
+  final _photo = TextEditingController();
+  final _playerId = TextEditingController();
+  String? _teamId;
+  bool _refuerzo = false;
+  bool _busy = false;
+  String? _notice;
+  Future<List<Map<String, dynamic>>>? _teams;
+  Future<List<Map<String, dynamic>>>? _roster;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTeams();
+  }
+
+  void _loadTeams() {
+    setState(() {
+      _teams = Supabase.instance.client.from('teams')
+          .select('id, name, province').order('name');
+    });
+  }
+
+  void _loadRoster() {
+    final id = _teamId;
+    setState(() {
+      _roster = id == null ? null : _fetchRoster(id);
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchRoster(String teamId) async {
+    final data = await Supabase.instance.client.rpc(
+      'swl_get_team_roster', params: {'p_team_id': teamId},
+    );
+    if (data is! List) throw StateError('El roster no devolvió una lista.');
+    return data.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  }
+
+  Future<bool> _confirm(String title, String description) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(description),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirmar')),
+        ],
+      ),
+    ) ?? false;
+  }
+
+  Future<void> _register() async {
+    if (_busy) return;
+    final first = _first.text.trim();
+    final last = _last.text.trim();
+    if (first.isEmpty || last.isEmpty || first.length > 100 || last.length > 100) {
+      setState(() => _notice = 'Nombre y apellido obligatorios (máximo 100 caracteres).');
+      return;
+    }
+    if (!await _confirm('Registrar pelotero',
+        '¿Registrar a $first $last en Supabase LAB? Esto crea una identidad deportiva, pero NO lo ficha en ningún equipo.')) return;
+    if (!mounted) return;
+    setState(() { _busy = true; _notice = null; });
+    try {
+      final data = await Supabase.instance.client.rpc('swl_register_player', params: {
+        'p_first_name': first,
+        'p_last_name': last,
+        'p_jersey_number': _jersey.text.trim(),
+        'p_primary_position': _position.text.trim(),
+        'p_photo_url': _photo.text.trim(),
+      });
+      if (!mounted) return;
+      // La función devuelve una fila con ID y universal_id; no se presupone
+      // el nombre de sus columnas para no ocultar errores de firma.
+      final row = data is List && data.isNotEmpty ? data.first : data;
+      if (row is! Map) throw StateError('Respuesta de registro inesperada: $data');
+      final id = row['v_player_id'] ?? row['player_id'] ?? row['id'];
+      final universal = row['v_universal_id'] ?? row['universal_id'];
+      setState(() {
+        if (id != null) _playerId.text = id.toString();
+        _notice = 'Registro completado. ID: ${id ?? "no identificado"}. '
+            'Código SWL: ${universal ?? "revisar respuesta"}. '
+            'Para incorporarlo a un equipo utiliza Fichar pelotero.';
+      });
+    } catch (e) {
+      if (mounted) setState(() => _notice = 'No se pudo confirmar el registro. '
+          'Revisa players antes de reintentar para evitar duplicados. Detalle: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _sign() async {
+    if (_busy) return;
+    final team = _teamId;
+    final player = _playerId.text.trim();
+    if (team == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(player)) {
+      setState(() => _notice = 'Selecciona equipo e introduce un UUID de pelotero válido.');
+      return;
+    }
+    if (!await _confirm('Confirmar fichaje',
+        '¿Fichar al pelotero $player en el equipo seleccionado? '
+        'Supabase verificará tus permisos. Refuerzo: ${_refuerzo ? "sí" : "no"}.')) return;
+    if (!mounted) return;
+    setState(() { _busy = true; _notice = null; });
+    try {
+      final result = await Supabase.instance.client.rpc('swl_sign_player', params: {
+        'p_team_id': team,
+        'p_player_id': player,
+        'p_is_refuerzo': _refuerzo,
+      });
+      if (!mounted) return;
+      setState(() => _notice = 'Fichaje procesado. ID de roster: $result');
+      _loadRoster();
+    } catch (e) {
+      if (mounted) setState(() => _notice = 'No se pudo confirmar el fichaje. '
+          'Comprueba el roster antes de reintentar. Detalle: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in [_first, _last, _jersey, _position, _photo, _playerId]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF16202C),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Text('Peloteros y roster — LAB',
+              style: TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Text('Registrar crea la identidad del pelotero. Fichar lo incorpora a un equipo autorizado.'),
+          TextField(controller: _first, maxLength: 100, decoration: const InputDecoration(labelText: 'Nombre *')),
+          TextField(controller: _last, maxLength: 100, decoration: const InputDecoration(labelText: 'Apellido *')),
+          TextField(controller: _jersey, decoration: const InputDecoration(labelText: 'Número de camiseta (opcional)')),
+          TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
+          TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
+          FilledButton.icon(onPressed: _busy ? null : _register,
+              icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
+          const Divider(height: 28),
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: _teams,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) return SelectableText('Error al leer equipos: ${snapshot.error}');
+              if (!snapshot.hasData) return const LinearProgressIndicator();
+              final teams = snapshot.data!;
+              return DropdownButtonFormField<String>(
+                value: teams.any((t) => t['id']?.toString() == _teamId) ? _teamId : null,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Equipo para fichaje y roster'),
+                items: teams.map((t) => DropdownMenuItem<String>(
+                  value: t['id'].toString(), child: Text('${t['name']} — ${t['province'] ?? ''}', overflow: TextOverflow.ellipsis),
+                )).toList(),
+                onChanged: (id) { _teamId = id; _loadRoster(); },
+              );
+            },
+          ),
+          TextField(controller: _playerId,
+              decoration: const InputDecoration(labelText: 'UUID del pelotero (no el código SWL)')),
+          CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
+              value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
+          FilledButton.icon(onPressed: _busy ? null : _sign,
+              icon: const Icon(Icons.group_add), label: const Text('Fichar pelotero en LAB')),
+          OutlinedButton.icon(onPressed: _loadRoster,
+              icon: const Icon(Icons.refresh), label: const Text('Actualizar roster')),
+          if (_notice != null) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
+              child: SelectableText(_notice!)),
+          if (_roster != null) FutureBuilder<List<Map<String, dynamic>>>(
+            future: _roster,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) return SelectableText('Error de roster: ${snapshot.error}');
+              if (!snapshot.hasData) return const LinearProgressIndicator();
+              if (snapshot.data!.isEmpty) return const Text('Este equipo no tiene peloteros visibles.');
+              return Column(children: snapshot.data!.map((p) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('${p['first_name'] ?? ''} ${p['last_name'] ?? ''}'),
+                subtitle: SelectableText('#${p['jersey_number'] ?? ''} · ${p['primary_position'] ?? ''}\n${p['universal_id'] ?? ''}'),
+                trailing: p['is_refuerzo'] == true ? const Icon(Icons.star, color: Colors.amber) : null,
+              )).toList());
+            },
+          ),
+        ]),
       ),
     );
   }
