@@ -182,6 +182,8 @@ class _AuthTestGateState extends State<AuthTestGate> {
                     ? profile['full_name'] as String : 'Usuario autenticado'),
                 const SizedBox(height: 12),
                 const Text('El acceso al Hub requiere verificar por separado roles y permisos de equipos. No se conceden automáticamente.', textAlign: TextAlign.center),
+                const SizedBox(height: 22),
+                const SwlTeamLabPanel(),
               ]);
             }
             return Center(child: SingleChildScrollView(child: Padding(
@@ -219,6 +221,159 @@ class _AuthTestGateState extends State<AuthTestGate> {
       return SplashScreen(onContinue: () => setState(() => _showLogin = true));
     }
     return const AuthLoginScreen();
+  }
+}
+
+// FASE 1: creación y lectura de equipos exclusivamente mediante Supabase LAB.
+// No concede permisos por el rol solicitado durante el registro.
+class SwlTeamLabPanel extends StatefulWidget {
+  const SwlTeamLabPanel({super.key});
+
+  @override
+  State<SwlTeamLabPanel> createState() => _SwlTeamLabPanelState();
+}
+
+class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
+  final _nameController = TextEditingController();
+  final _provinceController = TextEditingController();
+  Future<List<Map<String, dynamic>>>? _teamsFuture;
+  bool _creating = false;
+  String? _notice;
+  String? _createdTeamId;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() {
+    setState(() {
+      _teamsFuture = Supabase.instance.client
+          .from('teams')
+          .select('id, name, province, created_by')
+          .order('name');
+    });
+  }
+
+  Future<void> _createTeam() async {
+    if (_creating) return;
+    final name = _nameController.text.trim();
+    final province = _provinceController.text.trim();
+    if (name.isEmpty || province.isEmpty) {
+      setState(() => _notice = 'Completa el nombre y la provincia.');
+      return;
+    }
+    final auth = Supabase.instance.client.auth;
+    if (auth.currentUser == null) {
+      setState(() => _notice = 'Debes iniciar sesión para crear un equipo.');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirmar creación de equipo'),
+        content: Text('¿Crear el equipo "$name" en $province en Supabase LAB? Esta operación guardará datos reales.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Crear equipo')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() { _creating = true; _notice = null; });
+    try {
+      // La RPC comprueba autorización y crea los registros que su lógica defina.
+      // Nunca insertar directamente en teams o team_admins desde Flutter.
+      final result = await Supabase.instance.client.rpc(
+        'swl_create_team',
+        params: {'p_name': name, 'p_province': province},
+      );
+      if (result == null || result.toString().isEmpty) {
+        throw StateError('La función no devolvió un identificador de equipo.');
+      }
+      if (!mounted) return;
+      setState(() {
+        _createdTeamId = result.toString();
+        _notice = 'Solicitud completada. Equipo creado con ID: $_createdTeamId. Los permisos se verifican por separado.';
+      });
+      _reload();
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      setState(() => _notice = 'Supabase rechazó la creación: ${e.message} (código: ${e.code ?? "sin código"}).');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _notice = 'No se pudo confirmar la creación. Revisa la tabla teams antes de volver a intentarlo. Detalle: $e');
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _provinceController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: const Color(0xFF16202C),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Equipos — Supabase LAB', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
+            const SizedBox(height: 8),
+            const Text('Crea un equipo mediante la función segura swl_create_team. Crear un equipo no te convierte en mánager deportivo.'),
+            const SizedBox(height: 12),
+            TextField(controller: _nameController, maxLength: 100, decoration: const InputDecoration(labelText: 'Nombre del equipo')),
+            TextField(controller: _provinceController, maxLength: 100, decoration: const InputDecoration(labelText: 'Provincia o municipio')),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _creating ? null : _createTeam,
+              icon: _creating ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.add_circle_outline),
+              label: Text(_creating ? 'Creando equipo...' : 'Crear equipo en LAB'),
+            ),
+            if (_notice != null) ...[
+              const SizedBox(height: 10),
+              SelectableText(_notice!),
+            ],
+            const Divider(height: 28),
+            Row(children: [
+              const Expanded(child: Text('Equipos visibles', style: TextStyle(fontWeight: FontWeight.bold))),
+              IconButton(onPressed: _reload, tooltip: 'Actualizar equipos', icon: const Icon(Icons.refresh)),
+            ]),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: _teamsFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return SelectableText('No se pudo leer teams. Comprueba la política SELECT. Detalle: ${snapshot.error}');
+                }
+                final teams = snapshot.data ?? <Map<String, dynamic>>[];
+                if (teams.isEmpty) return const Text('No hay equipos visibles para esta sesión.');
+                return Column(
+                  children: teams.map((team) => ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('${team['name'] ?? 'Sin nombre'}'),
+                    subtitle: Text('${team['province'] ?? 'Provincia no indicada'}'),
+                    trailing: team['id']?.toString() == _createdTeamId
+                        ? const Icon(Icons.check_circle, color: Colors.amber)
+                        : null,
+                  )).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
