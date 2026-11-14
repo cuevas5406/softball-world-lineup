@@ -407,6 +407,22 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
 
 // FASE 1 — registro y fichaje independientes; toda escritura exige confirmación.
 // Los permisos efectivos los determina Supabase, no el rol solicitado en Flutter.
+// V4.2: los equipos visibles no implican permisos de administración.
+Future<List<Map<String, dynamic>>> swlAuthorizedTeams() async {
+  final client = Supabase.instance.client;
+  if (client.auth.currentUser == null) return [];
+  final rows = await client.from('teams').select('id, name, province').order('name');
+  final allowed = <Map<String, dynamic>>[];
+  for (final raw in rows) {
+    final team = Map<String, dynamic>.from(raw);
+    final id = team['id']?.toString();
+    if (id == null || id.isEmpty) continue;
+    final permission = await client.rpc('swl_can_manage_roster', params: {'p_team_id': id});
+    if (permission == true) allowed.add(team);
+  }
+  return allowed;
+}
+
 class SwlPlayersLabPanel extends StatefulWidget {
   final bool registerMode;
   final String? initialTeamId;
@@ -436,14 +452,27 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     super.initState();
     _teamId = widget.initialTeamId;
     _loadTeams();
-    if (_teamId != null) _loadRoster();
+    _resolveTeam();
   }
 
   void _loadTeams() {
     setState(() {
-      _teams = Supabase.instance.client.from('teams')
-          .select('id, name, province').order('name');
+      _teams = swlAuthorizedTeams();
     });
+  }
+
+  Future<void> _resolveTeam() async {
+    try {
+      final teams = await swlAuthorizedTeams();
+      if (!mounted) return;
+      final currentAllowed = teams.any((t) => t['id']?.toString() == _teamId);
+      setState(() {
+        if (!currentAllowed) _teamId = teams.length == 1 ? teams.first['id'].toString() : null;
+      });
+      _loadRoster();
+    } catch (e) {
+      if (mounted) setState(() => _notice = 'No se pudieron verificar los permisos: $e');
+    }
   }
 
   void _loadRoster() {
@@ -483,11 +512,21 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = 'Nombre y apellido obligatorios (máximo 100 caracteres).');
       return;
     }
-    if (!await _confirm('Registrar pelotero',
-        '¿Registrar a $first $last en Supabase LAB? Esto crea una identidad deportiva, pero NO lo ficha en ningún equipo.')) return;
+    final team = _teamId;
+    if (team == null) {
+      setState(() => _notice = 'Selecciona un equipo autorizado antes de registrar y fichar.');
+      return;
+    }
+    if (!await _confirm('Registrar y fichar',
+        '¿Registrar a $first $last y ficharlo en el equipo seleccionado? Son dos operaciones; si el fichaje falla, conservaremos el ID del pelotero.')) return;
     if (!mounted) return;
     setState(() { _busy = true; _notice = null; });
+    String? createdId;
+    String? createdCode;
     try {
+      final permitted = await Supabase.instance.client.rpc(
+        'swl_can_manage_roster', params: {'p_team_id': team});
+      if (permitted != true) throw StateError('No tienes autorización activa para administrar ese roster.');
       final data = await Supabase.instance.client.rpc('swl_register_player', params: {
         'p_first_name': first,
         'p_last_name': last,
@@ -495,22 +534,27 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
         'p_primary_position': _position.text.trim(),
         'p_photo_url': _photo.text.trim(),
       });
-      if (!mounted) return;
-      // La función devuelve una fila con ID y universal_id; no se presupone
-      // el nombre de sus columnas para no ocultar errores de firma.
       final row = data is List && data.isNotEmpty ? data.first : data;
       if (row is! Map) throw StateError('Respuesta de registro inesperada: $data');
-      final id = row['v_player_id'] ?? row['player_id'] ?? row['id'];
-      final universal = row['v_universal_id'] ?? row['universal_id'];
-      setState(() {
-        // No se ficha automáticamente: el usuario debe buscar y confirmar.
-        _notice = 'Registro completado. ID: ${id ?? "no identificado"}. '
-            'Código SWL: ${universal ?? "revisar respuesta"}. '
-            'Para incorporarlo a un equipo utiliza Fichar pelotero.';
+      createdId = (row['v_player_id'] ?? row['player_id'] ?? row['id'])?.toString();
+      createdCode = (row['v_universal_id'] ?? row['universal_id'])?.toString();
+      if (createdId == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(createdId)) {
+        throw StateError('Jugador registrado, pero la respuesta no incluyó un UUID válido. Verifica players antes de reintentar.');
+      }
+      final rosterId = await Supabase.instance.client.rpc('swl_sign_player', params: {
+        'p_team_id': team,
+        'p_player_id': createdId,
+        'p_is_refuerzo': false,
       });
+      if (!mounted) return;
+      setState(() => _notice = 'Pelotero registrado y fichado. Código: ${createdCode ?? "no disponible"}. Roster: $rosterId');
+      _loadRoster();
     } catch (e) {
-      if (mounted) setState(() => _notice = 'No se pudo confirmar el registro. '
-          'Revisa players antes de reintentar para evitar duplicados. Detalle: $e');
+      if (!mounted) return;
+      setState(() => _notice = createdId != null
+        ? 'El pelotero YA fue registrado (ID: $createdId; código: ${createdCode ?? "no disponible"}), '
+          'pero el fichaje NO se confirmó. No vuelvas a registrarlo: busca su código para ficharlo. Detalle: $e'
+        : 'No se pudo confirmar el registro. Revisa players antes de reintentar para evitar duplicados. Detalle: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -557,6 +601,11 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = 'Selecciona equipo y busca un pelotero por su código SWL.');
       return;
     }
+    final permission = await Supabase.instance.client.rpc('swl_can_manage_roster', params: {'p_team_id': team});
+    if (permission != true) {
+      if (mounted) setState(() => _notice = 'No tienes autorización activa para fichar en ese equipo.');
+      return;
+    }
     if (!await _confirm('Confirmar fichaje',
         '¿Fichar a ${selected['first_name'] ?? ''} ${selected['last_name'] ?? ''} (${selected['universal_id'] ?? ''}) en el equipo seleccionado? '
         'Supabase verificará tus permisos. Refuerzo: ${_refuerzo ? "sí" : "no"}.')) return;
@@ -579,6 +628,27 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     }
   }
 
+  Widget _teamSelector() => FutureBuilder<List<Map<String, dynamic>>>(
+    future: _teams,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) return SelectableText('Error al verificar equipos autorizados: ${snapshot.error}');
+      if (!snapshot.hasData) return const LinearProgressIndicator();
+      final teams = snapshot.data!;
+      if (teams.isEmpty) return const Text('No tienes equipos con autorización activa para fichar.');
+      if (teams.length == 1) return Text('Equipo autorizado: ${teams.first['name']} (selección automática)');
+      return DropdownButtonFormField<String>(
+        value: teams.any((t) => t['id']?.toString() == _teamId) ? _teamId : null,
+        isExpanded: true,
+        decoration: const InputDecoration(labelText: 'Elige el equipo que administras'),
+        items: teams.map((t) => DropdownMenuItem<String>(
+          value: t['id'].toString(),
+          child: Text('${t['name']} — ${t['province'] ?? ''}', overflow: TextOverflow.ellipsis),
+        )).toList(),
+        onChanged: (id) { setState(() => _teamId = id); _loadRoster(); },
+      );
+    },
+  );
+
   @override
   void dispose() {
     for (final c in [_first, _last, _jersey, _position, _photo, _searchCode]) {
@@ -598,7 +668,8 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
               style: const TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           if (widget.registerMode) ...[
-            const Text('Crea la identidad deportiva. Registrar no incorpora automáticamente al jugador a un equipo.'),
+            const Text('Registra y ficha al pelotero en un equipo que administras.'),
+            _teamSelector(),
             const SizedBox(height: 12),
             TextField(controller: _first, maxLength: 100, decoration: const InputDecoration(labelText: 'Nombre *')),
             TextField(controller: _last, maxLength: 100, decoration: const InputDecoration(labelText: 'Apellido *')),
@@ -609,23 +680,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
                 icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
           ] else ...[
             const Text('Busca un jugador registrado mediante su código SWL completo. Los códigos cortos todavía no están disponibles.'),
-            if (widget.initialTeamId == null) FutureBuilder<List<Map<String, dynamic>>>(
-              future: _teams,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) return SelectableText('Error al leer equipos: ${snapshot.error}');
-                if (!snapshot.hasData) return const LinearProgressIndicator();
-                final teams = snapshot.data!;
-                return DropdownButtonFormField<String>(
-                  value: teams.any((t) => t['id']?.toString() == _teamId) ? _teamId : null,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Equipo para fichaje'),
-                  items: teams.map((t) => DropdownMenuItem<String>(
-                    value: t['id'].toString(), child: Text('${t['name']} — ${t['province'] ?? ''}', overflow: TextOverflow.ellipsis),
-                  )).toList(),
-                  onChanged: (id) { _teamId = id; _loadRoster(); },
-                );
-              },
-            ),
+            _teamSelector(),
             TextField(
               controller: _searchCode,
               textCapitalization: TextCapitalization.characters,
@@ -1687,13 +1742,15 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
   @override
   void initState() {
     super.initState();
-    _teams = _fetchTeams();
+    _teams = swlAuthorizedTeams();
+    _autoSelectTeam();
   }
 
-  Future<List<Map<String, dynamic>>> _fetchTeams() async {
-    final rows = await Supabase.instance.client.from('teams')
-        .select('id, name, province').order('name');
-    return List<Map<String, dynamic>>.from(rows);
+  Future<void> _autoSelectTeam() async {
+    try {
+      final teams = await _teams;
+      if (mounted && teams.length == 1) _selectTeam(teams.first);
+    } catch (_) { /* FutureBuilder muestra el error de permisos. */ }
   }
 
   Future<List<Map<String, dynamic>>> _fetchRoster(String teamId) async {
@@ -1728,7 +1785,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
         body: SafeArea(child: SingleChildScrollView(
           padding: const EdgeInsets.all(12),
           child: SwlPlayersLabPanel(registerMode: registerMode,
-              initialTeamId: registerMode ? null : _selectedTeamId))),
+              initialTeamId: _selectedTeamId))),
       ),
     ));
     if (mounted) _refreshRoster();
@@ -1775,12 +1832,14 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                 style: const TextStyle(color: Colors.orangeAccent));
               if (!snapshot.hasData) return const LinearProgressIndicator();
               final teams = snapshot.data!;
+              if (teams.isEmpty) return const Text('No tienes equipos con permisos activos de administración.');
+              if (teams.length == 1) return Text('Equipo autorizado: ${teams.first['name']} (selección automática)');
               return DropdownButtonFormField<String>(
                 value: teams.any((t) => t['id']?.toString() == _selectedTeamId)
                   ? _selectedTeamId : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
-                  labelText: 'Selecciona el equipo real de Supabase LAB'),
+                  labelText: 'Equipo que administras en Supabase LAB'),
                 items: teams.map((t) => DropdownMenuItem<String>(
                   value: t['id'].toString(),
                   child: Text('${t['name']} — ${t['province'] ?? ''}',
@@ -1797,7 +1856,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
           const Text('GESTIÓN DE PELOTEROS', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: () => _openPlayerAction(true),
+            onPressed: _selectedTeamId == null ? null : () => _openPlayerAction(true),
             icon: const Icon(Icons.person_add_alt_1),
             label: const Text('Registrar nuevo pelotero'),
           ),
