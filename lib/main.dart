@@ -1296,7 +1296,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       ),
     ];
 
-    String badge = widget.userRole == "manager" ? "MÁNAGER" : (widget.userRole == "player" ? "PELOTERO" : "FANÁTICO");
+    String badge = widget.userRole == "manager" ? "MÁNAGER" : (widget.userRole == "player" ? "PELOTERO" : "USUARIO");
 
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
