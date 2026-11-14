@@ -80,6 +80,8 @@ class _AuthTestGateState extends State<AuthTestGate> {
   bool _available = true;
   Future<Map<String, dynamic>?>? _profileLookup;
   String? _profileUserId;
+  Future<List<Map<String, dynamic>>>? _authorizedTeamsLookup;
+  String? _authorizedTeamsUserId;
 
   @override
   void initState() {
@@ -109,6 +111,8 @@ class _AuthTestGateState extends State<AuthTestGate> {
     if (id == null) {
       _profileUserId = null;
       _profileLookup = null;
+      _authorizedTeamsLookup = null;
+      _authorizedTeamsUserId = null;
       return;
     }
     if (force || _profileUserId != id || _profileLookup == null) {
@@ -121,8 +125,20 @@ class _AuthTestGateState extends State<AuthTestGate> {
     }
   }
 
+  Future<List<Map<String, dynamic>>> _teamsForUser(String userId) {
+    if (_authorizedTeamsUserId != userId || _authorizedTeamsLookup == null) {
+      _authorizedTeamsUserId = userId;
+      _authorizedTeamsLookup = swlAuthorizedTeams();
+    }
+    return _authorizedTeamsLookup!;
+  }
+
   void _refreshProfile() {
-    setState(() => _prepareProfileLookup(_session, force: true));
+    setState(() {
+      _prepareProfileLookup(_session, force: true);
+      _authorizedTeamsLookup = null;
+      _authorizedTeamsUserId = null;
+    });
   }
 
   @override
@@ -152,11 +168,35 @@ class _AuthTestGateState extends State<AuthTestGate> {
                 !snapshot.hasError && snapshot.data != null) {
               final profile = snapshot.data!;
               final fullName = profile['full_name']?.toString().trim() ?? '';
-              return MainAppMasterHub(
-                userRole: 'fan',
-                userName: fullName.isNotEmpty ? fullName : 'Usuario',
-                teamName: 'Explorar equipos — LAB',
-                teamProvince: '',
+              return FutureBuilder<List<Map<String, dynamic>>>(
+                future: _teamsForUser(user.id),
+                builder: (context, teamsSnapshot) {
+                  if (teamsSnapshot.hasError) {
+                    return Center(child: SingleChildScrollView(child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 48),
+                        const SizedBox(height: 12),
+                        const Text('No se pudieron verificar tus equipos autorizados.', textAlign: TextAlign.center),
+                        const SizedBox(height: 10),
+                        SelectableText('${teamsSnapshot.error}', textAlign: TextAlign.center),
+                        const SizedBox(height: 16),
+                        ElevatedButton(onPressed: _refreshProfile, child: const Text('REINTENTAR')),
+                      ]),
+                    )));
+                  }
+                  if (!teamsSnapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator(color: Colors.amber));
+                  }
+                  final authorized = teamsSnapshot.data!;
+                  return MainAppMasterHub(
+                    userRole: authorized.isNotEmpty ? 'manager' : 'fan',
+                    userName: fullName.isNotEmpty ? fullName : 'Usuario',
+                    teamName: authorized.isNotEmpty ? (authorized.first['name']?.toString() ?? 'Mi equipo') : 'Mi perfil',
+                    teamProvince: authorized.isNotEmpty ? (authorized.first['province']?.toString() ?? '') : '',
+                    authorizedTeams: authorized,
+                  );
+                },
               );
             }
             Widget message;
@@ -185,46 +225,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
                 Text('No se ha creado un perfil ni asignado permisos automáticamente. La recuperación segura queda pendiente.', textAlign: TextAlign.center),
               ]);
             } else {
-              final profile = snapshot.data!;
-              message = Column(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.verified_user_outlined, color: Colors.amber, size: 54),
-                const SizedBox(height: 12),
-                const Text('Perfil encontrado en LAB', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
-                const SizedBox(height: 8),
-                Text((profile['full_name'] as String?)?.isNotEmpty == true
-                    ? profile['full_name'] as String : 'Usuario autenticado'),
-                const SizedBox(height: 12),
-                const Text('El acceso al Hub requiere verificar por separado roles y permisos de equipos. No se conceden automáticamente.', textAlign: TextAlign.center),
-                const SizedBox(height: 22),
-                // Navegación de prueba: nunca deriva privilegios del perfil.
-                // El Hub original contiene acciones de demostración; no son
-                // operaciones reales de Supabase ni autorizaciones deportivas.
-                FilledButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => MainAppMasterHub(
-                        userRole: 'fan',
-                        userName: (profile['full_name'] as String?)?.trim().isNotEmpty == true
-                            ? (profile['full_name'] as String).trim()
-                            : 'Usuario',
-                        teamName: 'Explorar equipos — LAB',
-                        teamProvince: '',
-                      ),
-                    ));
-                  },
-                  icon: const Icon(Icons.dashboard_outlined),
-                  label: const Text('Explorar menú principal (modo fan / prueba)'),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Vista de prueba: no concede permisos de mánager o administrador. '
-                  'Algunas acciones del Hub aún son demostraciones.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(height: 22),
-                const SwlTeamLabPanel(),
-              ]);
+              message = const Text('No fue posible resolver el perfil. Intenta de nuevo.');
             }
             return Center(child: SingleChildScrollView(child: Padding(
               padding: const EdgeInsets.all(24),
@@ -424,13 +425,13 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
 Future<List<Map<String, dynamic>>> swlAuthorizedTeams() async {
   final client = Supabase.instance.client;
   if (client.auth.currentUser == null) return [];
-  final rows = await client.from('teams').select('id, name, province').order('name');
+  final rows = await client.from('teams').select('id, name, province').order('name').timeout(const Duration(seconds: 12));
   final allowed = <Map<String, dynamic>>[];
   for (final raw in rows) {
     final team = Map<String, dynamic>.from(raw);
     final id = team['id']?.toString();
     if (id == null || id.isEmpty) continue;
-    final permission = await client.rpc('swl_can_manage_roster', params: {'p_team_id': id});
+    final permission = await client.rpc('swl_can_manage_roster', params: {'p_team_id': id}).timeout(const Duration(seconds: 8));
     if (permission == true) allowed.add(team);
   }
   return allowed;
@@ -1276,6 +1277,7 @@ class MainAppMasterHub extends StatefulWidget {
   final String userName;
   final String teamName;
   final String teamProvince;
+  final List<Map<String, dynamic>> authorizedTeams;
 
   const MainAppMasterHub({
     super.key,
@@ -1283,6 +1285,7 @@ class MainAppMasterHub extends StatefulWidget {
     required this.userName,
     required this.teamName,
     required this.teamProvince,
+    this.authorizedTeams = const [],
   });
 
   @override
@@ -1291,6 +1294,18 @@ class MainAppMasterHub extends StatefulWidget {
 
 class _MainAppMasterHubState extends State<MainAppMasterHub> {
   int _currentIndex = 0;
+  Map<String, dynamic>? _activeTeam;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.authorizedTeams.isNotEmpty) _activeTeam = widget.authorizedTeams.first;
+  }
+
+  void _changeActiveTeam(Map<String, dynamic> team) {
+    if (!widget.authorizedTeams.any((t) => t['id']?.toString() == team['id']?.toString())) return;
+    setState(() => _activeTeam = team);
+  }
 
   // Estado del juego activo en vivo
   String activePin = "SWL-101";
@@ -1321,6 +1336,8 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
 
   @override
   Widget build(BuildContext context) {
+    final activeName = _activeTeam?['name']?.toString() ?? widget.teamName;
+    final activeProvince = _activeTeam?['province']?.toString() ?? widget.teamProvince;
     final List<Widget> screens = [
       MasterHomeTab(
         onPlayNowTap: () => setState(() => _currentIndex = 1),
@@ -1337,14 +1354,17 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
         stadium: activePlay,
       ),
       MasterScheduleTab(
-        myTeamName: widget.teamName,
+        myTeamName: activeName,
         onActivateMatch: _activateMatch,
       ),
       MasterTeamTab(
         userRole: widget.userRole,
         userName: widget.userName,
-        teamName: widget.teamName,
-        teamProvince: widget.teamProvince,
+        teamName: activeName,
+        teamProvince: activeProvince,
+        authorizedTeams: widget.authorizedTeams,
+        activeTeam: _activeTeam,
+        onTeamChanged: _changeActiveTeam,
       ),
     ];
 
@@ -1363,7 +1383,25 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
               child: Text(badge, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 9)),
             ),
             const SizedBox(width: 8),
-            Expanded(child: Text(widget.teamName, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white))),
+            Expanded(child: widget.authorizedTeams.length > 1
+              ? DropdownButtonHideUnderline(child: DropdownButton<String>(
+                  value: _activeTeam?['id']?.toString(),
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF16202C),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  items: widget.authorizedTeams.map((team) => DropdownMenuItem<String>(
+                    value: team['id']?.toString(),
+                    child: Text('${team['name']} · ${team['province'] ?? ''}', overflow: TextOverflow.ellipsis),
+                  )).toList(),
+                  onChanged: (id) {
+                    for (final team in widget.authorizedTeams) {
+                      if (team['id']?.toString() == id) { _changeActiveTeam(team); break; }
+                    }
+                  },
+                ))
+              : Text(_activeTeam != null ? '$activeName · $activeProvince' : widget.userName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white))),
           ],
         ),
         actions: [
@@ -1869,9 +1907,13 @@ class MasterTeamTab extends StatefulWidget {
   final String userName;
   final String teamName;
   final String teamProvince;
+  final List<Map<String, dynamic>>? authorizedTeams;
+  final Map<String, dynamic>? activeTeam;
+  final ValueChanged<Map<String, dynamic>>? onTeamChanged;
 
   const MasterTeamTab({super.key, required this.userRole, required this.userName,
-    required this.teamName, required this.teamProvince});
+    required this.teamName, required this.teamProvince,
+    this.authorizedTeams, this.activeTeam, this.onTeamChanged});
 
   @override
   State<MasterTeamTab> createState() => _MasterTeamTabState();
@@ -1889,8 +1931,22 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
   @override
   void initState() {
     super.initState();
-    _teams = swlAuthorizedTeams();
-    _autoSelectTeam();
+    _teams = widget.authorizedTeams != null
+        ? Future.value(widget.authorizedTeams!) : swlAuthorizedTeams();
+    if (widget.activeTeam != null) {
+      _selectTeam(widget.activeTeam!);
+    } else {
+      _autoSelectTeam();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MasterTeamTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextId = widget.activeTeam?['id']?.toString();
+    if (nextId != null && nextId != _selectedTeamId) {
+      _selectTeam(widget.activeTeam!);
+    }
   }
 
   Future<void> _autoSelectTeam() async {
@@ -2019,7 +2075,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1722),
-        title: Text(widget.teamName,
+        title: Text(_selectedTeamName ?? widget.teamName,
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
         actions: [IconButton(onPressed: _refreshRoster,
           tooltip: 'Actualizar roster', icon: const Icon(Icons.refresh))],
@@ -2068,7 +2124,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                     overflow: TextOverflow.ellipsis))).toList(),
                 onChanged: (id) {
                   for (final team in teams) {
-                    if (team['id']?.toString() == id) { _selectTeam(team); break; }
+                    if (team['id']?.toString() == id) { _selectTeam(team); widget.onTeamChanged?.call(team); break; }
                   }
                 },
               );
