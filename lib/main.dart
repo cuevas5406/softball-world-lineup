@@ -142,7 +142,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
     final user = _session?.user;
     if (user != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Verificación de perfil — LAB')),
+        appBar: null,
         body: SafeArea(child: FutureBuilder<Map<String, dynamic>?>(
           future: _profileLookup,
           builder: (context, snapshot) {
