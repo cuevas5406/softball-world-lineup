@@ -142,7 +142,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
     final user = _session?.user;
     if (user != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Verificación de perfil — LAB')),
+appBar: AppBar(title: const Text('Softball World Lineup')),
         body: SafeArea(child: FutureBuilder<Map<String, dynamic>?>(
           future: _profileLookup,
           builder: (context, snapshot) {
@@ -155,7 +155,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
               return MainAppMasterHub(
                 userRole: 'fan',
                 userName: fullName.isNotEmpty ? fullName : 'Usuario',
-                teamName: 'Explorar equipos — LAB',
+               teamName: 'Mi Equipo',
                 teamProvince: '',
               );
             }
