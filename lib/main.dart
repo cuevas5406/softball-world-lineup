@@ -1674,94 +1674,68 @@ class MasterTeamTab extends StatefulWidget {
   final String teamName;
   final String teamProvince;
 
-  const MasterTeamTab({super.key, required this.userRole, required this.userName, required this.teamName, required this.teamProvince});
+  const MasterTeamTab({super.key, required this.userRole, required this.userName,
+    required this.teamName, required this.teamProvince});
 
   @override
   State<MasterTeamTab> createState() => _MasterTeamTabState();
 }
 
 class _MasterTeamTabState extends State<MasterTeamTab> {
-  // Roster LOCAL de demostración: no está persistido ni autoriza fichajes reales.
-  List<Map<String, String>> roster = [];
+  late Future<List<Map<String, dynamic>>> _teams;
+  Future<List<Map<String, dynamic>>>? _roster;
+  String? _selectedTeamId;
+  String? _selectedTeamName;
+  String? _selectedProvince;
 
-  void _addPlayerManual() {
-    final nameCtrl = TextEditingController();
-    final numCtrl = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF16202C),
-        title: const Text("Inscribir Pelotero", style: TextStyle(color: Colors.amber, fontSize: 15)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Nombre y Apellido")),
-            TextField(controller: numCtrl, keyboardType: TextInputType.number, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Número (#)")),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCELAR")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-            onPressed: () {
-              if (nameCtrl.text.isNotEmpty) {
-                setState(() {
-                  roster.add({
-                    "id": DateTime.now().millisecondsSinceEpoch.toString(),
-                    "name": nameCtrl.text.trim(),
-                    "num": numCtrl.text.trim().isEmpty ? "00" : numCtrl.text.trim(),
-                    "playerId": "RD-${Random().nextInt(9000) + 1000}",
-                    "type": "Oficial"
-                  });
-                });
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text("GUARDAR", style: TextStyle(color: Colors.black)),
-          ),
-        ],
-      ),
-    );
+  @override
+  void initState() {
+    super.initState();
+    _teams = _fetchTeams();
   }
 
-  void _addByPlayerId() {
-    final idCtrl = TextEditingController();
+  Future<List<Map<String, dynamic>>> _fetchTeams() async {
+    final rows = await Supabase.instance.client.from('teams')
+        .select('id, name, province').order('name');
+    return List<Map<String, dynamic>>.from(rows);
+  }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF16202C),
-        title: const Text("Fichar Refuerzo con ID", style: TextStyle(color: Colors.amber, fontSize: 15)),
-        content: TextField(
-          controller: idCtrl,
-          textCapitalization: TextCapitalization.characters,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 2),
-          decoration: const InputDecoration(hintText: "Ej: RD-8420"),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCELAR")),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-            onPressed: () {
-              if (idCtrl.text.isNotEmpty) {
-                setState(() {
-                  roster.add({
-                    "id": DateTime.now().millisecondsSinceEpoch.toString(),
-                    "name": "Pelotero Refuerzo",
-                    "num": "99",
-                    "playerId": idCtrl.text.trim().toUpperCase(),
-                    "type": "Refuerzo"
-                  });
-                });
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text("FICHAR", style: TextStyle(color: Colors.black)),
-          ),
-        ],
+  Future<List<Map<String, dynamic>>> _fetchRoster(String teamId) async {
+    final rows = await Supabase.instance.client.rpc(
+      'swl_get_team_roster', params: {'p_team_id': teamId});
+    if (rows is! List) throw StateError('Respuesta de roster inesperada.');
+    return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+  }
+
+  void _selectTeam(Map<String, dynamic> team) {
+    final id = team['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    setState(() {
+      _selectedTeamId = id;
+      _selectedTeamName = team['name']?.toString();
+      _selectedProvince = team['province']?.toString();
+      _roster = _fetchRoster(id);
+    });
+  }
+
+  void _refreshRoster() {
+    final id = _selectedTeamId;
+    if (id != null) setState(() => _roster = _fetchRoster(id));
+  }
+
+  Future<void> _openLabActions() async {
+    // El panel existente conserva sus confirmaciones y validaciones RPC.
+    // El usuario debe seleccionar el equipo también dentro del panel.
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Scaffold(
+        backgroundColor: const Color(0xFF080D14),
+        appBar: AppBar(title: const Text('Registrar y fichar — LAB'),
+          backgroundColor: const Color(0xFF0F1722)),
+        body: const SafeArea(child: SingleChildScrollView(
+          padding: EdgeInsets.all(12), child: SwlPlayersLabPanel())),
       ),
-    );
+    ));
+    if (mounted) _refreshRoster();
   }
 
   @override
@@ -1770,121 +1744,121 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1722),
-        title: Text(widget.teamName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        title: Text(widget.teamName,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        actions: [IconButton(onPressed: _refreshRoster,
+          tooltip: 'Actualizar roster', icon: const Icon(Icons.refresh))],
       ),
       body: Padding(
         padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Cabecera del equipo
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.amber)),
-              child: Row(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: const Color(0xFF121B27),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber)),
+            child: Row(children: [
+              const CircleAvatar(backgroundColor: Colors.amber,
+                child: Icon(Icons.shield, color: Colors.black)),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const CircleAvatar(backgroundColor: Colors.amber, child: Icon(Icons.shield, color: Colors.black)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(widget.teamName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                      Text("📍 ${widget.teamProvince} · ${roster.length} Peloteros", style: const TextStyle(color: Colors.white54, fontSize: 10)),
-                    ]),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 12),
-
-            const Text('MODO DEMOSTRACIÓN: los peloteros añadidos aquí no se guardan en Supabase.',
-              style: TextStyle(color: Colors.orangeAccent, fontSize: 11)),
-            const SizedBox(height: 8),
-            // Botones de acción del Mánager
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(vertical: 10)),
-                    icon: const Icon(Icons.person_add, color: Colors.black, size: 16),
-                    label: const Text("+ INSCRIBIR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
-                    onPressed: _addPlayerManual,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB), padding: const EdgeInsets.symmetric(vertical: 10)),
-                    icon: const Icon(Icons.badge, color: Colors.white, size: 16),
-                    label: const Text("+ FICHAR CON ID", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
-                    onPressed: _addByPlayerId,
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 12),
-            const Text("DESLIZA HACIA LOS LADOS PARA EDITAR O ELIMINAR:", style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-
-            // LISTA DE PELOTEROS CON SWIPE (DISMISSIBLE) - Punto 4
-            Expanded(
-              child: roster.isEmpty
-                  ? const Center(child: Text("Tu roster está limpio.\nToca '+ INSCRIBIR' para agregar a tus muchachos.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white38)))
-                  : ListView.builder(
-                      itemCount: roster.length,
-                      itemBuilder: (ctx, i) {
-                        final p = roster[i];
-                        return Dismissible(
-                          key: Key(p["id"]!),
-                          // Deslizar a la izquierda: ROJO BORRAR
-                          secondaryBackground: Container(
-                            alignment: Alignment.centerRight,
-                            padding: const EdgeInsets.only(right: 16),
-                            color: Colors.redAccent,
-                            child: const Icon(Icons.delete, color: Colors.white),
-                          ),
-                          // Deslizar a la derecha: AZUL EDITAR
-                          background: Container(
-                            alignment: Alignment.centerLeft,
-                            padding: const EdgeInsets.only(left: 16),
-                            color: Colors.blueAccent,
-                            child: const Icon(Icons.edit, color: Colors.white),
-                          ),
-                          confirmDismiss: (direction) async {
-                            if (direction == DismissDirection.endToStart) {
-                              // Borrar
-                              setState(() => roster.removeAt(i));
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pelotero ${p['name']} eliminado.")));
-                              return true;
-                            } else {
-                              // Editar
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Editando a ${p['name']}...")));
-                              return false;
-                            }
-                          },
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 6),
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(8)),
-                            child: Row(
-                              children: [
-                                CircleAvatar(backgroundColor: const Color(0xFF0F172A), radius: 14, child: Text(p["num"]!, style: const TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold))),
-                                const SizedBox(width: 10),
-                                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  Text(p["name"]!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                                  Text("ID: ${p["playerId"]!} · ${p["type"]!}", style: const TextStyle(color: Colors.white54, fontSize: 9)),
-                                ])),
-                                const Icon(Icons.swap_horiz, color: Colors.white24, size: 16),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
+                  Text(_selectedTeamName ?? widget.teamName,
+                    style: const TextStyle(color: Colors.white,
+                      fontWeight: FontWeight.bold, fontSize: 15)),
+                  Text(_selectedProvince ?? widget.teamProvince,
+                    style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                ])),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: _teams,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) return Text('No se pudieron consultar equipos: ${snapshot.error}',
+                style: const TextStyle(color: Colors.orangeAccent));
+              if (!snapshot.hasData) return const LinearProgressIndicator();
+              final teams = snapshot.data!;
+              return DropdownButtonFormField<String>(
+                value: teams.any((t) => t['id']?.toString() == _selectedTeamId)
+                  ? _selectedTeamId : null,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Selecciona el equipo real de Supabase LAB'),
+                items: teams.map((t) => DropdownMenuItem<String>(
+                  value: t['id'].toString(),
+                  child: Text('${t['name']} — ${t['province'] ?? ''}',
+                    overflow: TextOverflow.ellipsis))).toList(),
+                onChanged: (id) {
+                  for (final team in teams) {
+                    if (team['id']?.toString() == id) { _selectTeam(team); break; }
+                  }
+                },
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          const Text('El roster muestra datos reales de LAB. Para registrar o fichar, '
+            'selecciona el equipo nuevamente en el formulario de operaciones.',
+            style: TextStyle(color: Colors.white70, fontSize: 11)),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+            onPressed: _openLabActions,
+            icon: const Icon(Icons.person_add, color: Colors.black),
+            label: const Text('INSCRIBIR / FICHAR EN LAB',
+              style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 12),
+          const Text('ROSTER REAL · SOLO LECTURA EN ESTA PANTALLA',
+            style: TextStyle(color: Colors.white54, fontSize: 10)),
+          const SizedBox(height: 8),
+          Expanded(child: _roster == null
+            ? const Center(child: Text('Selecciona un equipo para consultar su roster.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54)))
+            : FutureBuilder<List<Map<String, dynamic>>>(
+                future: _roster,
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) return Center(child: SelectableText(
+                    'Error al consultar el roster: ${snapshot.error}'));
+                  if (!snapshot.hasData) return const Center(
+                    child: CircularProgressIndicator());
+                  final roster = snapshot.data!;
+                  if (roster.isEmpty) return const Center(child: Text(
+                    'Este equipo todavía no tiene peloteros fichados.',
+                    style: TextStyle(color: Colors.white54)));
+                  return ListView.builder(
+                    itemCount: roster.length,
+                    itemBuilder: (context, index) {
+                      final p = roster[index];
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(color: const Color(0xFF121B27),
+                          borderRadius: BorderRadius.circular(8)),
+                        child: Row(children: [
+                          CircleAvatar(backgroundColor: const Color(0xFF0F172A),
+                            radius: 16, child: Text('${p['jersey_number'] ?? '00'}',
+                              style: const TextStyle(color: Colors.amber, fontSize: 10))),
+                          const SizedBox(width: 10),
+                          Expanded(child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('${p['first_name'] ?? ''} ${p['last_name'] ?? ''}',
+                                style: const TextStyle(color: Colors.white,
+                                  fontWeight: FontWeight.bold, fontSize: 12)),
+                              Text('${p['universal_id'] ?? ''} · ${p['primary_position'] ?? ''}'
+                                '${p['is_refuerzo'] == true ? ' · Refuerzo' : ''}',
+                                style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                            ])),
+                        ]),
+                      );
+                    },
+                  );
+                },
+              )),
+        ]),
       ),
     );
   }
