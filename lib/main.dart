@@ -142,7 +142,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
     final user = _session?.user;
     if (user != null) {
       return Scaffold(
-appBar: AppBar(title: const Text('Softball World Lineup')),
+        appBar: AppBar(title: const Text('Verificación de perfil — LAB')),
         body: SafeArea(child: FutureBuilder<Map<String, dynamic>?>(
           future: _profileLookup,
           builder: (context, snapshot) {
@@ -155,7 +155,7 @@ appBar: AppBar(title: const Text('Softball World Lineup')),
               return MainAppMasterHub(
                 userRole: 'fan',
                 userName: fullName.isNotEmpty ? fullName : 'Usuario',
-               teamName: 'Mi Equipo',
+                teamName: 'Explorar equipos — LAB',
                 teamProvince: '',
               );
             }
@@ -207,7 +207,7 @@ appBar: AppBar(title: const Text('Softball World Lineup')),
                         userName: (profile['full_name'] as String?)?.trim().isNotEmpty == true
                             ? (profile['full_name'] as String).trim()
                             : 'Usuario',
-                        teamName: 'Mi Equipo',
+                        teamName: 'Explorar equipos — LAB',
                         teamProvince: '',
                       ),
                     ));
@@ -646,7 +646,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     final code = _searchCode.text.trim().toUpperCase();
     setState(() { _selectedPlayer = null; _notice = null; });
     if (!RegExp(r'^SWL-[A-Z0-9]+$').hasMatch(code)) {
-      setState(() => _notice = 'Escribe el código SWL completo del pelotero.');
+      setState(() => _notice = 'Escribe el código SWL del pelotero. Ejemplo: SWL-0002.');
       return;
     }
     setState(() => _searching = true);
@@ -761,7 +761,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
             TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
             FilledButton.icon(onPressed: (_busy || _pendingRegisteredPlayer != null) ? null : _register,
-                icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero')),
+                icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
             if (_pendingRegisteredPlayer != null) ...[
               const SizedBox(height: 8),
               SelectableText('Registro creado: ${_pendingRegisteredPlayer!['first_name']} ${_pendingRegisteredPlayer!['last_name']} · ID: ${_pendingRegisteredPlayer!['player_id']} · Código: ${_pendingRegisteredPlayer!['universal_id']}'),
@@ -772,13 +772,13 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
               ),
             ],
           ] else ...[
-            const Text('Busca un jugador registrado mediante su código SWL completo. Los códigos cortos todavía no están disponibles.'),
+            const Text('Busca un pelotero registrado mediante su código SWL. Ejemplo: SWL-0002.'),
             _teamSelector(),
             TextField(
               controller: _searchCode,
               textCapitalization: TextCapitalization.characters,
               onChanged: (_) => setState(() { _selectedPlayer = null; _notice = null; }),
-              decoration: const InputDecoration(labelText: 'Código SWL completo (SWL-...)'),
+              decoration: const InputDecoration(labelText: 'Código SWL del pelotero (ej. SWL-0002)'),
             ),
             OutlinedButton.icon(
               onPressed: (_busy || _searching) ? null : _findPlayerByCode,
@@ -793,7 +793,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
                 value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
             FilledButton.icon(onPressed: (_busy || _searching || _selectedPlayer == null || _teamId == null) ? null : _sign,
-                icon: const Icon(Icons.group_add), label: const Text('Confirmar fichaje')),
+                icon: const Icon(Icons.group_add), label: const Text('Confirmar fichaje en LAB')),
           ],
           if (_notice != null) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
               child: SelectableText(_notice!)),
@@ -1296,7 +1296,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       ),
     ];
 
-    String badge = widget.userRole == "manager" ? "MÁNAGER" : (widget.userRole == "player" ? "PELOTERO" : "USUARIO");
+    String badge = widget.userRole == "manager" ? "MÁNAGER" : (widget.userRole == "player" ? "PELOTERO" : "FANÁTICO");
 
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
