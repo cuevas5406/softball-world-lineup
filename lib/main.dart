@@ -183,6 +183,33 @@ class _AuthTestGateState extends State<AuthTestGate> {
                 const SizedBox(height: 12),
                 const Text('El acceso al Hub requiere verificar por separado roles y permisos de equipos. No se conceden automáticamente.', textAlign: TextAlign.center),
                 const SizedBox(height: 22),
+                // Navegación de prueba: nunca deriva privilegios del perfil.
+                // El Hub original contiene acciones de demostración; no son
+                // operaciones reales de Supabase ni autorizaciones deportivas.
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => MainAppMasterHub(
+                        userRole: 'fan',
+                        userName: (profile['full_name'] as String?)?.trim().isNotEmpty == true
+                            ? (profile['full_name'] as String).trim()
+                            : 'Usuario',
+                        teamName: 'Explorar equipos — LAB',
+                        teamProvince: '',
+                      ),
+                    ));
+                  },
+                  icon: const Icon(Icons.dashboard_outlined),
+                  label: const Text('Explorar menú principal (modo fan / prueba)'),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Vista de prueba: no concede permisos de mánager o administrador. '
+                  'Algunas acciones del Hub aún son demostraciones.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                const SizedBox(height: 22),
                 const SwlTeamLabPanel(),
               ]);
             }
