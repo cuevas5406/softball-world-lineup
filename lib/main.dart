@@ -146,6 +146,19 @@ class _AuthTestGateState extends State<AuthTestGate> {
         body: SafeArea(child: FutureBuilder<Map<String, dynamic>?>(
           future: _profileLookup,
           builder: (context, snapshot) {
+            // V4.3: con sesion y perfil validos, entrar directamente al Hub.
+            // El rol fan es visual; los permisos de escritura siguen en Supabase.
+            if (snapshot.connectionState == ConnectionState.done &&
+                !snapshot.hasError && snapshot.data != null) {
+              final profile = snapshot.data!;
+              final fullName = profile['full_name']?.toString().trim() ?? '';
+              return MainAppMasterHub(
+                userRole: 'fan',
+                userName: fullName.isNotEmpty ? fullName : 'Usuario',
+                teamName: 'Explorar equipos — LAB',
+                teamProvince: '',
+              );
+            }
             Widget message;
             if (snapshot.connectionState != ConnectionState.done) {
               message = const Column(mainAxisSize: MainAxisSize.min, children: [
@@ -444,6 +457,8 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
   bool _refuerzo = false;
   bool _busy = false;
   String? _notice;
+  Map<String, dynamic>? _pendingRegisteredPlayer;
+  String? _pendingTeamId;
   Future<List<Map<String, dynamic>>>? _teams;
   Future<List<Map<String, dynamic>>>? _roster;
 
@@ -451,19 +466,14 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
   void initState() {
     super.initState();
     _teamId = widget.initialTeamId;
-    _loadTeams();
-    _resolveTeam();
+    // Reutilizar una sola consulta de permisos para selector y equipo inicial.
+    _teams = swlAuthorizedTeams();
+    _resolveTeam(_teams!);
   }
 
-  void _loadTeams() {
-    setState(() {
-      _teams = swlAuthorizedTeams();
-    });
-  }
-
-  Future<void> _resolveTeam() async {
+  Future<void> _resolveTeam(Future<List<Map<String, dynamic>>> teamsFuture) async {
     try {
-      final teams = await swlAuthorizedTeams();
+      final teams = await teamsFuture;
       if (!mounted) return;
       final currentAllowed = teams.any((t) => t['id']?.toString() == _teamId);
       setState(() {
@@ -490,6 +500,18 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     return data.map((item) => Map<String, dynamic>.from(item as Map)).toList();
   }
 
+  // Consulta fresca al servidor antes de repetir una operación potencialmente aplicada.
+  // Si el RPC no devuelve identificadores verificables, no se reintenta a ciegas.
+  Future<bool> _alreadyInRoster(String teamId, String playerId) async {
+    final roster = await _fetchRoster(teamId);
+    if (roster.isNotEmpty && !roster.any((row) =>
+        row.containsKey('player_id') || row.containsKey('id_player'))) {
+      throw StateError('El roster no expone player_id; no es seguro repetir el fichaje automáticamente.');
+    }
+    return roster.any((row) =>
+        (row['player_id'] ?? row['id_player'])?.toString().toLowerCase() == playerId.toLowerCase());
+  }
+
   Future<bool> _confirm(String title, String description) async {
     return await showDialog<bool>(
       context: context,
@@ -506,6 +528,10 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
 
   Future<void> _register() async {
     if (_busy) return;
+    if (_pendingRegisteredPlayer != null) {
+      setState(() => _notice = 'Ya hay un registro pendiente de confirmar. Reintenta su fichaje antes de crear otro pelotero.');
+      return;
+    }
     final first = _first.text.trim();
     final last = _last.text.trim();
     if (first.isEmpty || last.isEmpty || first.length > 100 || last.length > 100) {
@@ -538,6 +564,13 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       if (row is! Map) throw StateError('Respuesta de registro inesperada: $data');
       createdId = (row['v_player_id'] ?? row['player_id'] ?? row['id'])?.toString();
       createdCode = (row['v_universal_id'] ?? row['universal_id'])?.toString();
+      if (createdId != null) {
+        _pendingRegisteredPlayer = {
+          'player_id': createdId, 'first_name': first, 'last_name': last,
+          'universal_id': createdCode ?? '',
+        };
+        _pendingTeamId = team;
+      }
       if (createdId == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(createdId)) {
         throw StateError('Jugador registrado, pero la respuesta no incluyó un UUID válido. Verifica players antes de reintentar.');
       }
@@ -547,7 +580,11 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
         'p_is_refuerzo': false,
       });
       if (!mounted) return;
-      setState(() => _notice = 'Pelotero registrado y fichado. Código: ${createdCode ?? "no disponible"}. Roster: $rosterId');
+      setState(() {
+        _pendingRegisteredPlayer = null;
+        _pendingTeamId = null;
+        _notice = 'Pelotero registrado y fichado. Código: ${createdCode ?? "no disponible"}. Roster: $rosterId';
+      });
       _loadRoster();
     } catch (e) {
       if (!mounted) return;
@@ -555,6 +592,50 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
         ? 'El pelotero YA fue registrado (ID: $createdId; código: ${createdCode ?? "no disponible"}), '
           'pero el fichaje NO se confirmó. No vuelvas a registrarlo: busca su código para ficharlo. Detalle: $e'
         : 'No se pudo confirmar el registro. Revisa players antes de reintentar para evitar duplicados. Detalle: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _retryPendingSign() async {
+    if (_busy) return;
+    final pending = _pendingRegisteredPlayer;
+    final team = _pendingTeamId;
+    if (pending == null || team == null) return;
+    if (!await _confirm('Reintentar fichaje',
+        'Se volverá a intentar el fichaje del jugador ya registrado. No se creará otro jugador. Comprueba antes el roster si hubo un error de conexión.')) return;
+    if (!mounted) return;
+    setState(() { _busy = true; _notice = null; });
+    try {
+      final permitted = await Supabase.instance.client.rpc(
+        'swl_can_manage_roster', params: {'p_team_id': team});
+      if (permitted != true) throw StateError('Ya no tienes permiso para este roster.');
+      final playerId = pending['player_id']?.toString() ?? '';
+      if (await _alreadyInRoster(team, playerId)) {
+        if (!mounted) return;
+        setState(() {
+          _pendingRegisteredPlayer = null;
+          _pendingTeamId = null;
+          _notice = 'Fichaje ya confirmado en el roster. No se repitió la operación.';
+        });
+        _loadRoster();
+        return;
+      }
+      final result = await Supabase.instance.client.rpc('swl_sign_player', params: {
+        'p_team_id': team,
+        'p_player_id': pending['player_id'],
+        'p_is_refuerzo': false,
+      });
+      if (!mounted) return;
+      setState(() {
+        _pendingRegisteredPlayer = null;
+        _pendingTeamId = null;
+        _notice = 'Fichaje confirmado. Roster: $result';
+      });
+      _loadRoster();
+    } catch (e) {
+      if (mounted) setState(() => _notice =
+        'No se confirmó el fichaje. El pelotero sigue registrado; verifica el roster antes de reintentar. Detalle: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -601,17 +682,20 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = 'Selecciona equipo y busca un pelotero por su código SWL.');
       return;
     }
-    final permission = await Supabase.instance.client.rpc('swl_can_manage_roster', params: {'p_team_id': team});
-    if (permission != true) {
-      if (mounted) setState(() => _notice = 'No tienes autorización activa para fichar en ese equipo.');
-      return;
-    }
-    if (!await _confirm('Confirmar fichaje',
-        '¿Fichar a ${selected['first_name'] ?? ''} ${selected['last_name'] ?? ''} (${selected['universal_id'] ?? ''}) en el equipo seleccionado? '
-        'Supabase verificará tus permisos. Refuerzo: ${_refuerzo ? "sí" : "no"}.')) return;
-    if (!mounted) return;
     setState(() { _busy = true; _notice = null; });
     try {
+      final permission = await Supabase.instance.client.rpc('swl_can_manage_roster', params: {'p_team_id': team});
+      if (permission != true) throw StateError('No tienes autorización activa para fichar en ese equipo.');
+      if (!mounted) return;
+      if (!await _confirm('Confirmar fichaje',
+          '¿Fichar a ${selected['first_name'] ?? ''} ${selected['last_name'] ?? ''} (${selected['universal_id'] ?? ''}) en el equipo seleccionado? '
+          'Supabase verificará tus permisos. Refuerzo: ${_refuerzo ? "sí" : "no"}.')) return;
+      if (!mounted) return;
+      if (await _alreadyInRoster(team, player)) {
+        if (mounted) setState(() => _notice = 'Este pelotero ya aparece en el roster. No se repitió el fichaje.');
+        _loadRoster();
+        return;
+      }
       final result = await Supabase.instance.client.rpc('swl_sign_player', params: {
         'p_team_id': team,
         'p_player_id': player,
@@ -676,8 +760,17 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             TextField(controller: _jersey, decoration: const InputDecoration(labelText: 'Número de camiseta (opcional)')),
             TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
             TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
-            FilledButton.icon(onPressed: _busy ? null : _register,
+            FilledButton.icon(onPressed: (_busy || _pendingRegisteredPlayer != null) ? null : _register,
                 icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
+            if (_pendingRegisteredPlayer != null) ...[
+              const SizedBox(height: 8),
+              SelectableText('Registro creado: ${_pendingRegisteredPlayer!['first_name']} ${_pendingRegisteredPlayer!['last_name']} · ID: ${_pendingRegisteredPlayer!['player_id']} · Código: ${_pendingRegisteredPlayer!['universal_id']}'),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _retryPendingSign,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reintentar fichaje sin duplicar registro'),
+              ),
+            ],
           ] else ...[
             const Text('Busca un jugador registrado mediante su código SWL completo. Los códigos cortos todavía no están disponibles.'),
             _teamSelector(),
