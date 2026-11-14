@@ -645,6 +645,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     if (_busy || _searching) return;
     final code = _searchCode.text.trim().toUpperCase();
     setState(() { _selectedPlayer = null; _notice = null; });
+    if (_teamId != null) _loadRoster();
     if (!RegExp(r'^SWL-[A-Z0-9]+$').hasMatch(code)) {
       setState(() => _notice = 'Escribe el código SWL del pelotero. Ejemplo: SWL-0002.');
       return;
@@ -728,7 +729,14 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
           value: t['id'].toString(),
           child: Text('${t['name']} — ${t['province'] ?? ''}', overflow: TextOverflow.ellipsis),
         )).toList(),
-        onChanged: (id) { setState(() => _teamId = id); _loadRoster(); },
+        onChanged: (id) {
+          setState(() {
+            _teamId = id;
+            _selectedPlayer = null;
+            _notice = null;
+          });
+          _loadRoster();
+        },
       );
     },
   );
@@ -792,8 +800,52 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             )),
             CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
                 value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
-            FilledButton.icon(onPressed: (_busy || _searching || _selectedPlayer == null || _teamId == null) ? null : _sign,
-                icon: const Icon(Icons.group_add), label: const Text('Confirmar fichaje en LAB')),
+            // La comprobación se limita al equipo seleccionado: un pelotero
+            // puede estar fichado en otros equipos al mismo tiempo.
+            if (_selectedPlayer != null && _teamId != null && _roster != null)
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _roster,
+                builder: (context, snapshot) {
+                  final selectedId = (_selectedPlayer!['player_id'] ??
+                      _selectedPlayer!['id'])?.toString().toLowerCase();
+                  final rosterReady = snapshot.hasData && selectedId != null;
+                  final rosterHasIds = rosterReady && (snapshot.data!.isEmpty ||
+                      snapshot.data!.every((row) =>
+                          row.containsKey('player_id') || row.containsKey('id_player')));
+                  final alreadySigned = rosterHasIds && snapshot.data!.any((row) =>
+                      (row['player_id'] ?? row['id_player'])?.toString().toLowerCase() == selectedId);
+                  if (snapshot.hasError || (rosterReady && !rosterHasIds)) {
+                    return const Text(
+                      'No se pudo verificar el roster de este equipo. '
+                      'Por seguridad, el fichaje está deshabilitado hasta actualizar la consulta.',
+                      style: TextStyle(color: Colors.amber),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (alreadySigned)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text('Este pelotero ya está fichado en este equipo.',
+                              style: TextStyle(color: Colors.amber)),
+                        ),
+                      FilledButton.icon(
+                        onPressed: (_busy || _searching || !rosterHasIds || alreadySigned)
+                            ? null : _sign,
+                        icon: Icon(alreadySigned ? Icons.check_circle : Icons.group_add),
+                        label: Text(alreadySigned ? 'Ya está fichado en este equipo' : 'Confirmar fichaje en LAB'),
+                      ),
+                    ],
+                  );
+                },
+              )
+            else
+              FilledButton.icon(
+                onPressed: null,
+                icon: const Icon(Icons.group_add),
+                label: const Text('Confirmar fichaje en LAB'),
+              ),
           ],
           if (_notice != null) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
               child: SelectableText(_notice!)),
