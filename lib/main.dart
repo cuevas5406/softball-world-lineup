@@ -793,7 +793,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
                 value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
             FilledButton.icon(onPressed: (_busy || _searching || _selectedPlayer == null || _teamId == null) ? null : _sign,
-                icon: const Icon(Icons.group_add), label: const Text('Confirmar fichaje en LAB')),
+                icon: const Icon(Icons.group_add), label: const Text('Confirmar fichaje')),
           ],
           if (_notice != null) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
               child: SelectableText(_notice!)),
