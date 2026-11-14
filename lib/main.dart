@@ -369,7 +369,6 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
               SelectableText(_notice!),
             ],
             const SizedBox(height: 16),
-            const SwlPlayersLabPanel(),
             const Divider(height: 28),
             Row(children: [
               const Expanded(child: Text('Equipos visibles', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -409,7 +408,9 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
 // FASE 1 — registro y fichaje independientes; toda escritura exige confirmación.
 // Los permisos efectivos los determina Supabase, no el rol solicitado en Flutter.
 class SwlPlayersLabPanel extends StatefulWidget {
-  const SwlPlayersLabPanel({super.key});
+  final bool registerMode;
+  final String? initialTeamId;
+  const SwlPlayersLabPanel({super.key, required this.registerMode, this.initialTeamId});
   @override
   State<SwlPlayersLabPanel> createState() => _SwlPlayersLabPanelState();
 }
@@ -433,7 +434,9 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
   @override
   void initState() {
     super.initState();
+    _teamId = widget.initialTeamId;
     _loadTeams();
+    if (_teamId != null) _loadRoster();
   }
 
   void _loadTeams() {
@@ -591,62 +594,62 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Text('Peloteros y roster — LAB',
-              style: TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(widget.registerMode ? 'REGISTRAR NUEVO PELOTERO' : 'BUSCAR Y FICHAR PELOTERO',
+              style: const TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          const Text('Registrar crea la identidad del pelotero. Fichar lo incorpora a un equipo autorizado.'),
-          TextField(controller: _first, maxLength: 100, decoration: const InputDecoration(labelText: 'Nombre *')),
-          TextField(controller: _last, maxLength: 100, decoration: const InputDecoration(labelText: 'Apellido *')),
-          TextField(controller: _jersey, decoration: const InputDecoration(labelText: 'Número de camiseta (opcional)')),
-          TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
-          TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
-          FilledButton.icon(onPressed: _busy ? null : _register,
-              icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
-          const Divider(height: 28),
-          FutureBuilder<List<Map<String, dynamic>>>(
-            future: _teams,
-            builder: (context, snapshot) {
-              if (snapshot.hasError) return SelectableText('Error al leer equipos: ${snapshot.error}');
-              if (!snapshot.hasData) return const LinearProgressIndicator();
-              final teams = snapshot.data!;
-              return DropdownButtonFormField<String>(
-                value: teams.any((t) => t['id']?.toString() == _teamId) ? _teamId : null,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Equipo para fichaje y roster'),
-                items: teams.map((t) => DropdownMenuItem<String>(
-                  value: t['id'].toString(), child: Text('${t['name']} — ${t['province'] ?? ''}', overflow: TextOverflow.ellipsis),
-                )).toList(),
-                onChanged: (id) { _teamId = id; _loadRoster(); },
-              );
-            },
-          ),
-          TextField(
-            controller: _searchCode,
-            textCapitalization: TextCapitalization.characters,
-            onChanged: (_) => setState(() { _selectedPlayer = null; _notice = null; }),
-            decoration: const InputDecoration(labelText: 'Código universal del pelotero (SWL-...)'),
-          ),
-          OutlinedButton.icon(
-            onPressed: (_busy || _searching) ? null : _findPlayerByCode,
-            icon: const Icon(Icons.search),
-            label: Text(_searching ? 'Buscando...' : 'Buscar pelotero por código'),
-          ),
-          if (_selectedPlayer != null) Card(
-            child: ListTile(
+          if (widget.registerMode) ...[
+            const Text('Crea la identidad deportiva. Registrar no incorpora automáticamente al jugador a un equipo.'),
+            const SizedBox(height: 12),
+            TextField(controller: _first, maxLength: 100, decoration: const InputDecoration(labelText: 'Nombre *')),
+            TextField(controller: _last, maxLength: 100, decoration: const InputDecoration(labelText: 'Apellido *')),
+            TextField(controller: _jersey, decoration: const InputDecoration(labelText: 'Número de camiseta (opcional)')),
+            TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
+            TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
+            FilledButton.icon(onPressed: _busy ? null : _register,
+                icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
+          ] else ...[
+            const Text('Busca un jugador registrado mediante su código SWL completo. Los códigos cortos todavía no están disponibles.'),
+            if (widget.initialTeamId == null) FutureBuilder<List<Map<String, dynamic>>>(
+              future: _teams,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) return SelectableText('Error al leer equipos: ${snapshot.error}');
+                if (!snapshot.hasData) return const LinearProgressIndicator();
+                final teams = snapshot.data!;
+                return DropdownButtonFormField<String>(
+                  value: teams.any((t) => t['id']?.toString() == _teamId) ? _teamId : null,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Equipo para fichaje'),
+                  items: teams.map((t) => DropdownMenuItem<String>(
+                    value: t['id'].toString(), child: Text('${t['name']} — ${t['province'] ?? ''}', overflow: TextOverflow.ellipsis),
+                  )).toList(),
+                  onChanged: (id) { _teamId = id; _loadRoster(); },
+                );
+              },
+            ),
+            TextField(
+              controller: _searchCode,
+              textCapitalization: TextCapitalization.characters,
+              onChanged: (_) => setState(() { _selectedPlayer = null; _notice = null; }),
+              decoration: const InputDecoration(labelText: 'Código SWL completo (SWL-...)'),
+            ),
+            OutlinedButton.icon(
+              onPressed: (_busy || _searching) ? null : _findPlayerByCode,
+              icon: const Icon(Icons.search),
+              label: Text(_searching ? 'Buscando...' : 'Buscar pelotero'),
+            ),
+            if (_selectedPlayer != null) Card(child: ListTile(
               leading: const Icon(Icons.person, color: Colors.amber),
               title: Text('${_selectedPlayer!['first_name'] ?? ''} ${_selectedPlayer!['last_name'] ?? ''}'),
               subtitle: Text('${_selectedPlayer!['universal_id'] ?? ''} · #${_selectedPlayer!['jersey_number'] ?? ''} · ${_selectedPlayer!['primary_position'] ?? ''}'),
-            ),
-          ),
-          CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
-              value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
-          FilledButton.icon(onPressed: (_busy || _searching || _selectedPlayer == null || _teamId == null) ? null : _sign,
-              icon: const Icon(Icons.group_add), label: const Text('Fichar pelotero en LAB')),
-          OutlinedButton.icon(onPressed: _loadRoster,
-              icon: const Icon(Icons.refresh), label: const Text('Actualizar roster')),
+            )),
+            CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
+                value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
+            FilledButton.icon(onPressed: (_busy || _searching || _selectedPlayer == null || _teamId == null) ? null : _sign,
+                icon: const Icon(Icons.group_add), label: const Text('Confirmar fichaje en LAB')),
+          ],
           if (_notice != null) Padding(padding: const EdgeInsets.symmetric(vertical: 12),
               child: SelectableText(_notice!)),
-          if (_roster != null) FutureBuilder<List<Map<String, dynamic>>>(
+          if (!widget.registerMode && _roster != null) FutureBuilder<List<Map<String, dynamic>>>(
             future: _roster,
             builder: (context, snapshot) {
               if (snapshot.hasError) return SelectableText('Error de roster: ${snapshot.error}');
@@ -760,18 +763,6 @@ class AuthLoginScreen extends StatefulWidget {
 class _AuthLoginScreenState extends State<AuthLoginScreen> {
   final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
-  void _openCredentialsFlow() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF16202C),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => const FullTeamRegistrationSheet(),
-    );
-  }
-
   void _showProviderPending(String provider) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('$provider todavía no está configurado. Usa correo electrónico.')),
@@ -782,70 +773,26 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(),
-              Image.network(
-                logoUrl,
-                height: 110,
-                fit: BoxFit.contain,
-                errorBuilder: (ctx, err, stack) =>
-                    const Icon(Icons.sports_baseball, color: Colors.amber, size: 60),
-              ),
-              const SizedBox(height: 14),
-              const Text(
-                "INICIA SESIÓN O REGÍSTRATE",
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                "Tu cuenta se protegerá con autenticación de Supabase",
-                style: TextStyle(color: Colors.white60, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-              const Spacer(),
-              _btn(Icons.g_mobiledata, Colors.redAccent, "Continuar con Google",
-                  () => _showProviderPending("Google")),
-              const SizedBox(height: 10),
-              _btn(Icons.apple, Colors.white, "Continuar con Apple",
-                  () => _showProviderPending("Apple")),
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  minimumSize: const Size(double.infinity, 50),
-                  side: const BorderSide(color: Colors.white24),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                icon: const Icon(Icons.email_outlined, color: Colors.amber, size: 18),
-                label: const Text(
-                  "Entrar o registrarme con correo",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-                onPressed: _openCredentialsFlow,
-              ),
-              const SizedBox(height: 16),
-              TextButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('Modo invitado pendiente de revisión de permisos. Usa correo para esta prueba.'),
-                  ));
-                },
-                child: const Text(
-                  "Explorar como Fanático Invitado (Solo Lectura)",
-                  style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12, decoration: TextDecoration.underline),
-                ),
-              ),
-              const Spacer(),
-            ],
-          ),
-        ),
-      ),
+      appBar: AppBar(title: const Text('Softball World Lineup'),
+          backgroundColor: const Color(0xFF0F1722)),
+      body: SafeArea(child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        child: Column(children: [
+          Image.network(logoUrl, height: 76, fit: BoxFit.contain,
+            errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball,
+                color: Colors.amber, size: 54)),
+          const FullTeamRegistrationSheet(),
+          const SizedBox(height: 12),
+          const Text('Otras opciones (pendientes de configurar)',
+              style: TextStyle(color: Colors.white54, fontSize: 12)),
+          const SizedBox(height: 8),
+          _btn(Icons.g_mobiledata, Colors.redAccent, 'Continuar con Google',
+              () => _showProviderPending('Google')),
+          const SizedBox(height: 8),
+          _btn(Icons.apple, Colors.white, 'Continuar con Apple',
+              () => _showProviderPending('Apple')),
+        ]),
+      )),
     );
   }
 
@@ -883,26 +830,22 @@ class FullTeamRegistrationSheet extends StatefulWidget {
 }
 
 class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
-  bool isRegistering = true;
+  bool isRegistering = false;
   bool isSubmitting = false;
   bool obscurePassword = true;
   String? feedbackMessage;
   bool feedbackIsError = false;
-  String selectedRole = "manager";
+  String selectedRole = "fan";
 
   final nameCtrl = TextEditingController();
   final emailCtrl = TextEditingController();
   final passwordCtrl = TextEditingController();
-  final teamNameCtrl = TextEditingController();
-  final provinceCtrl = TextEditingController();
 
   @override
   void dispose() {
     nameCtrl.dispose();
     emailCtrl.dispose();
     passwordCtrl.dispose();
-    teamNameCtrl.dispose();
-    provinceCtrl.dispose();
     super.dispose();
   }
 
@@ -928,11 +871,6 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
     }
     if (isRegistering && nameCtrl.text.trim().isEmpty) {
       _showMessage('Escribe tu nombre completo.', error: true);
-      return;
-    }
-    if (isRegistering && selectedRole == 'manager' &&
-        (teamNameCtrl.text.trim().isEmpty || provinceCtrl.text.trim().isEmpty)) {
-      _showMessage('Completa el nombre del equipo y la provincia.', error: true);
       return;
     }
 
@@ -1041,32 +979,9 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
                 ),
               ),
               if (isRegistering) ...[
-                const SizedBox(height: 14),
-                const Text('Tipo de cuenta solicitado', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Soy Mánager'),
-                      selected: selectedRole == 'manager',
-                      selectedColor: Colors.amber,
-                      onSelected: isSubmitting ? null : (v) => setState(() => selectedRole = 'manager'),
-                    ),
-                    ChoiceChip(
-                      label: const Text('Soy Pelotero'),
-                      selected: selectedRole == 'player',
-                      selectedColor: Colors.amber,
-                      onSelected: isSubmitting ? null : (v) => setState(() => selectedRole = 'player'),
-                    ),
-                  ],
-                ),
-                if (selectedRole == 'manager') ...[
-                  const SizedBox(height: 10),
-                  _field(teamNameCtrl, 'Nombre de tu equipo'),
-                  const SizedBox(height: 10),
-                  _field(provinceCtrl, 'Provincia o municipio'),
-                ],
+                const SizedBox(height: 12),
+                const Text('Primero crea tu cuenta personal. Después podrás explorar, crear equipos o registrar peloteros.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12)),
               ],
               const SizedBox(height: 20),
               SizedBox(
@@ -1801,16 +1716,16 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     if (id != null) setState(() => _roster = _fetchRoster(id));
   }
 
-  Future<void> _openLabActions() async {
-    // El panel existente conserva sus confirmaciones y validaciones RPC.
-    // El usuario debe seleccionar el equipo también dentro del panel.
+  Future<void> _openPlayerAction(bool registerMode) async {
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => Scaffold(
         backgroundColor: const Color(0xFF080D14),
-        appBar: AppBar(title: const Text('Registrar y fichar — LAB'),
+        appBar: AppBar(title: Text(registerMode ? 'Registrar pelotero' : 'Buscar y fichar pelotero'),
           backgroundColor: const Color(0xFF0F1722)),
-        body: const SafeArea(child: SingleChildScrollView(
-          padding: EdgeInsets.all(12), child: SwlPlayersLabPanel())),
+        body: SafeArea(child: SingleChildScrollView(
+          padding: const EdgeInsets.all(12),
+          child: SwlPlayersLabPanel(registerMode: registerMode,
+              initialTeamId: registerMode ? null : _selectedTeamId))),
       ),
     ));
     if (mounted) _refreshRoster();
@@ -1876,15 +1791,19 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             },
           ),
           const SizedBox(height: 10),
-          const Text('El roster muestra datos reales de LAB. Para registrar o fichar, '
-            'selecciona el equipo nuevamente en el formulario de operaciones.',
-            style: TextStyle(color: Colors.white70, fontSize: 11)),
-          const SizedBox(height: 10),
+          const Text('GESTIÓN DE PELOTEROS', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => _openPlayerAction(true),
+            icon: const Icon(Icons.person_add_alt_1),
+            label: const Text('Registrar nuevo pelotero'),
+          ),
+          const SizedBox(height: 6),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-            onPressed: _openLabActions,
-            icon: const Icon(Icons.person_add, color: Colors.black),
-            label: const Text('INSCRIBIR / FICHAR EN LAB',
+            onPressed: _selectedTeamId == null ? null : () => _openPlayerAction(false),
+            icon: const Icon(Icons.search, color: Colors.black),
+            label: const Text('Buscar y fichar pelotero',
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(height: 12),
