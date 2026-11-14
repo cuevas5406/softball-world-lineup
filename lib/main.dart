@@ -901,8 +901,11 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
       } else {
         await auth.signInWithPassword(email: email, password: password);
         if (!mounted) return;
-        // Cerrar el formulario: AuthTestGate escuchará la sesión y consultará profiles.
-        Navigator.of(context).pop();
+        // AuthTestGate ya escucha onAuthStateChange y sustituye el formulario
+        // por la verificación de perfil. NO hacer Navigator.pop(): este
+        // formulario forma parte de la ruta raíz y cerrarla deja pantalla negra.
+        // Si el evento tarda en llegar, el gate sincroniza la sesión al volver
+        // a construir el árbol por el propio listener de autenticación.
       }
     } on AuthException catch (e) {
       _showMessage(e.message, error: true);
