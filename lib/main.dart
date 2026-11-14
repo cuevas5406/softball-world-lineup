@@ -207,7 +207,7 @@ appBar: AppBar(title: const Text('Softball World Lineup')),
                         userName: (profile['full_name'] as String?)?.trim().isNotEmpty == true
                             ? (profile['full_name'] as String).trim()
                             : 'Usuario',
-                        teamName: 'Explorar equipos — LAB',
+                        teamName: 'Mi Equipo',
                         teamProvince: '',
                       ),
                     ));
