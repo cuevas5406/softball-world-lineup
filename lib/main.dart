@@ -761,7 +761,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
             TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
             FilledButton.icon(onPressed: (_busy || _pendingRegisteredPlayer != null) ? null : _register,
-                icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
+                icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero')),
             if (_pendingRegisteredPlayer != null) ...[
               const SizedBox(height: 8),
               SelectableText('Registro creado: ${_pendingRegisteredPlayer!['first_name']} ${_pendingRegisteredPlayer!['last_name']} · ID: ${_pendingRegisteredPlayer!['player_id']} · Código: ${_pendingRegisteredPlayer!['universal_id']}'),
