@@ -420,7 +420,9 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
   final _jersey = TextEditingController();
   final _position = TextEditingController();
   final _photo = TextEditingController();
-  final _playerId = TextEditingController();
+  final _searchCode = TextEditingController();
+  Map<String, dynamic>? _selectedPlayer;
+  bool _searching = false;
   String? _teamId;
   bool _refuerzo = false;
   bool _busy = false;
@@ -498,7 +500,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       final id = row['v_player_id'] ?? row['player_id'] ?? row['id'];
       final universal = row['v_universal_id'] ?? row['universal_id'];
       setState(() {
-        if (id != null) _playerId.text = id.toString();
+        // No se ficha automáticamente: el usuario debe buscar y confirmar.
         _notice = 'Registro completado. ID: ${id ?? "no identificado"}. '
             'Código SWL: ${universal ?? "revisar respuesta"}. '
             'Para incorporarlo a un equipo utiliza Fichar pelotero.';
@@ -511,16 +513,49 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     }
   }
 
+  Future<void> _findPlayerByCode() async {
+    if (_busy || _searching) return;
+    final code = _searchCode.text.trim().toUpperCase();
+    setState(() { _selectedPlayer = null; _notice = null; });
+    if (!RegExp(r'^SWL-[A-Z0-9]+$').hasMatch(code)) {
+      setState(() => _notice = 'Escribe el código SWL completo del pelotero.');
+      return;
+    }
+    setState(() => _searching = true);
+    try {
+      final data = await Supabase.instance.client.rpc(
+        'swl_find_player', params: {'p_universal_id': code},
+      );
+      if (!mounted) return;
+      final row = data is List ? (data.isEmpty ? null : data.first) : data;
+      if (row is! Map) {
+        setState(() => _notice = 'No se encontró un pelotero con ese código.');
+        return;
+      }
+      final player = Map<String, dynamic>.from(row);
+      final id = player['player_id'] ?? player['id'];
+      if (id == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(id.toString())) {
+        throw StateError('La búsqueda no devolvió un identificador válido.');
+      }
+      setState(() => _selectedPlayer = player);
+    } catch (e) {
+      if (mounted) setState(() => _notice = 'No se pudo buscar el pelotero: $e');
+    } finally {
+      if (mounted) setState(() => _searching = false);
+    }
+  }
+
   Future<void> _sign() async {
     if (_busy) return;
     final team = _teamId;
-    final player = _playerId.text.trim();
-    if (team == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(player)) {
-      setState(() => _notice = 'Selecciona equipo e introduce un UUID de pelotero válido.');
+    final selected = _selectedPlayer;
+    final player = (selected?['player_id'] ?? selected?['id'])?.toString() ?? '';
+    if (team == null || selected == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(player)) {
+      setState(() => _notice = 'Selecciona equipo y busca un pelotero por su código SWL.');
       return;
     }
     if (!await _confirm('Confirmar fichaje',
-        '¿Fichar al pelotero $player en el equipo seleccionado? '
+        '¿Fichar a ${selected['first_name'] ?? ''} ${selected['last_name'] ?? ''} (${selected['universal_id'] ?? ''}) en el equipo seleccionado? '
         'Supabase verificará tus permisos. Refuerzo: ${_refuerzo ? "sí" : "no"}.')) return;
     if (!mounted) return;
     setState(() { _busy = true; _notice = null; });
@@ -543,7 +578,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
 
   @override
   void dispose() {
-    for (final c in [_first, _last, _jersey, _position, _photo, _playerId]) {
+    for (final c in [_first, _last, _jersey, _position, _photo, _searchCode]) {
       c.dispose();
     }
     super.dispose();
@@ -585,11 +620,27 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
               );
             },
           ),
-          TextField(controller: _playerId,
-              decoration: const InputDecoration(labelText: 'UUID del pelotero (no el código SWL)')),
+          TextField(
+            controller: _searchCode,
+            textCapitalization: TextCapitalization.characters,
+            onChanged: (_) => setState(() { _selectedPlayer = null; _notice = null; }),
+            decoration: const InputDecoration(labelText: 'Código universal del pelotero (SWL-...)'),
+          ),
+          OutlinedButton.icon(
+            onPressed: (_busy || _searching) ? null : _findPlayerByCode,
+            icon: const Icon(Icons.search),
+            label: Text(_searching ? 'Buscando...' : 'Buscar pelotero por código'),
+          ),
+          if (_selectedPlayer != null) Card(
+            child: ListTile(
+              leading: const Icon(Icons.person, color: Colors.amber),
+              title: Text('${_selectedPlayer!['first_name'] ?? ''} ${_selectedPlayer!['last_name'] ?? ''}'),
+              subtitle: Text('${_selectedPlayer!['universal_id'] ?? ''} · #${_selectedPlayer!['jersey_number'] ?? ''} · ${_selectedPlayer!['primary_position'] ?? ''}'),
+            ),
+          ),
           CheckboxListTile(contentPadding: EdgeInsets.zero, title: const Text('Es refuerzo'),
               value: _refuerzo, onChanged: _busy ? null : (v) => setState(() => _refuerzo = v ?? false)),
-          FilledButton.icon(onPressed: _busy ? null : _sign,
+          FilledButton.icon(onPressed: (_busy || _searching || _selectedPlayer == null || _teamId == null) ? null : _sign,
               icon: const Icon(Icons.group_add), label: const Text('Fichar pelotero en LAB')),
           OutlinedButton.icon(onPressed: _loadRoster,
               icon: const Icon(Icons.refresh), label: const Text('Actualizar roster')),
