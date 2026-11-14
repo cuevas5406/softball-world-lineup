@@ -1883,6 +1883,8 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
   String? _selectedTeamId;
   String? _selectedTeamName;
   String? _selectedProvince;
+  Future<bool>? _canRemovePlayer;
+  bool _removalInProgress = false;
 
   @override
   void initState() {
@@ -1913,12 +1915,87 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
       _selectedTeamName = team['name']?.toString();
       _selectedProvince = team['province']?.toString();
       _roster = _fetchRoster(id);
+      _canRemovePlayer = Supabase.instance.client.rpc(
+        'swl_can_manage_roster', params: {'p_team_id': id}
+      ).then((value) => value == true).catchError((_) => false);
     });
   }
 
   void _refreshRoster() {
     final id = _selectedTeamId;
     if (id != null) setState(() => _roster = _fetchRoster(id));
+  }
+
+  // V4.5: retiro autorizado desde Supabase; nunca eliminar directamente en Flutter.
+  Future<bool> _confirmRemovePlayer(Map<String, dynamic> player) async {
+    final teamId = _selectedTeamId;
+    final playerId = player['player_id']?.toString();
+    if (teamId == null || playerId == null || playerId.isEmpty ||
+        _removalInProgress) return false;
+    // La autorización se comprueba otra vez, incluso si la pantalla
+    // quedó abierta después de revocar permisos.
+    try {
+      final allowed = await Supabase.instance.client.rpc(
+        'swl_can_manage_roster', params: {'p_team_id': teamId});
+      if (allowed != true || !mounted || _selectedTeamId != teamId) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No tienes permiso para retirar peloteros.')));
+        return false;
+      }
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudieron verificar los permisos.')));
+      return false;
+    }
+    final name = '${player['first_name'] ?? ''} ${player['last_name'] ?? ''}'.trim();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Retirar del equipo?'),
+        content: Text('¿Deseas retirar a $name de ${_selectedTeamName ?? 'este equipo'}?\n\n'
+            'Conservará su código SWL, su perfil y los fichajes en otros equipos.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Confirmar retiro',
+                  style: TextStyle(color: Colors.redAccent))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return false;
+    setState(() => _removalInProgress = true);
+    try {
+      // El RPC verifica de nuevo los permisos del administrador/mánager.
+      final removed = await Supabase.instance.client.rpc(
+        'swl_remove_player_from_team',
+        params: {'p_team_id': teamId, 'p_player_id': playerId},
+      );
+      if (!mounted || _selectedTeamId != teamId) return false;
+      if (removed != true) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('El pelotero ya no figura como activo. Actualiza el roster.'),
+        ));
+        _refreshRoster();
+        return false;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$name fue retirado de este equipo.'),
+      ));
+      _refreshRoster();
+      // El FutureBuilder reconstruye la lista con los datos del servidor.
+      // No permitir que Dismissible elimine la fila localmente.
+      return false;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('No se pudo retirar al pelotero: $e'),
+        ));
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _removalInProgress = false);
+    }
   }
 
   Future<void> _openPlayerAction(bool registerMode) async {
@@ -2014,8 +2091,15 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
               style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(height: 12),
-          const Text('ROSTER REAL · SOLO LECTURA EN ESTA PANTALLA',
-            style: TextStyle(color: Colors.white54, fontSize: 10)),
+          FutureBuilder<bool>(
+            future: _canRemovePlayer,
+            builder: (context, permission) => Text(
+              permission.data == true
+                ? 'ROSTER REAL · DESLIZA A LA IZQUIERDA PARA RETIRAR'
+                : 'ROSTER REAL',
+              style: const TextStyle(color: Colors.white54, fontSize: 10),
+            ),
+          ),
           const SizedBox(height: 8),
           Expanded(child: _roster == null
             ? const Center(child: Text('Selecciona un equipo para consultar su roster.',
@@ -2036,7 +2120,29 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                     itemCount: roster.length,
                     itemBuilder: (context, index) {
                       final p = roster[index];
-                      return Container(
+                      return FutureBuilder<bool>(
+                        future: _canRemovePlayer,
+                        builder: (context, permission) => Dismissible(
+                        key: ValueKey('roster-${_selectedTeamId}-${p['roster_id']}'),
+                        direction: permission.data == true && !_removalInProgress
+                            ? DismissDirection.endToStart
+                            : DismissDirection.none,
+                        confirmDismiss: (_) => _confirmRemovePlayer(p),
+                        background: Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          alignment: Alignment.centerRight,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF9E2929),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(mainAxisAlignment: MainAxisAlignment.end,
+                            children: [Icon(Icons.person_remove, color: Colors.white),
+                              SizedBox(width: 8),
+                              Text('Retirar', style: TextStyle(color: Colors.white,
+                                fontWeight: FontWeight.bold))]),
+                        ),
+                        child: Container(
                         margin: const EdgeInsets.only(bottom: 6),
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(color: const Color(0xFF121B27),
@@ -2057,6 +2163,8 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                                 style: const TextStyle(color: Colors.white54, fontSize: 10)),
                             ])),
                         ]),
+                        ),
+                        ),
                       );
                     },
                   );
