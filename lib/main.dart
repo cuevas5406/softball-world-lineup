@@ -1,3 +1,4 @@
+import 'swl_advanced_scoreboard.dart';
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
@@ -119,7 +120,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
       _profileUserId = id;
       _profileLookup = Supabase.instance.client
           .from('profiles')
-          .select('id, full_name, email, player_id')
+          .select('id, full_name, email, player_id, role')
           .eq('id', id)
           .maybeSingle();
     }
@@ -190,7 +191,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
                   }
                   final authorized = teamsSnapshot.data!;
                   return MainAppMasterHub(
-                    userRole: authorized.isNotEmpty ? 'manager' : 'fan',
+                    userRole: authorized.isNotEmpty ? 'manager' : ((profile['role'] == 'player' || profile['role'] == 'manager') ? profile['role'].toString() : 'fan'),
                     userName: fullName.isNotEmpty ? fullName : 'Usuario',
                     teamName: authorized.isNotEmpty ? (authorized.first['name']?.toString() ?? 'Mi equipo') : 'Mi perfil',
                     teamProvince: authorized.isNotEmpty ? (authorized.first['province']?.toString() ?? '') : '',
@@ -1187,8 +1188,23 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
                 ),
               ),
               if (isRegistering) ...[
-                const SizedBox(height: 12),
-                const Text('Primero crea tu cuenta personal. Después podrás explorar, crear equipos o registrar peloteros.',
+                const SizedBox(height: 16),
+                const Text('¿CÓMO PARTICIPARÁS?', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<String>(
+                  value: selectedRole,
+                  dropdownColor: const Color(0xFF162131),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(labelText: 'Tipo de cuenta', labelStyle: TextStyle(color: Colors.white70)),
+                  items: const [
+                    DropdownMenuItem(value: 'fan', child: Text('Fanático')),
+                    DropdownMenuItem(value: 'player', child: Text('Pelotero')),
+                    DropdownMenuItem(value: 'manager', child: Text('Mánager')),
+                  ],
+                  onChanged: isSubmitting ? null : (value) { if (value != null) setState(() => selectedRole = value); },
+                ),
+                const SizedBox(height: 10),
+                const Text('Elegir Mánager no concede acceso a otros equipos. La administración requiere autorización del equipo.',
                     style: TextStyle(color: Colors.white70, fontSize: 12)),
               ],
               const SizedBox(height: 20),
@@ -1299,6 +1315,7 @@ class MainAppMasterHub extends StatefulWidget {
 class _MainAppMasterHubState extends State<MainAppMasterHub> {
   int _currentIndex = 0;
   Map<String, dynamic>? _activeTeam;
+  String? _chosenRole;
 
   @override
   void initState() {
@@ -1309,6 +1326,38 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
   void _changeActiveTeam(Map<String, dynamic> team) {
     if (!widget.authorizedTeams.any((t) => t['id']?.toString() == team['id']?.toString())) return;
     setState(() => _activeTeam = team);
+  }
+
+  Future<void> _editMyRole() async {
+    String next = _chosenRole ?? widget.userRole;
+    if (next == 'super_admin') return;
+    final selected = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF162131),
+      title: const Text('Mi tipo de cuenta', style: TextStyle(color: Colors.amber)),
+      content: StatefulBuilder(builder: (ctx, update) => DropdownButton<String>(
+        value: next, dropdownColor: const Color(0xFF162131),
+        items: const [
+          DropdownMenuItem(value: 'fan', child: Text('Fanático', style: TextStyle(color: Colors.white))),
+          DropdownMenuItem(value: 'player', child: Text('Pelotero', style: TextStyle(color: Colors.white))),
+          DropdownMenuItem(value: 'manager', child: Text('Mánager', style: TextStyle(color: Colors.white))),
+        ],
+        onChanged: (v) { if (v != null) update(() => next = v); },
+      )),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+        TextButton(onPressed: () => Navigator.pop(ctx, next), child: const Text('GUARDAR')),
+      ],
+    ));
+    if (selected == null) return;
+    try {
+      await Supabase.instance.client.rpc('swl_set_my_role', params: {'p_role': selected});
+      if (!mounted) return;
+      setState(() => _chosenRole = selected);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tipo de cuenta actualizado. Los permisos del equipo no cambian.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo actualizar el tipo de cuenta: $e')));
+    }
   }
 
   // Estado del juego activo en vivo
@@ -1372,7 +1421,8 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       ),
     ];
 
-    String badge = widget.userRole == "manager" ? "MÁNAGER" : (widget.userRole == "player" ? "PELOTERO" : "FANÁTICO");
+    String visibleRole = widget.authorizedTeams.isNotEmpty ? "manager" : (_chosenRole ?? widget.userRole);
+    String badge = visibleRole == "manager" ? "MÁNAGER" : (visibleRole == "player" ? "PELOTERO" : "FANÁTICO");
 
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
@@ -1409,6 +1459,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
           ],
         ),
         actions: [
+          IconButton(icon: const Icon(Icons.manage_accounts, color: Colors.amber), tooltip: 'Mi tipo de cuenta', onPressed: _editMyRole),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent, size: 20),
             tooltip: "Cerrar Sesión",
@@ -1666,7 +1717,7 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
 // =========================================================================
 // PESTAÑA 2: PIZARRA OFICIAL EN VIVO (CONECTADA POR PIN DINÁMICO)
 // =========================================================================
-class MasterScoreboardTab extends StatefulWidget {
+class MasterScoreboardTab extends StatelessWidget {
   final String userRole;
   final String gamePin;
   final String homeTeam;
@@ -1683,110 +1734,12 @@ class MasterScoreboardTab extends StatefulWidget {
   });
 
   @override
-  State<MasterScoreboardTab> createState() => _MasterScoreboardTabState();
-}
-
-class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
-  int inning = 1;
-  bool isTop = true;
-
-  int visRuns = 0; int homRuns = 0;
-  int visHits = 0; int homHits = 0;
-
-  int balls = 0; int strikes = 0; int outs = 0;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF080D14),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1722),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("⚾ SALA EN VIVO: ${widget.gamePin}", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Colors.amber)),
-            Text("${widget.awayTeam} vs ${widget.homeTeam}", style: const TextStyle(color: Colors.white54, fontSize: 10)),
-          ],
-        ),
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            children: [
-              // Marcador
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(12)),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    Column(children: [
-                      Text(widget.awayTeam, style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
-                      Text("$visRuns", style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.bold)),
-                    ]),
-                    Text("${inning}ra ${isTop ? 'ALTA' : 'BAJA'}", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
-                    Column(children: [
-                      Text(widget.homeTeam, style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
-                      Text("$homRuns", style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.bold)),
-                    ]),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              // B-S-O
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(8)),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    Text("B: $balls", style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-                    Text("S: $strikes", style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                    Text("O: $outs", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 20),
-
-              // Botones de anotar
-              Row(
-                children: [
-                  Expanded(child: _btn("BOLA", const Color(0xFF10B981), () => setState(() => balls = (balls + 1) % 4))),
-                  const SizedBox(width: 6),
-                  Expanded(child: _btn("STRIKE", const Color(0xFFEF4444), () => setState(() => strikes = (strikes + 1) % 3))),
-                  const SizedBox(width: 6),
-                  Expanded(child: _btn("OUT", const Color(0xFFF59E0B), () => setState(() => outs = (outs + 1) % 3))),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: _btn("HIT (+1 C)", const Color(0xFF223040), () => setState(() {
-                    if (isTop) visRuns++; else homRuns++;
-                  }))),
-                  const SizedBox(width: 6),
-                  Expanded(child: _btn("CAMBIAR ENTRADA", const Color(0xFF2563EB), () => setState(() {
-                    if (isTop) { isTop = false; } else { isTop = true; inning++; }
-                    balls = 0; strikes = 0; outs = 0;
-                  }))),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _btn(String l, Color c, VoidCallback f) => ElevatedButton(
-    style: ElevatedButton.styleFrom(backgroundColor: c, padding: const EdgeInsets.symmetric(vertical: 14), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-    onPressed: f,
-    child: Text(l, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-  );
+  Widget build(BuildContext context) => SwlAdvancedScoreboard(
+        key: ValueKey('$gamePin|$homeTeam|$awayTeam'),
+        gamePin: gamePin,
+        homeTeam: homeTeam,
+        awayTeam: awayTeam,
+      );
 }
 
 // =========================================================================
