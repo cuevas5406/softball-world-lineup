@@ -1,3 +1,4 @@
+import 'swl_live_lobby.dart';
 import 'swl_advanced_scoreboard.dart';
 import 'dart:async';
 import 'dart:math';
@@ -1405,6 +1406,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
         homeTeam: activeHome,
         awayTeam: activeAway,
         stadium: activePlay,
+        authorizedTeams: widget.authorizedTeams,
       ),
       MasterScheduleTab(
         myTeamName: activeName,
@@ -1717,12 +1719,13 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
 // =========================================================================
 // PESTAÑA 2: PIZARRA OFICIAL EN VIVO (CONECTADA POR PIN DINÁMICO)
 // =========================================================================
-class MasterScoreboardTab extends StatelessWidget {
+class MasterScoreboardTab extends StatefulWidget {
   final String userRole;
   final String gamePin;
   final String homeTeam;
   final String awayTeam;
   final String stadium;
+  final List<Map<String, dynamic>> authorizedTeams;
 
   const MasterScoreboardTab({
     super.key,
@@ -1731,15 +1734,40 @@ class MasterScoreboardTab extends StatelessWidget {
     required this.homeTeam,
     required this.awayTeam,
     required this.stadium,
+    required this.authorizedTeams,
   });
 
   @override
-  Widget build(BuildContext context) => SwlAdvancedScoreboard(
-        key: ValueKey('$gamePin|$homeTeam|$awayTeam'),
-        gamePin: gamePin,
-        homeTeam: homeTeam,
-        awayTeam: awayTeam,
-      );
+  State<MasterScoreboardTab> createState() => _MasterScoreboardTabState();
+}
+
+class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
+  bool _showDemo = false;
+
+  @override
+  Widget build(BuildContext context) => Column(children: [
+    Container(
+      color: const Color(0xFF162131),
+      child: Row(children: [
+        Expanded(child: TextButton(
+          onPressed: () => setState(() => _showDemo = false),
+          child: Text('PARTIDO POR PIN', style: TextStyle(color: _showDemo ? Colors.white70 : Colors.amber)),
+        )),
+        Expanded(child: TextButton(
+          onPressed: () => setState(() => _showDemo = true),
+          child: Text('PRUEBA LOCAL', style: TextStyle(color: _showDemo ? Colors.amber : Colors.white70)),
+        )),
+      ]),
+    ),
+    Expanded(child: _showDemo
+      ? SwlAdvancedScoreboard(
+          key: ValueKey('${widget.gamePin}|${widget.homeTeam}|${widget.awayTeam}'),
+          gamePin: widget.gamePin,
+          homeTeam: widget.homeTeam,
+          awayTeam: widget.awayTeam,
+        )
+      : SwlLiveLobby(authorizedTeams: widget.authorizedTeams)),
+  ]);
 }
 
 // =========================================================================
