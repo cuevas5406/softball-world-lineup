@@ -2058,6 +2058,60 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     }
   }
 
+  // V4.9: ficha de consulta. Solo muestra datos recibidos del roster real.
+  // No escribe en Supabase ni altera los permisos de retiro/fichaje.
+  void _showPlayerDetails(Map<String, dynamic> player) {
+    String field(String key) {
+      final value = player[key]?.toString().trim() ?? '';
+      return value.isEmpty ? 'No registrado' : value;
+    }
+    final name = '${field('first_name')} ${field('last_name')}';
+    final teamName = _selectedTeamName ?? widget.teamName;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF121B27),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('FICHA DEL PELOTERO',
+              style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold,
+                fontSize: 17)),
+            const SizedBox(height: 16),
+            Text(name, style: const TextStyle(fontSize: 20,
+              fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            _playerDetailRow('Código SWL', field('universal_id')),
+            _playerDetailRow('Número', field('jersey_number')),
+            _playerDetailRow('Posición', field('primary_position')),
+            _playerDetailRow('Equipo', teamName),
+            _playerDetailRow('Condición',
+              player['is_refuerzo'] == true ? 'Refuerzo' : 'Regular'),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(sheetContext).pop(),
+              icon: const Icon(Icons.close),
+              label: const Text('Cerrar ficha'),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _playerDetailRow(String label, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SizedBox(width: 110, child: Text(label,
+        style: const TextStyle(color: Colors.white60))),
+      Expanded(child: SelectableText(value,
+        style: const TextStyle(color: Colors.white,
+          fontWeight: FontWeight.w600))),
+    ]),
+  );
+
   // V4.8: cada operación tiene su pantalla. Se conservan los widgets y RPC
   // de V4.7 sin cambiar la lógica de registro, fichaje o retiro.
   Future<void> _openCreateTeam() async {
@@ -2237,6 +2291,9 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(color: const Color(0xFF121B27),
                           borderRadius: BorderRadius.circular(8)),
+                        child: InkWell(
+                        onTap: () => _showPlayerDetails(p),
+                        borderRadius: BorderRadius.circular(8),
                         child: Row(children: [
                           CircleAvatar(backgroundColor: const Color(0xFF0F172A),
                             radius: 16, child: Text('${p['jersey_number'] ?? '00'}',
@@ -2252,7 +2309,10 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                                 '${p['is_refuerzo'] == true ? ' · Refuerzo' : ''}',
                                 style: const TextStyle(color: Colors.white54, fontSize: 10)),
                             ])),
+                          const Icon(Icons.chevron_right,
+                            color: Colors.white54, size: 18),
                         ]),
+                        ),
                         ),
                         ),
                       );
