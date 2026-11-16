@@ -261,7 +261,7 @@ class _AuthTestGateState extends State<AuthTestGate> {
     if (!_showLogin) {
       return SplashScreen(onContinue: () => setState(() => _showLogin = true));
     }
-    return const AuthLoginScreen();
+    return AuthLoginScreen(onClose: () => setState(() => _showLogin = false));
   }
 }
 
@@ -955,7 +955,9 @@ class SplashScreen extends StatelessWidget {
 // 2. INICIO DE SESIÓN CON REGISTRO COMPLETO DEL EQUIPO
 // =========================================================================
 class AuthLoginScreen extends StatefulWidget {
-  const AuthLoginScreen({super.key});
+  const AuthLoginScreen({super.key, required this.onClose});
+
+  final VoidCallback onClose;
 
   @override
   State<AuthLoginScreen> createState() => _AuthLoginScreenState();
@@ -982,7 +984,7 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
           Image.network(logoUrl, height: 76, fit: BoxFit.contain,
             errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball,
                 color: Colors.amber, size: 54)),
-          const FullTeamRegistrationSheet(),
+          FullTeamRegistrationSheet(onClose: onClose),
           const SizedBox(height: 12),
           const Text('Otras opciones (pendientes de configurar)',
               style: TextStyle(color: Colors.white54, fontSize: 12)),
@@ -1024,7 +1026,9 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
 // La creación del perfil y del equipo queda pendiente de una estructura
 // profiles/relaciones confirmada; nunca se asignan permisos desde el cliente.
 class FullTeamRegistrationSheet extends StatefulWidget {
-  const FullTeamRegistrationSheet({super.key});
+  const FullTeamRegistrationSheet({super.key, required this.onClose});
+
+  final VoidCallback onClose;
 
   @override
   State<FullTeamRegistrationSheet> createState() => _FullTeamRegistrationSheetState();
@@ -1158,7 +1162,7 @@ class _FullTeamRegistrationSheetState extends State<FullTeamRegistrationSheet> {
                   ),
                   IconButton(
                     icon: const Icon(Icons.close, color: Colors.white60),
-                    onPressed: isSubmitting ? null : () => Navigator.pop(context),
+                    onPressed: isSubmitting ? null : widget.onClose,
                   ),
                 ],
               ),
