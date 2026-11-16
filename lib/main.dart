@@ -2058,6 +2058,28 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     }
   }
 
+  // V4.8: cada operación tiene su pantalla. Se conservan los widgets y RPC
+  // de V4.7 sin cambiar la lógica de registro, fichaje o retiro.
+  Future<void> _openCreateTeam() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Scaffold(
+        backgroundColor: const Color(0xFF080D14),
+        appBar: AppBar(
+          title: const Text('Crear equipo'),
+          backgroundColor: const Color(0xFF0F1722),
+        ),
+        body: const SafeArea(child: SingleChildScrollView(
+          padding: EdgeInsets.all(12),
+          child: SwlTeamLabPanel(),
+        )),
+      ),
+    ));
+    // Una creación puede cambiar los equipos autorizados. Se vuelven a
+    // consultar los permisos del servidor, nunca se conceden desde Flutter.
+    if (!mounted) return;
+    setState(() { _teams = swlAuthorizedTeams(); });
+  }
+
   Future<void> _openPlayerAction(bool registerMode) async {
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => Scaffold(
@@ -2135,6 +2157,14 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             },
           ),
           const SizedBox(height: 10),
+          const Text('GESTIÓN DEL EQUIPO', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _openCreateTeam,
+            icon: const Icon(Icons.add_circle_outline),
+            label: const Text('Crear equipo'),
+          ),
+          const SizedBox(height: 12),
           const Text('GESTIÓN DE PELOTEROS', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           OutlinedButton.icon(
