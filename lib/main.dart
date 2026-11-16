@@ -984,7 +984,7 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
           Image.network(logoUrl, height: 76, fit: BoxFit.contain,
             errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball,
                 color: Colors.amber, size: 54)),
-          FullTeamRegistrationSheet(onClose: onClose),
+          FullTeamRegistrationSheet(onClose: widget.onClose),
           const SizedBox(height: 12),
           const Text('Otras opciones (pendientes de configurar)',
               style: TextStyle(color: Colors.white54, fontSize: 12)),
