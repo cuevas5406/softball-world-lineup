@@ -69,6 +69,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   int _eventsRequestGeneration = 0;
   String? _eventsError;
   String? _error;
+  // V5.5: acceso guiado. El PIN identifica el partido; la sesión autoriza el equipo.
+  bool _teamConfirmed = false;
+  bool _scoreboardOpened = false;
 
   @override
   void initState() {
@@ -136,6 +139,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       final game = Map<String, dynamic>.from(result as Map);
       setState(() {
         _game = game;
+        _teamConfirmed = false;
+        _scoreboardOpened = false;
         _savedLineups = [];
         _lineupPlayerNames = {};
         _lineupsError = null;
@@ -1393,6 +1398,130 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     }
   }
 
+  String? _myTeamId(Map<String, dynamic> game) {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return null;
+    if (game['home_manager_id']?.toString() == userId) {
+      return game['home_team_id']?.toString();
+    }
+    if (game['away_manager_id']?.toString() == userId) {
+      return game['away_team_id']?.toString();
+    }
+    return null;
+  }
+
+  bool _hasMyLineup(Map<String, dynamic> game) {
+    final teamId = _myTeamId(game);
+    if (teamId == null) return false;
+    return _savedLineups.any((row) =>
+      row['team_id']?.toString() == teamId &&
+      row['lineup'] is List && (row['lineup'] as List).isNotEmpty);
+  }
+
+  Widget _teamConfirmationView() {
+    final game = _game!;
+    final myTeamId = _myTeamId(game);
+    final homeId = game['home_team_id']?.toString();
+    final awayId = game['away_team_id']?.toString();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text('PASO 2 · TOMA TU EQUIPO',
+        style: TextStyle(color: Colors.amber, fontSize: 20,
+          fontWeight: FontWeight.bold)),
+      const SizedBox(height: 10),
+      Text('Partido ${game['game_pin'] ?? ''}',
+        style: const TextStyle(color: Colors.white70)),
+      const SizedBox(height: 14),
+      for (final side in [
+        {'id': homeId, 'label': 'LOCAL'},
+        {'id': awayId, 'label': 'VISITANTE'},
+      ])
+        Card(color: const Color(0xFF162131), child: ListTile(
+          title: Text(_name(side['id']),
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          subtitle: Text(side['label']!,
+            style: const TextStyle(color: Colors.white70)),
+          trailing: side['id'] == myTeamId
+            ? const Icon(Icons.verified, color: Colors.greenAccent)
+            : const Icon(Icons.lock_outline, color: Colors.white38),
+        )),
+      const SizedBox(height: 12),
+      if (myTeamId == null)
+        const Text('Esta cuenta no figura como mánager de ninguno de los equipos. '
+          'El PIN no concede permisos de edición.',
+          style: TextStyle(color: Colors.orangeAccent))
+      else ...[
+        Text('Tu equipo autorizado: ${_name(myTeamId)}',
+          style: const TextStyle(color: Colors.greenAccent)),
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: () => setState(() => _teamConfirmed = true),
+          icon: const Icon(Icons.arrow_forward),
+          label: const Text('CONTINUAR A MI ALINEACIÓN'),
+        ),
+      ],
+      const SizedBox(height: 12),
+      TextButton(onPressed: _leaveGame, child: const Text('VOLVER')),
+    ]);
+  }
+
+  Widget _lineupPreparationView() {
+    final game = _game!;
+    final myTeamId = _myTeamId(game);
+    if (myTeamId == null) return _teamConfirmationView();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text('PASO 3 · PREPARA TU ALINEACIÓN',
+        style: TextStyle(color: Colors.amber, fontSize: 20,
+          fontWeight: FontWeight.bold)),
+      const SizedBox(height: 12),
+      Text(_name(myTeamId), style: const TextStyle(color: Colors.white,
+        fontSize: 18, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 8),
+      _lineupStatus(myTeamId, 'Mi alineación'),
+      if (_lineupsLoading) const LinearProgressIndicator(),
+      if (_lineupsError != null)
+        Text(_lineupsError!, style: const TextStyle(color: Colors.orangeAccent)),
+      const SizedBox(height: 14),
+      FilledButton.icon(
+        onPressed: () => _draftLineup(myTeamId, _name(myTeamId)),
+        icon: const Icon(Icons.edit_note),
+        label: const Text('EDITAR MI ALINEACIÓN'),
+      ),
+      OutlinedButton.icon(
+        onPressed: _loadSavedLineups,
+        icon: const Icon(Icons.sync),
+        label: const Text('ACTUALIZAR ALINEACIONES'),
+      ),
+      const SizedBox(height: 12),
+      if (_hasMyLineup(game))
+        FilledButton.icon(
+          onPressed: () => setState(() => _scoreboardOpened = true),
+          icon: const Icon(Icons.sports_baseball),
+          label: const Text('IR A LA PIZARRA Y ANOTACIONES'),
+        )
+      else
+        const Text('Guarda tu alineación para continuar a la pizarra. '
+          'El rival prepara la suya desde su propio dispositivo.',
+          style: TextStyle(color: Colors.white70)),
+      TextButton(onPressed: () => setState(() => _teamConfirmed = false),
+        child: const Text('VOLVER A MI EQUIPO')),
+    ]);
+  }
+
+  void _leaveGame() {
+    _stopWatching();
+    setState(() {
+      _game = null;
+      _teamConfirmed = false;
+      _scoreboardOpened = false;
+      _away = null;
+      _teamNames.clear();
+      _error = null;
+      _connectionWarning = null;
+      _savedLineups = [];
+      _lineupPlayerNames = {};
+    });
+  }
+
   Widget _gameView() {
     final game = _game!;
     final connected = game['home_manager_id'] != null && game['away_manager_id'] != null;
@@ -1665,34 +1794,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (_eventsQueried && _recentEvents.isEmpty && !_eventsLoading && _eventsError == null)
         const Text('Sin jugadas consultadas o registradas.',
             style: TextStyle(color: Colors.white54, fontSize: 12)),
-      TextButton(onPressed: () {
-        _stopWatching();
-        setState(() {
-          _game = null;
-          _away = null;
-          _teamNames.clear();
-          _error = null;
-          _connectionWarning = null;
-          _lastSuccessfulRefresh = null;
-          _recentEvents = [];
-        _substitutionHistory = [];
-        _substitutionHistoryGeneration++;
-        _substitutionHistoryLoading = false;
-        _substitutionHistoryQueued = false;
-        _substitutionHistoryTruncated = false;
-        _substitutionHistoryError = null;
-          _battingStats = [];
-          _eventsError = null;
-          _eventsQueried = false;
-          _eventsRequestGameId = null;
-          _eventsRequestGeneration++;
-          _recordGeneration++;
-          _recording = false;
-          _substitutionPending = false;
-          _substitutionUncertain = false;
-          _scoringMessage = null;
-        });
-      }, child: const Text('VOLVER AL MENÚ DE CONEXIÓN')),
+      TextButton(onPressed: _leaveGame,
+        child: const Text('SALIR DEL PARTIDO')),
     ]);
   }
 
@@ -1705,13 +1808,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       appBar: AppBar(title: const Text('⚾ PIZARRA EN VIVO'),
           backgroundColor: const Color(0xFF162131)),
       body: ListView(padding: const EdgeInsets.all(18), children: [
-        const Text('Crear o unirse a un partido',
-            style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 19)),
-        const SizedBox(height: 8),
-        const Text('Ambos mánagers acceden al mismo partido mediante su PIN.',
-            style: TextStyle(color: Colors.white70)),
-        const SizedBox(height: 24),
-        if (_game != null) _gameView() else ...[
+        if (_game != null) ...[
+          if (!_teamConfirmed) _teamConfirmationView()
+          else if (!_scoreboardOpened) _lineupPreparationView()
+          else _gameView(),
+        ] else ...[
           const Text('CREAR PARTIDO COMO LOCAL',
               style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
