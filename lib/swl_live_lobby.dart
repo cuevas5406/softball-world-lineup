@@ -9,7 +9,8 @@ import 'swl_substitution_rules.dart';
 /// Anotación básica LAB disponible; reglas avanzadas pendientes.
 class SwlLiveLobby extends StatefulWidget {
   final List<Map<String, dynamic>> authorizedTeams;
-  const SwlLiveLobby({super.key, required this.authorizedTeams});
+  final String? initialJoinPin;
+  const SwlLiveLobby({super.key, required this.authorizedTeams, this.initialJoinPin});
 
   @override
   State<SwlLiveLobby> createState() => _SwlLiveLobbyState();
@@ -75,6 +76,25 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _homeId = widget.authorizedTeams.isEmpty
         ? null
         : widget.authorizedTeams.first['id']?.toString();
+    if (widget.initialJoinPin != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _joinFromPin(widget.initialJoinPin!);
+      });
+    }
+  }
+
+  Future<void> _joinFromPin(String supplied) async {
+    final normalized = supplied.trim().toUpperCase();
+    final digits = normalized.startsWith('SWL-')
+        ? normalized.substring(4) : normalized;
+    if (!RegExp(r'^\d{6}$').hasMatch(digits)) {
+      setState(() => _error = 'El PIN real debe contener 6 números (SWL-XXXXXX).');
+      return;
+    }
+    _pin.text = digits;
+    await _run(() => _client.rpc('swl_v5_join_game',
+        params: {'p_game_pin': 'SWL-$digits'}));
+    if (_game != null) await _loadNames();
   }
 
   Future<void> _searchTeams(String term) async {
@@ -1423,7 +1443,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         const Text('¡Ambos mánagers están vinculados!',
             style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
         const SizedBox(height: 20),
-        const Text('PARTIDO COMPARTIDO · LAB',
+        const Text('MARCADOR EN VIVO',
             style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 19)),
         const SizedBox(height: 12),
         Card(color: const Color(0xFF162131), child: Padding(
@@ -1478,7 +1498,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (_scoringBackendReady &&
           (_client.auth.currentUser?.id == game['home_manager_id']?.toString() ||
            _client.auth.currentUser?.id == game['away_manager_id']?.toString())) ...[
-        Text('PRUEBA LAB · ${_client.auth.currentUser?.id == game['home_manager_id']?.toString() ? 'MÁNAGER LOCAL' : 'MÁNAGER VISITANTE'} · NO BOX SCORE',
+        Text('CONTROLES DE ANOTACIÓN',
             style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
         Wrap(spacing: 8, children: [
           for (final action in ['BALL', 'STRIKE', 'OUT'])
@@ -1500,7 +1520,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
               game['status'] == 'FINAL' || game['status'] == 'OFFICIAL'
               ? null : _showHitDialog,
         ),
-        const Text('Prueba LAB: solo se permiten jugadas vinculadas al bateador. La cuarta BALL registra boleto y el tercer STRIKE ponche. Las estadísticas siguen siendo preliminares; no usar como box score oficial.', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
         if (_substitutionUncertain)
           ListTile(
             title: const Text('Sustitución sin confirmación de red',
@@ -1683,17 +1702,17 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     final homeId = owned.any((t) => t['id']?.toString() == _homeId) ? _homeId : null;
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
-      appBar: AppBar(title: const Text('⚾ PARTIDO POR PIN · LAB'),
+      appBar: AppBar(title: const Text('⚾ PIZARRA EN VIVO'),
           backgroundColor: const Color(0xFF162131)),
       body: ListView(padding: const EdgeInsets.all(18), children: [
-        const Text('Conexión real entre mánagers',
+        const Text('Crear o unirse a un partido',
             style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 19)),
         const SizedBox(height: 8),
-        const Text('Partido compartido en LAB. Anotación experimental; faltan pruebas completas en dispositivos.',
+        const Text('Ambos mánagers acceden al mismo partido mediante su PIN.',
             style: TextStyle(color: Colors.white70)),
         const SizedBox(height: 24),
         if (_game != null) _gameView() else ...[
-          const Text('CREAR PARTIDO COMO HOME CLUB',
+          const Text('CREAR PARTIDO COMO LOCAL',
               style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
@@ -1770,13 +1789,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           const SizedBox(height: 12),
           ElevatedButton(
             onPressed: _busy ? null : () async {
-              if (_pin.text.length != 6) {
-                setState(() => _error = 'Introduce los 6 números del PIN.');
-                return;
-              }
-              await _run(() => _client.rpc('swl_v5_join_game',
-                  params: {'p_game_pin': 'SWL-${_pin.text}'}));
-              await _loadNames();
+              await _joinFromPin(_pin.text);
             },
             child: const Text('CONECTARME AL PARTIDO'),
           ),

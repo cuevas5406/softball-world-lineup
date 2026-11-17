@@ -1362,7 +1362,8 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
   }
 
   // Estado del juego activo en vivo
-  String activePin = "SWL-101";
+  String? pendingJoinPin;
+  String activePin = "";
   String activeHome = "Santiago";
   String activeAway = "La Vega";
   String activePlay = "Play Club Miramar";
@@ -1396,13 +1397,15 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       MasterHomeTab(
         onPlayNowTap: () => setState(() => _currentIndex = 1),
         onGameJoined: (pin) => setState(() {
-          activePin = pin;
+          // La unión real se realiza mediante la RPC en SwlLiveLobby.
+          pendingJoinPin = pin;
           _currentIndex = 1;
         }),
       ),
       MasterScoreboardTab(
         userRole: widget.userRole,
         gamePin: activePin,
+        initialJoinPin: pendingJoinPin,
         homeTeam: activeHome,
         awayTeam: activeAway,
         stadium: activePlay,
@@ -1544,12 +1547,11 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
               tileColor: const Color(0xFF0F172A),
               leading: const Icon(Icons.add_circle, color: Colors.amber),
               title: const Text("Crear Partido Nuevo (Generar PIN Dinámico)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-              subtitle: const Text("Crea una sala en la base de datos con un código nuevo", style: TextStyle(color: Colors.white54, fontSize: 10)),
+              subtitle: const Text("Abre la creación real del partido", style: TextStyle(color: Colors.white54, fontSize: 10)),
               onTap: () {
-                final randomPin = "SWL-${Random().nextInt(900) + 100}"; // Genera PIN dinámico (ej: SWL-482)
                 Navigator.pop(ctx);
-                widget.onGameJoined(randomPin);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(backgroundColor: Colors.teal.shade800, content: Text("🎉 Nuevo partido creado con PIN: $randomPin")));
+                // Nunca anunciar un PIN sin crear realmente el partido.
+                widget.onPlayNowTap();
               },
             ),
 
@@ -1722,6 +1724,7 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
 class MasterScoreboardTab extends StatefulWidget {
   final String userRole;
   final String gamePin;
+  final String? initialJoinPin;
   final String homeTeam;
   final String awayTeam;
   final String stadium;
@@ -1731,6 +1734,7 @@ class MasterScoreboardTab extends StatefulWidget {
     super.key,
     required this.userRole,
     required this.gamePin,
+    this.initialJoinPin,
     required this.homeTeam,
     required this.awayTeam,
     required this.stadium,
@@ -1742,32 +1746,12 @@ class MasterScoreboardTab extends StatefulWidget {
 }
 
 class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
-  bool _showDemo = false;
-
   @override
-  Widget build(BuildContext context) => Column(children: [
-    Container(
-      color: const Color(0xFF162131),
-      child: Row(children: [
-        Expanded(child: TextButton(
-          onPressed: () => setState(() => _showDemo = false),
-          child: Text('PARTIDO POR PIN', style: TextStyle(color: _showDemo ? Colors.white70 : Colors.amber)),
-        )),
-        Expanded(child: TextButton(
-          onPressed: () => setState(() => _showDemo = true),
-          child: Text('PRUEBA LOCAL', style: TextStyle(color: _showDemo ? Colors.amber : Colors.white70)),
-        )),
-      ]),
-    ),
-    Expanded(child: _showDemo
-      ? SwlAdvancedScoreboard(
-          key: ValueKey('${widget.gamePin}|${widget.homeTeam}|${widget.awayTeam}'),
-          gamePin: widget.gamePin,
-          homeTeam: widget.homeTeam,
-          awayTeam: widget.awayTeam,
-        )
-      : SwlLiveLobby(authorizedTeams: widget.authorizedTeams)),
-  ]);
+  Widget build(BuildContext context) => SwlLiveLobby(
+    key: ValueKey('live-lobby-${widget.initialJoinPin ?? 'manual'}'),
+    authorizedTeams: widget.authorizedTeams,
+    initialJoinPin: widget.initialJoinPin,
+  );
 }
 
 // =========================================================================
