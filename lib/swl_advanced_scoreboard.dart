@@ -1,10 +1,15 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'swl_lineup_identity.dart';
 
 // Modelo de Bateador con su historial turno por turno del juego
 class SwlScorePlayer {
   final String name;
   final String number;
+  // UUID persistente del pelotero. null indica entrada local sin identidad verificada.
+  final String? playerId;
+  final String battingRole; // REGULAR, DH o AH
+  final String defensivePosition; // P, C, 1B, 2B, 3B, SS, LF, CF, RF o SIN
   int ab;   // Turnos oficiales
   int hits; // Hits
   int bb;   // Boletos
@@ -14,6 +19,9 @@ class SwlScorePlayer {
   SwlScorePlayer({
     required this.name,
     required this.number,
+    this.playerId,
+    this.battingRole = 'REGULAR',
+    this.defensivePosition = 'SIN',
     this.ab = 0,
     this.hits = 0,
     this.bb = 0,
@@ -32,6 +40,9 @@ class SwlScorePlayer {
   SwlScorePlayer copy() => SwlScorePlayer(
         name: name,
         number: number,
+        playerId: playerId,
+        battingRole: battingRole,
+        defensivePosition: defensivePosition,
         ab: ab,
         hits: hits,
         bb: bb,
@@ -202,6 +213,261 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   int homeLineupIndex = 0;
 
   SwlScorePlayer get currentBatter => isTopInning ? visitorLineup[visitorLineupIndex] : homeLineup[homeLineupIndex];
+
+  // V5.3: configuración independiente del orden al bate en modo local.
+  Future<void> _editLineup(bool visitor) async {
+    if (playsLog.isNotEmpty || _history.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Configura la alineación antes de comenzar a anotar.')));
+      return;
+    }
+    final source = visitor ? visitorLineup : homeLineup;
+    final names = List.generate(13, (i) => TextEditingController(
+      text: i < source.length ? source[i].name : 'Bateador ${i + 1}'));
+    final numbers = List.generate(13, (i) => TextEditingController(
+      text: i < source.length ? source[i].number : '-'));
+    final roles = List.generate(13, (i) =>
+        i < source.length ? source[i].battingRole : 'REGULAR');
+    final positions = List.generate(13, (i) =>
+        i < source.length ? source[i].defensivePosition : 'SIN');
+    int count = source.length;
+    try {
+      final result = await showDialog<List<SwlScorePlayer>>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, update) => AlertDialog(
+            backgroundColor: const Color(0xFF16202C),
+            title: Text('ALINEACIÓN · ${visitor ? visitorName : homeName}',
+                style: const TextStyle(color: Colors.amber, fontSize: 17)),
+            content: SizedBox(width: 440, height: 440, child: Column(children: [
+              DropdownButton<int>(
+                value: count,
+                dropdownColor: const Color(0xFF16202C),
+                style: const TextStyle(color: Colors.white),
+                items: List.generate(5, (i) => DropdownMenuItem(
+                  value: i + 9, child: Text('${i + 9} bateadores'))),
+                onChanged: (value) => update(() => count = value ?? count),
+              ),
+              const Text('Defensa: P, C, 1B, 2B, 3B, SS, LF, CF, RF. DH/AH sin defensa.',
+                  style: TextStyle(color: Colors.white70, fontSize: 10)),
+              const Text('Orden al bate · configuración local antes del partido',
+                  style: TextStyle(color: Colors.white70, fontSize: 11)),
+              Expanded(child: ListView.builder(itemCount: count, itemBuilder: (_, i) =>
+                Padding(padding: const EdgeInsets.only(bottom: 8),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SizedBox(width: 465, child: Row(children: [
+                  SizedBox(width: 28, child: Text('${i + 1}.',
+                      style: const TextStyle(color: Colors.amber))),
+                  Expanded(child: TextField(controller: names[i],
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(labelText: 'Nombre', isDense: true,
+                        labelStyle: TextStyle(color: Colors.white70)))),
+                  const SizedBox(width: 6),
+                  SizedBox(width: 91, child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: roles[i],
+                    dropdownColor: const Color(0xFF16202C),
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                    items: const [
+                      DropdownMenuItem(value: 'REGULAR', child: Text('Normal')),
+                      DropdownMenuItem(value: 'DH', child: Text('DH')),
+                      DropdownMenuItem(value: 'AH', child: Text('AH')),
+                    ],
+                    onChanged: (value) => update(() =>
+                        roles[i] = value ?? 'REGULAR'),
+                  )),
+                  const SizedBox(width: 4),
+                  SizedBox(width: 62, child: DropdownButton<String>(
+                    isExpanded: true,
+                    value: positions[i],
+                    dropdownColor: const Color(0xFF16202C),
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
+                    items: const ['SIN', 'P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF']
+                        .map((position) => DropdownMenuItem(
+                          value: position, child: Text(position))).toList(),
+                    onChanged: (value) => update(() => positions[i] = value ?? 'SIN'),
+                  )),
+                  const SizedBox(width: 4),
+                  SizedBox(width: 46, child: TextField(controller: numbers[i],
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(labelText: '#', isDense: true,
+                        labelStyle: TextStyle(color: Colors.white70)))),
+                ])))),
+              )),
+            ])),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('CANCELAR')),
+              FilledButton(onPressed: () {
+                if (List.generate(count, (i) => names[i].text.trim())
+                    .any((name) => name.isEmpty)) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Todos los bateadores deben tener nombre.')));
+                  return;
+                }
+                final normalizedNames = List.generate(count,
+                    (i) => names[i].text.trim().toLowerCase());
+                if (normalizedNames.toSet().length != count) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('No repitas el mismo bateador en la alineación.')));
+                  return;
+                }
+                final assignedNumbers = List.generate(count,
+                    (i) => numbers[i].text.trim())
+                    .where((number) => number.isNotEmpty && number != '-')
+                    .toList();
+                if (assignedNumbers.toSet().length != assignedNumbers.length) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('No repitas números de uniforme en la alineación.')));
+                  return;
+                }
+                if (roles.take(count).where((role) => role == 'DH').length > 1) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Solo puede haber un DH por alineación.')));
+                  return;
+                }
+                // DH y AH son roles exclusivamente ofensivos en la alineación inicial.
+                // Si existe DH, el pitcher no puede ocupar un turno en este orden.
+                final hasDh = roles.take(count).contains('DH');
+                if (hasDh && positions.take(count).contains('P')) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Con DH, el pitcher no debe figurar como bateador.')));
+                  return;
+                }
+                for (var i = 0; i < count; i++) {
+                  if (roles[i] == 'DH' && positions[i] != 'SIN') {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('El DH no puede tener posición defensiva inicial.')));
+                    return;
+                  }
+                }
+                final assignedPositions = positions.take(count)
+                    .where((position) => position != 'SIN').toList();
+                if (assignedPositions.toSet().length != assignedPositions.length) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('No puedes asignar la misma posición defensiva dos veces.')));
+                  return;
+                }
+                for (var i = 0; i < count; i++) {
+                  if (roles[i] == 'AH' && positions[i] != 'SIN') {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Un AH no debe tener posición defensiva inicial.')));
+                    return;
+                  }
+                }
+                final ids = source.take(count).map((p) => p.playerId).whereType<String>().toList();
+                if (ids.toSet().length != ids.length) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Hay IDs de peloteros duplicados.')));
+                  return;
+                }
+                Navigator.pop(dialogContext, List.generate(count, (i) =>
+                  SwlScorePlayer(name: names[i].text.trim(),
+                    playerId: i < source.length &&
+                      source[i].name == names[i].text.trim() &&
+                      source[i].number == (numbers[i].text.trim().isEmpty ? '-' : numbers[i].text.trim())
+                        ? source[i].playerId : null,
+                    defensivePosition: positions[i],
+                    battingRole: roles[i],
+                    number: numbers[i].text.trim().isEmpty ? '-' : numbers[i].text.trim())));
+              }, child: const Text('GUARDAR')),
+            ],
+          ),
+        ),
+      );
+      if (!mounted || result == null) return;
+      setState(() {
+        if (visitor) { visitorLineup = result; visitorLineupIndex = 0; }
+        else { homeLineup = result; homeLineupIndex = 0; }
+      });
+    } finally {
+      for (final c in names) { c.dispose(); }
+      for (final c in numbers) { c.dispose(); }
+    }
+  }
+
+  // V5.3: sustitución local de bateador, sin alterar turnos ya registrados.
+  Future<void> _substituteBatter(bool visitor) async {
+    final lineup = visitor ? visitorLineup : homeLineup;
+    int selected = visitor ? visitorLineupIndex : homeLineupIndex;
+    final name = TextEditingController();
+    final number = TextEditingController();
+    try {
+      final replacement = await showDialog<SwlScorePlayer>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, update) => AlertDialog(
+            backgroundColor: const Color(0xFF16202C),
+            title: const Text('SUSTITUCIÓN DE BATEADOR',
+                style: TextStyle(color: Colors.amber, fontSize: 17)),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              DropdownButton<int>(
+                isExpanded: true,
+                value: selected,
+                dropdownColor: const Color(0xFF16202C),
+                style: const TextStyle(color: Colors.white),
+                items: List.generate(lineup.length, (i) => DropdownMenuItem(
+                  value: i,
+                  child: Text('${i + 1}. ${lineup[i].name}', overflow: TextOverflow.ellipsis),
+                )),
+                onChanged: (value) => update(() => selected = value ?? selected),
+              ),
+              TextField(controller: name,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: 'Nombre del sustituto',
+                  labelStyle: TextStyle(color: Colors.white70))),
+              TextField(controller: number,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: 'Número del sustituto',
+                  labelStyle: TextStyle(color: Colors.white70))),
+              const SizedBox(height: 8),
+              const Text('El sustituto ocupará el mismo turno y rol. '
+                  'Las estadísticas previas permanecen en el historial de jugadas.',
+                  style: TextStyle(color: Colors.white70, fontSize: 11)),
+            ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('CANCELAR')),
+              FilledButton(onPressed: () {
+                final newName = name.text.trim();
+                final newNumber = number.text.trim();
+                if (newName.isEmpty ||
+                    lineup.asMap().entries.any((entry) =>
+                      entry.key != selected &&
+                      entry.value.name.toLowerCase() == newName.toLowerCase()) ||
+                    (newNumber.isNotEmpty && newNumber != '-' &&
+                     lineup.asMap().entries.any((entry) =>
+                       entry.key != selected && entry.value.number == newNumber))) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Revisa el nombre y número: no deben estar vacíos ni repetidos.')));
+                  return;
+                }
+                Navigator.pop(dialogContext, SwlScorePlayer(
+                  name: newName,
+                  number: newNumber.isEmpty ? '-' : newNumber,
+                  battingRole: lineup[selected].battingRole,
+                  defensivePosition: lineup[selected].defensivePosition,
+                ));
+              }, child: const Text('SUSTITUIR')),
+            ],
+          ),
+        ),
+      );
+      if (!mounted || replacement == null) return;
+      _saveState();
+      setState(() {
+        if (visitor) {
+          visitorLineup[selected] = replacement;
+        } else {
+          homeLineup[selected] = replacement;
+        }
+      });
+    } finally {
+      name.dispose();
+      number.dispose();
+    }
+  }
 
   final List<SwlScorePlayRecord> playsLog = [];
   final List<SwlScoreGameSnapshot> _history = [];
@@ -1059,6 +1325,24 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         elevation: 0,
         title: const Text("⚾ PIZARRA · PRUEBA LOCAL", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
         actions: [
+          PopupMenuButton<String>(
+            tooltip: 'Sustituciones',
+            icon: const Icon(Icons.swap_horiz, color: Colors.amber),
+            onSelected: (value) => _substituteBatter(value == 'visitor'),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'visitor', child: Text('Sustituir · $visitorName')),
+              PopupMenuItem(value: 'home', child: Text('Sustituir · $homeName')),
+            ],
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Configurar alineaciones',
+            icon: const Icon(Icons.groups, color: Colors.amber),
+            onSelected: (value) => _editLineup(value == 'visitor'),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'visitor', child: Text('Alineación · $visitorName')),
+              PopupMenuItem(value: 'home', child: Text('Alineación · $homeName')),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.undo, color: Colors.amber, size: 26),
             tooltip: "Deshacer",

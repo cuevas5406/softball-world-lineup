@@ -1,0 +1,1 @@
+V5.3: lectura de nombres y dorsales de alineaciones guardadas; visualización en orden al bate; editor precarga jugadores guardados y permite reordenar arrastrando. No se modificó Supabase. No se ejecutó Flutter.
