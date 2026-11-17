@@ -491,7 +491,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           r['team_id']?.toString() == teamId).toList();
       rows.sort((a, b) =>
           (_lineupPlayerNames[a['player_id']?.toString()] ?? '').compareTo(
-              _lineupPlayerNames[b['player_id']?.toString()] ?? '')));
+              _lineupPlayerNames[b['player_id']?.toString()] ?? ''));
       final vb = rows.fold<int>(0, (sum, r) => sum + count(r, 'at_bats'));
       final h = rows.fold<int>(0, (sum, r) => sum + count(r, 'hits'));
       final bb = rows.fold<int>(0, (sum, r) => sum + count(r, 'walks'));
@@ -1414,7 +1414,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (_lineupsError != null) Text(_lineupsError!,
           style: const TextStyle(color: Colors.orangeAccent)),
       TextButton.icon(onPressed: _loadSavedLineups,
-          icon: const Icon(Icons.sync), child: const Text('ACTUALIZAR ALINEACIONES')),
+          icon: const Icon(Icons.sync), label: const Text('ACTUALIZAR ALINEACIONES')),
       const SizedBox(height: 14),
       if (!connected)
         const Text('Esperando al mánager visitante…',
