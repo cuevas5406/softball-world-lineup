@@ -1,0 +1,6 @@
+Flutter 3.50.0 · apertura de aplicación lib/main.dart
+flutter assemble · android_aot_bundle_release_android-arm64 · Release
+Salida del comando: 0
+Binario ARM AArch64: app.so (10344472 bytes)
+SHA-256: 50bbdaa4d477fcc6ac2611538e35c003c50c82ed0447b1c4cf679f3528e94d6e
+Parámetros de Supabase de compilación. Sin sesión ni consultas a LAB.

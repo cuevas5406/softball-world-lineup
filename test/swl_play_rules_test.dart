@@ -60,6 +60,18 @@ void main() {
     expect(() => state(first:true).hit(batterBase:2,firstTo:2),
       throwsStateError);
   });
+  test('Un doble no puede dejar atrás al corredor que estaba en segunda', () {
+    expect(() => state(second:true).hit(batterBase:2, secondTo:2),
+        throwsStateError);
+    expect(() => state(second:true).hit(batterBase:3, secondTo:2),
+        throwsStateError);
+  });
+
+  test('El corredor que venía de primera no puede rebasar al de segunda', () {
+    expect(() => state(first:true, second:true).hit(
+      batterBase:1, firstTo:0, secondTo:3), throwsStateError);
+  });
+
   test('Rechaza hit sin destino de corredor existente', () {
     expect(() => state(first:true).hit(batterBase:1), throwsStateError);
   });

@@ -84,6 +84,13 @@ class SwlPlayState {
     if (occupied.toSet().length != occupied.length) {
       throw StateError('Dos corredores no pueden ocupar la misma base');
     }
+    final finishOrder = [batterBase, firstTo, secondTo, thirdTo]
+        .whereType<int>().map((base) => base == 0 ? 4 : base).toList();
+    for (var index = 1; index < finishOrder.length; index++) {
+      if (finishOrder[index] < finishOrder[index - 1]) {
+        throw StateError('Un corredor no puede sobrepasar a otro');
+      }
+    }
     final runs = destinations.where((d) => d == 0 || d == 4).length;
     return copy(balls: 0, strikes: 0,
       first: occupied.contains(1), second: occupied.contains(2),

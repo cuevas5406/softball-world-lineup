@@ -1,7 +1,5 @@
 import 'swl_live_lobby.dart';
-import 'swl_advanced_scoreboard.dart';
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -38,7 +36,7 @@ Future<void> main() async {
   try {
     await Supabase.initialize(
       url: kSupabaseUrl,
-      anonKey: kSupabaseAnonKey,
+      publishableKey: kSupabaseAnonKey,
     );
     runApp(const SoftballWorldApp());
   } catch (e) {
@@ -261,7 +259,12 @@ class _AuthTestGateState extends State<AuthTestGate> {
       );
     }
     if (!_showLogin) {
-      return SplashScreen(onContinue: () => setState(() => _showLogin = true));
+      return SplashScreen(
+        onContinue: () => setState(() => _showLogin = true),
+        onWatch: () => Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => const SwlLiveLobby(authorizedTeams: [], readOnly: true),
+        )),
+      );
     }
     return AuthLoginScreen(onClose: () => setState(() => _showLogin = false));
   }
@@ -427,15 +430,28 @@ class _SwlTeamLabPanelState extends State<SwlTeamLabPanel> {
 Future<List<Map<String, dynamic>>> swlAuthorizedTeams() async {
   final client = Supabase.instance.client;
   if (client.auth.currentUser == null) return [];
-  final rows = await client.from('teams').select('id, name, province').order('name').timeout(const Duration(seconds: 12));
+  const pageSize = 100;
+  const permissionBatchSize = 8;
   final allowed = <Map<String, dynamic>>[];
-  for (final raw in rows) {
-    final team = Map<String, dynamic>.from(raw);
-    final id = team['id']?.toString();
-    if (id == null || id.isEmpty) continue;
-    final permission = await client.rpc('swl_can_manage_roster', params: {'p_team_id': id}).timeout(const Duration(seconds: 8));
-    if (permission == true) allowed.add(team);
+  String? lastId;
+  while (true) {
+    final query = client.from('teams').select('id, name, province');
+    final page = await (lastId == null ? query : query.gt('id', lastId))
+        .order('id').limit(pageSize).timeout(const Duration(seconds: 12));
+    if (page.isEmpty) break;
+    for (var start = 0; start < page.length; start += permissionBatchSize) {
+      final batch = page.skip(start).take(permissionBatchSize);
+      final checks = await Future.wait(batch.map((team) async {
+        final allowed = await client.rpc('swl_can_manage_roster',
+            params: {'p_team_id': team['id']}).timeout(const Duration(seconds: 8));
+        return allowed == true ? team : null;
+      }));
+      allowed.addAll(checks.whereType<Map<String, dynamic>>());
+    }
+    lastId = page.last['id'].toString();
+    if (page.length < pageSize) break;
   }
+  allowed.sort((a, b) => a['name'].toString().compareTo(b['name'].toString()));
   return allowed;
 }
 
@@ -877,7 +893,8 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
 // =========================================================================
 class SplashScreen extends StatelessWidget {
   final VoidCallback onContinue;
-  const SplashScreen({super.key, required this.onContinue});
+  final VoidCallback? onWatch;
+  const SplashScreen({super.key, required this.onContinue, this.onWatch});
 
   final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
@@ -941,6 +958,8 @@ class SplashScreen extends StatelessWidget {
                       onPressed: onContinue,
                     ),
                   ),
+                  if (onWatch != null)
+                    TextButton(onPressed: onWatch, child: const Text('VER PARTIDO POR PIN')),
                   const SizedBox(height: 10),
                   const Text("República Dominicana · Internacional", style: TextStyle(color: Colors.white38, fontSize: 10)),
                 ],
@@ -1361,20 +1380,18 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     }
   }
 
-  // Estado del juego activo en vivo
   String? pendingJoinPin;
-  String activePin = "";
-  String activeHome = "Santiago";
-  String activeAway = "La Vega";
-  String activePlay = "Play Club Miramar";
+  String? scheduledOpponent;
+  String? scheduledHomeId;
+  int lobbyRequest = 0;
 
-  void _activateMatch(String pin, String home, String away, String play) {
+  void _activateMatch(String opponent, String homeId) {
     setState(() {
-      activePin = pin;
-      activeHome = home;
-      activeAway = away;
-      activePlay = play;
-      _currentIndex = 1; // Salta a la pizarra de inmediato
+      pendingJoinPin = null;
+      scheduledOpponent = opponent;
+      scheduledHomeId = homeId;
+      lobbyRequest++;
+      _currentIndex = 1;
     });
   }
 
@@ -1399,20 +1416,22 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
         onGameJoined: (pin) => setState(() {
           // La unión real se realiza mediante la RPC en SwlLiveLobby.
           pendingJoinPin = pin;
+          scheduledOpponent = null;
+          scheduledHomeId = null;
+          lobbyRequest++;
           _currentIndex = 1;
         }),
       ),
       MasterScoreboardTab(
-        userRole: widget.userRole,
-        gamePin: activePin,
+        key: ValueKey(lobbyRequest),
         initialJoinPin: pendingJoinPin,
-        homeTeam: activeHome,
-        awayTeam: activeAway,
-        stadium: activePlay,
+        initialOpponent: scheduledOpponent,
+        preferredHomeId: scheduledHomeId ?? _activeTeam?['id']?.toString(),
         authorizedTeams: widget.authorizedTeams,
       ),
       MasterScheduleTab(
         myTeamName: activeName,
+        teamId: _activeTeam?['id']?.toString(),
         onActivateMatch: _activateMatch,
       ),
       MasterTeamTab(
@@ -1722,22 +1741,16 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
 // PESTAÑA 2: PIZARRA OFICIAL EN VIVO (CONECTADA POR PIN DINÁMICO)
 // =========================================================================
 class MasterScoreboardTab extends StatefulWidget {
-  final String userRole;
-  final String gamePin;
   final String? initialJoinPin;
-  final String homeTeam;
-  final String awayTeam;
-  final String stadium;
+  final String? initialOpponent;
+  final String? preferredHomeId;
   final List<Map<String, dynamic>> authorizedTeams;
 
   const MasterScoreboardTab({
     super.key,
-    required this.userRole,
-    required this.gamePin,
     this.initialJoinPin,
-    required this.homeTeam,
-    required this.awayTeam,
-    required this.stadium,
+    this.initialOpponent,
+    this.preferredHomeId,
     required this.authorizedTeams,
   });
 
@@ -1748,9 +1761,10 @@ class MasterScoreboardTab extends StatefulWidget {
 class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
   @override
   Widget build(BuildContext context) => SwlLiveLobby(
-    key: ValueKey('live-lobby-${widget.initialJoinPin ?? 'manual'}'),
     authorizedTeams: widget.authorizedTeams,
     initialJoinPin: widget.initialJoinPin,
+    initialOpponent: widget.initialOpponent,
+    preferredHomeId: widget.preferredHomeId,
   );
 }
 
@@ -1759,18 +1773,81 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
 // =========================================================================
 class MasterScheduleTab extends StatefulWidget {
   final String myTeamName;
-  final Function(String pin, String home, String away, String play) onActivateMatch;
+  final String? teamId;
+  final void Function(String opponent, String homeId) onActivateMatch;
 
-  const MasterScheduleTab({super.key, required this.myTeamName, required this.onActivateMatch});
+  const MasterScheduleTab({
+    super.key,
+    required this.myTeamName,
+    required this.teamId,
+    required this.onActivateMatch,
+  });
 
   @override
   State<MasterScheduleTab> createState() => _MasterScheduleTabState();
 }
 
 class _MasterScheduleTabState extends State<MasterScheduleTab> {
-  DateTime selectedDate = DateTime(2026, 11, 14); // Sábado
-  TimeOfDay selectedTime = const TimeOfDay(hour: 19, minute: 45); // 7:45 PM
-  List<Map<String, String>> matches = [];
+  final List<Map<String, String>> matches = [];
+
+  Future<void> _scheduleChallenge() async {
+    final homeId = widget.teamId;
+    if (homeId == null) return;
+    var rival = '';
+    var stadium = '';
+    final today = DateUtils.dateOnly(DateTime.now());
+    var date = today;
+    var time = TimeOfDay.now();
+    final draft = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, update) {
+        final localization = MaterialLocalizations.of(ctx);
+        return AlertDialog(
+          backgroundColor: const Color(0xFF16202C),
+          title: const Text('Retar a un Equipo', style: TextStyle(color: Colors.amber)),
+          content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              onChanged: (value) => update(() => rival = value.trim()),
+              decoration: const InputDecoration(labelText: 'Nombre del equipo rival'),
+            ),
+            TextField(
+              onChanged: (value) => stadium = value.trim(),
+              decoration: const InputDecoration(labelText: 'Estadio'),
+            ),
+            TextButton(
+              onPressed: () async {
+                final value = await showDatePicker(context: ctx, initialDate: date,
+                    firstDate: today, lastDate: DateTime(today.year + 2));
+                if (value != null && ctx.mounted) update(() => date = value);
+              },
+              child: Text(localization.formatMediumDate(date)),
+            ),
+            TextButton(
+              onPressed: () async {
+                final value = await showTimePicker(context: ctx, initialTime: time);
+                if (value != null && ctx.mounted) update(() => time = value);
+              },
+              child: Text(localization.formatTimeOfDay(time)),
+            ),
+          ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
+            FilledButton(
+              onPressed: rival.isEmpty ? null : () => Navigator.pop(ctx, {
+                'date': '${localization.formatMediumDate(date)} · ${localization.formatTimeOfDay(time)}',
+                'away': rival,
+                'home': widget.myTeamName,
+                'homeId': homeId,
+                'play': stadium,
+              }),
+              child: const Text('RETAR'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (mounted && draft != null) setState(() => matches.add(draft));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1784,44 +1861,7 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4)),
             icon: const Icon(Icons.add, color: Colors.black, size: 16),
             label: const Text("RETAR", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
-            onPressed: () {
-              // Dialogo de retar
-              final rivalCtrl = TextEditingController();
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  backgroundColor: const Color(0xFF16202C),
-                  title: const Text("Retar a un Equipo", style: TextStyle(color: Colors.amber, fontSize: 15)),
-                  content: TextField(
-                    controller: rivalCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(labelText: "Nombre del Equipo Rival"),
-                  ),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("CANCELAR")),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-                      onPressed: () {
-                        if (rivalCtrl.text.isNotEmpty) {
-                          final pin = "SWL-${Random().nextInt(900) + 100}";
-                          setState(() {
-                            matches.add({
-                              "date": "Sábado · 7:45 PM",
-                              "home": rivalCtrl.text.trim(),
-                              "away": widget.myTeamName,
-                              "play": "Play Club Miramar",
-                              "pin": pin,
-                            });
-                          });
-                          Navigator.pop(ctx);
-                        }
-                      },
-                      child: const Text("RETAR", style: TextStyle(color: Colors.black)),
-                    ),
-                  ],
-                ),
-              );
-            },
+            onPressed: widget.teamId != null ? _scheduleChallenge : null,
           ),
           const SizedBox(width: 8),
         ],
@@ -1844,19 +1884,22 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(m["date"]!, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 11)),
-                          Text("PIN: ${m["pin"]!}", style: const TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 10)),
+                          const Text("BORRADOR", style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 10)),
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Text("${m["away"]!} vs ${m["home"]!}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      Text("${m["home"]!} vs ${m["away"]!}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      if (m['play']?.isNotEmpty == true)
+                        Text(m['play']!, style: const TextStyle(color: Colors.white70)),
                       const SizedBox(height: 8),
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.teal.shade700),
                           icon: const Icon(Icons.play_arrow, color: Colors.white, size: 18),
-                          label: const Text("🟢 ACTIVAR Y COMENZAR PARTIDO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: () => widget.onActivateMatch(m["pin"]!, m["home"]!, m["away"]!, m["play"]!),
+                          label: const Text("🟢 PREPARAR PARTIDO EN VIVO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
+                          onPressed: widget.teamId == null ? null :
+                              () => widget.onActivateMatch(m['away']!, m['homeId']!),
                         ),
                       ),
                     ],

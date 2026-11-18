@@ -1,6 +1,8 @@
+import 'swl_live_scoreboard_snapshot.dart';
 import 'dart:math';
+import 'dart:async';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
-import 'swl_lineup_identity.dart';
 
 // Modelo de Bateador con su historial turno por turno del juego
 class SwlScorePlayer {
@@ -157,7 +159,9 @@ class SwlScoreGameSnapshot {
 }
 
 class SwlAdvancedScoreboard extends StatefulWidget {
-  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam});
+  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction});
+  final SwlLiveScoreboardSnapshot? liveSnapshot;
+  final Future<void> Function(int version, String action, Map<String, dynamic>? hitParams)? onLiveAction;
   final String gamePin;
   final String homeTeam;
   final String awayTeam;
@@ -168,6 +172,226 @@ class SwlAdvancedScoreboard extends StatefulWidget {
 
 class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   late String visitorName;
+  Timer? _liveRefreshTimer;
+  SwlLiveScoreboardSnapshot? _currentLiveSnapshot;
+  bool _refreshInFlight = false;
+  bool _liveActionInFlight = false;
+  bool _lineupsLoading = false;
+  int _lastLineupRefreshVersion = -1;
+  int _livePollCount = 0;
+  String? _lineupLoadError;
+
+  Future<void> _loadLiveLineups() async {
+    final live = _currentLiveSnapshot;
+    if (!mounted || live == null || live.gameId.isEmpty || _lineupsLoading) return;
+    _lineupsLoading = true;
+    try {
+      final client = Supabase.instance.client;
+      final rawLineups = await client.from('swl_game_lineups')
+          .select('team_id,lineup').eq('game_id', live.gameId)
+          .timeout(const Duration(seconds: 12));
+      final rawTurns = await client.from('swl_game_batting_turns')
+          .select('team_id,next_order').eq('game_id', live.gameId)
+          .timeout(const Duration(seconds: 12));
+      // Estadísticas preliminares basadas solo en eventos confirmados de este partido.
+      final rawEvents = <Map<String, dynamic>>[];
+      const pageSize = 250;
+      for (var offset = 0; ; offset += pageSize) {
+        final page = await client.from('swl_game_events')
+            .select('event_type,event_data,inning,is_top')
+            .eq('game_id', live.gameId).lte('version', live.version)
+            .order('version').order('id').range(offset, offset + pageSize - 1)
+            .timeout(const Duration(seconds: 12));
+        rawEvents.addAll(page);
+        if (page.length < pageSize) break;
+        if (!mounted || _currentLiveSnapshot?.version != live.version) return;
+      }
+      final batterStats = <String, Map<String, int>>{};
+      for (final event in rawEvents) {
+        final data = event['event_data'];
+        if (data is! Map || data['batter_id'] == null) continue;
+        final playerId = data['batter_id'].toString();
+        final action = event['event_type']?.toString().toUpperCase();
+        final totals = batterStats.putIfAbsent(playerId,
+            () => {'ab': 0, 'hits': 0, 'bb': 0});
+        if (action == 'HIT') {
+          totals['ab'] = totals['ab']! + 1;
+          totals['hits'] = totals['hits']! + 1;
+        } else if (action == 'OUT' ||
+            (action == 'STRIKE' && data['plate_appearance_completed'] == true)) {
+          totals['ab'] = totals['ab']! + 1;
+        } else if (action == 'BALL' &&
+            data['plate_appearance_completed'] == true) {
+          totals['bb'] = totals['bb']! + 1;
+        }
+      }
+      final ids = <String>{};
+      for (final row in rawLineups) {
+        final slots = row['lineup'];
+        if (slots is List) {
+          for (final slot in slots) {
+            if (slot is Map && slot['player_id'] != null) {
+              ids.add(slot['player_id'].toString());
+            }
+          }
+        }
+      }
+      for (final event in rawEvents.reversed.take(50)) {
+        final data = event['event_data'];
+        if (data is Map && data['batter_id'] != null) {
+          ids.add(data['batter_id'].toString());
+        }
+      }
+      final players = <String, Map<String, dynamic>>{};
+      if (ids.isNotEmpty) {
+        final rows = await client.from('players')
+            .select('id,first_name,last_name,jersey_number')
+            .inFilter('id', ids.toList()).timeout(const Duration(seconds: 12));
+        for (final player in rows) {
+          players[player['id'].toString()] = Map<String, dynamic>.from(player);
+        }
+      }
+      List<SwlScorePlayer>? parseLineup(String teamId) {
+        for (final row in rawLineups) {
+          if (row['team_id']?.toString() != teamId) continue;
+          final slots = row['lineup'];
+          if (slots is! List || slots.isEmpty) return null;
+          final result = <SwlScorePlayer>[];
+          for (final slot in slots) {
+            if (slot is! Map) continue;
+            final id = slot['player_id']?.toString();
+            final player = players[id];
+            final name = player == null ? 'Pelotero no disponible' :
+                '${player['first_name'] ?? ''} ${player['last_name'] ?? ''}'.trim();
+            result.add(SwlScorePlayer(
+              name: name.isEmpty ? 'Pelotero no disponible' : name,
+              number: player?['jersey_number']?.toString() ?? '-',
+              playerId: id,
+              ab: batterStats[id]?['ab'] ?? 0,
+              hits: batterStats[id]?['hits'] ?? 0,
+              bb: batterStats[id]?['bb'] ?? 0,
+            ));
+          }
+          return result.isEmpty ? null : result;
+        }
+        return null;
+      }
+      int nextIndex(String teamId, int length) {
+        for (final row in rawTurns) {
+          if (row['team_id']?.toString() == teamId) {
+            final order = (row['next_order'] as num?)?.toInt() ?? 1;
+            return order >= 1 && order <= length ? order - 1 : 0;
+          }
+        }
+        return 0;
+      }
+      if (!mounted || _currentLiveSnapshot?.gameId != live.gameId ||
+          _currentLiveSnapshot?.version != live.version) return;
+      final history = rawEvents.reversed.take(50).map((event) {
+        final raw = event['event_data'];
+        final data = raw is Map ? raw : const {};
+        final player = players[data['batter_id']?.toString()];
+        final name = '${player?['first_name'] ?? ''} ${player?['last_name'] ?? ''}'.trim();
+        final action = event['event_type']?.toString();
+        final completed = data['plate_appearance_completed'] == true;
+        final hitBase = data['batter_base'];
+        final (notation, description) = switch (action) {
+          'HIT' => switch (hitBase) {
+            1 => ('H1', 'Sencillo'),
+            2 => ('H2', 'Doble'),
+            3 => ('H3', 'Triple'),
+            4 => ('HR', 'Jonrón'),
+            _ => ('H', 'Hit'),
+          },
+          'BALL' => completed ? ('BB', 'Base por bolas') : ('B', 'Bola'),
+          'STRIKE' => completed ? ('K', 'Ponche') : ('S', 'Strike'),
+          'OUT' => ('O', 'Out'),
+          'SUBSTITUTION' => ('SUST', 'Sustitución'),
+          'RUN' => ('CARRERA', 'Carrera registrada'),
+          'ERROR' => ('E', 'Error registrado'),
+          _ => ('JUGADA', 'Evento del partido'),
+        };
+        return SwlScorePlayRecord(
+          inning: (event['inning'] as num?)?.toInt() ?? live.inning,
+          isTopInning: event['is_top'] == true,
+          description: description,
+          notation: notation,
+          batterName: name.isEmpty ? 'Partido' : name,
+        );
+      }).toList();
+      final away = parseLineup(live.awayTeamId);
+      final home = parseLineup(live.homeTeamId);
+      setState(() {
+        playsLog
+          ..clear()
+          ..addAll(history);
+        if (away != null) {
+          visitorLineup = away;
+          visitorLineupIndex = nextIndex(live.awayTeamId, away.length);
+        }
+        if (home != null) {
+          homeLineup = home;
+          homeLineupIndex = nextIndex(live.homeTeamId, home.length);
+        }
+        _lastLineupRefreshVersion = live.version;
+        _lineupLoadError = null;
+      });
+    } catch (_) {
+      if (mounted && _currentLiveSnapshot?.gameId == live.gameId) setState(() => _lineupLoadError =
+          'No se pudo actualizar la alineación real');
+    } finally {
+      _lineupsLoading = false;
+    }
+  }
+
+  String? _liveActionError;
+
+  Future<void> _refreshLiveScore() async {
+    final snapshot = _currentLiveSnapshot;
+    if (!mounted || snapshot == null || snapshot.gameId.isEmpty || _refreshInFlight) return;
+    _refreshInFlight = true;
+    try {
+      final row = await Supabase.instance.client.from('swl_live_games')
+          .select().eq('id', snapshot.gameId).maybeSingle()
+          .timeout(const Duration(seconds: 12));
+      if (!mounted || row == null || _currentLiveSnapshot?.gameId != snapshot.gameId) return;
+      final latest = SwlLiveScoreboardSnapshot.fromGame(row);
+      final previous = _currentLiveSnapshot;
+      if (previous != null && latest.version < previous.version) return;
+      final versionChanged = latest.version != previous?.version;
+      // La autorización puede cambiar sin generar un evento de anotación.
+      // Actualizar también el estado de mánagers, turno y cierre del partido.
+      final accessChanged = latest.homeManagerId != previous?.homeManagerId ||
+          latest.awayManagerId != previous?.awayManagerId ||
+          latest.homeTeamId != previous?.homeTeamId ||
+          latest.awayTeamId != previous?.awayTeamId ||
+          latest.isTop != previous?.isTop ||
+          latest.status != previous?.status;
+      if (versionChanged || accessChanged) {
+        setState(() {
+          _currentLiveSnapshot = latest;
+          _syncLiveSnapshot();
+        });
+      }
+      // Una alineación puede cambiar sin incrementar la versión del marcador.
+      // Revalidarla periódicamente evita mostrar un orden al bate obsoleto.
+      _livePollCount++;
+      if (versionChanged || _livePollCount % 3 == 0) {
+        await _loadLiveLineups();
+      }
+    } catch (_) {
+      // La pizarra conserva el último estado conocido sin conexión.
+    } finally {
+      _refreshInFlight = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _liveRefreshTimer?.cancel();
+    super.dispose();
+  }
+
   late String homeName;
 
   List<int?> visitorInningRuns = [0, null, null, null, null, null];
@@ -196,6 +420,53 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     homeName = widget.homeTeam;
     visitorPitcher = SwlScorePitcher(name: 'Lanzador visitante', number: '-', teamName: visitorName);
     homePitcher = SwlScorePitcher(name: 'Lanzador local', number: '-', teamName: homeName);
+    _currentLiveSnapshot = widget.liveSnapshot;
+    _syncLiveSnapshot();
+    if (widget.liveSnapshot != null) {
+      Future.microtask(_loadLiveLineups);
+      _liveRefreshTimer = Timer.periodic(
+        const Duration(seconds: 4), (_) => _refreshLiveScore());
+    }
+  }
+
+  // Vista de lectura de un partido real: conserva el diseño original, pero
+  // impide que los controles locales alteren un marcador de demostración.
+  void _syncLiveSnapshot() {
+    final live = _currentLiveSnapshot;
+    if (live == null) return;
+    inning = live.inning;
+    isTopInning = live.isTop;
+    balls = live.balls;
+    strikes = live.strikes;
+    outs = live.outs;
+    visitorHits = live.awayHits;
+    homeHits = live.homeHits;
+    visitorErrors = live.awayErrors;
+    homeErrors = live.homeErrors;
+    on1B = live.firstOccupied;
+    on2B = live.secondOccupied;
+    on3B = live.thirdOccupied;
+    visitorInningRuns = List<int?>.from(live.awayInnings);
+    homeInningRuns = List<int?>.from(live.homeInnings);
+    while (visitorInningRuns.length < inning) { visitorInningRuns.add(null); }
+    while (homeInningRuns.length < inning) { homeInningRuns.add(null); }
+  }
+
+  @override
+  void didUpdateWidget(covariant SwlAdvancedScoreboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final incoming = widget.liveSnapshot;
+    final current = _currentLiveSnapshot;
+    if (incoming != oldWidget.liveSnapshot && (incoming == null ||
+        incoming.gameId != current?.gameId ||
+        incoming.version >= current!.version)) {
+      _currentLiveSnapshot = incoming;
+      _syncLiveSnapshot();
+      if (incoming != null && (incoming.version != current?.version ||
+          incoming.gameId != current?.gameId)) {
+        Future.microtask(_loadLiveLineups);
+      }
+    }
   }
 
   // Lanzadores abridores
@@ -473,8 +744,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   final List<SwlScoreGameSnapshot> _history = [];
 
   int get currentInningsCount => max(6, max(visitorInningRuns.length, inning));
-  int get visitorTotalRuns => visitorInningRuns.whereType<int>().fold(0, (a, b) => a + b);
-  int get homeTotalRuns => homeInningRuns.whereType<int>().fold(0, (a, b) => a + b);
+  int get visitorTotalRuns => _currentLiveSnapshot?.awayRuns ?? visitorInningRuns.whereType<int>().fold(0, (a, b) => a + b);
+  int get homeTotalRuns => _currentLiveSnapshot?.homeRuns ?? homeInningRuns.whereType<int>().fold(0, (a, b) => a + b);
 
   void _saveState() {
     _history.add(SwlScoreGameSnapshot(
@@ -737,8 +1008,14 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   // ACCIÓN: BASE POR BOLAS (BB)
   void _recordWalk() {
-    final batter = currentBatter;
-    final pitcher = activePitcher;
+    final batter = widget.liveSnapshot == null ||
+            _lastLineupRefreshVersion == _currentLiveSnapshot?.version
+        ? currentBatter
+        : SwlScorePlayer(name: 'Bateador por sincronizar', number: '-');
+    final pitcher = widget.liveSnapshot == null
+        ? activePitcher
+        : SwlScorePitcher(name: 'Lanzador por sincronizar', number: '-',
+            teamName: isTopInning ? homeName : visitorName);
 
     batter.bb++;
     pitcher.walks++; // Suma boleto al lanzador
@@ -1315,17 +1592,24 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   @override
   Widget build(BuildContext context) {
-    final batter = currentBatter;
-    final pitcher = activePitcher;
+    final syncedBatter = _lastLineupRefreshVersion == _currentLiveSnapshot?.version &&
+        currentBatter.playerId != null;
+    final batter = widget.liveSnapshot == null || syncedBatter
+        ? currentBatter
+        : SwlScorePlayer(name: 'Bateador por sincronizar', number: '-');
+    final pitcher = widget.liveSnapshot == null
+        ? activePitcher
+        : SwlScorePitcher(name: 'Lanzador por sincronizar', number: '-',
+            teamName: isTopInning ? homeName : visitorName);
 
-    return Scaffold(
+    final scoreboard = Scaffold(
       backgroundColor: const Color(0xFF0B1118),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16202C),
         elevation: 0,
-        title: const Text("⚾ PIZARRA · PRUEBA LOCAL", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+        title: Text(widget.liveSnapshot == null ? '⚾ PIZARRA · PRUEBA LOCAL' : '⚾ PIZARRA · EN VIVO', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
         actions: [
-          PopupMenuButton<String>(
+          if (widget.liveSnapshot == null) PopupMenuButton<String>(
             tooltip: 'Sustituciones',
             icon: const Icon(Icons.swap_horiz, color: Colors.amber),
             onSelected: (value) => _substituteBatter(value == 'visitor'),
@@ -1334,7 +1618,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               PopupMenuItem(value: 'home', child: Text('Sustituir · $homeName')),
             ],
           ),
-          PopupMenuButton<String>(
+          if (widget.liveSnapshot == null) PopupMenuButton<String>(
             tooltip: 'Configurar alineaciones',
             icon: const Icon(Icons.groups, color: Colors.amber),
             onSelected: (value) => _editLineup(value == 'visitor'),
@@ -1343,7 +1627,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               PopupMenuItem(value: 'home', child: Text('Alineación · $homeName')),
             ],
           ),
-          IconButton(
+          if (widget.liveSnapshot == null) IconButton(
             icon: const Icon(Icons.undo, color: Colors.amber, size: 26),
             tooltip: "Deshacer",
             onPressed: _history.isEmpty ? null : _undo,
@@ -1355,7 +1639,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           children: [
             Padding(
               padding: const EdgeInsets.all(6),
-              child: Text('PIN: ${widget.gamePin} · SOLO DEMOSTRACIÓN LOCAL · SIN SINCRONIZACIÓN',
+              child: Text(widget.liveSnapshot == null ? 'PIN: ${widget.gamePin} · SOLO DEMOSTRACIÓN LOCAL · SIN SINCRONIZACIÓN' : 'PIN: ${widget.gamePin} · ${widget.onLiveAction == null ? 'SOLO LECTURA' : 'ANOTACIÓN POR EQUIPO'}',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold)),
             ),
@@ -1371,7 +1655,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   Expanded(
                     flex: 6,
                     child: InkWell(
-                      onTap: _showBatterDetailsModal,
+                      onTap: widget.liveSnapshot == null ? _showBatterDetailsModal : null,
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
@@ -1399,7 +1683,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              "de ${batter.ab}-${batter.hits} (${batter.battingAverage})",
+                              widget.liveSnapshot == null || syncedBatter
+                                  ? "de ${batter.ab}-${batter.hits} (${batter.battingAverage})"
+                                  : (_lineupLoadError ?? "Estadísticas individuales pendientes de sincronización"),
                               style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.w900, fontSize: 11),
                             ),
                           ],
@@ -1414,7 +1700,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   Expanded(
                     flex: 5,
                     child: InkWell(
-                      onTap: _showPitcherDetailsModal,
+                      onTap: widget.liveSnapshot == null ? _showPitcherDetailsModal : null,
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
@@ -1442,7 +1728,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              "${pitcher.ip} IP · ${pitcher.strikeouts} K",
+                              widget.liveSnapshot == null
+                                  ? "${pitcher.ip} IP · ${pitcher.strikeouts} K"
+                                  : "— IP · — K",
                               style: const TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.w900, fontSize: 11),
                             ),
                           ],
@@ -1520,6 +1808,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         ),
       ),
     );
+    return scoreboard;
   }
 
   Widget _buildMlbLineScore() {
@@ -1726,7 +2015,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   Widget _baseNode(bool occupied, VoidCallback onTap) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: widget.liveSnapshot == null ? onTap : null,
       child: Transform.rotate(
         angle: pi / 4,
         child: Container(
@@ -1741,7 +2030,193 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     );
   }
 
+  // Selector de batazo dentro de la pizarra oficial, nunca en la pantalla PIN.
+  Future<Map<String, dynamic>?> _chooseLiveHit() async {
+    final live = _currentLiveSnapshot;
+    if (live == null) return null;
+    final client = Supabase.instance.client;
+    final game = await client.from('swl_live_games').select()
+        .eq('id', live.gameId).single().timeout(const Duration(seconds: 12));
+    if ((game['version'] as num?)?.toInt() != live.version) {
+      throw StateError('La jugada cambió; actualiza el marcador');
+    }
+    final uid = client.auth.currentUser?.id;
+    final top = game['is_top'] == true;
+    final manager = top ? game['away_manager_id'] : game['home_manager_id'];
+    if (uid == null || manager?.toString() != uid ||
+        game['status'] != 'IN_PROGRESS') {
+      throw StateError('El partido no está en curso o no corresponde tu turno');
+    }
+    final rawTeamId = top ? game['away_team_id'] : game['home_team_id'];
+    final teamId = rawTeamId?.toString();
+    if (teamId == null || teamId.isEmpty) {
+      throw StateError('Equipo al bate no identificado');
+    }
+    final lineupRow = await client.from('swl_game_lineups').select('lineup')
+        .eq('game_id', live.gameId).eq('team_id', teamId).maybeSingle().timeout(const Duration(seconds: 12));
+    final lineup = lineupRow?['lineup'];
+    if (lineup is! List || lineup.length < 9) {
+      throw StateError('Alineación no disponible');
+    }
+    final turn = await client.from('swl_game_batting_turns')
+        .select('next_order').eq('game_id', live.gameId)
+        .eq('team_id', teamId).maybeSingle().timeout(const Duration(seconds: 12));
+    final order = (turn?['next_order'] as num?)?.toInt() ?? 1;
+    if (order < 1 || order > lineup.length) {
+      throw StateError('Turno al bate inválido');
+    }
+    final batterId = (lineup[order - 1] as Map)['player_id']?.toString();
+    if (batterId == null || batterId.isEmpty) {
+      throw StateError('Bateador no disponible');
+    }
+    // Mostrar la identidad del bateador del turno real, no un jugador demo.
+    final batterRow = await client.from('players')
+        .select('first_name,last_name,jersey_number,universal_id')
+        .eq('id', batterId).maybeSingle().timeout(const Duration(seconds: 12));
+    if (batterRow == null) {
+      throw StateError('No se encontró el pelotero del turno actual');
+    }
+    final batterName = [batterRow['first_name'], batterRow['last_name']]
+        .where((part) => part != null && part.toString().trim().isNotEmpty)
+        .map((part) => part.toString().trim()).join(' ');
+    final batterJersey = batterRow['jersey_number']?.toString() ?? '—';
+    final batterCode = batterRow['universal_id']?.toString() ?? '—';
+    final bases = Map<String, dynamic>.from(game['bases_state'] as Map? ?? {});
+    final first = bases['first'] == true;
+    final second = bases['second'] == true;
+    final third = bases['third'] == true;
+    int batterBase = 1;
+    // Avance sugerido según el tipo de batazo; editable por el mánager.
+    // El valor 0 indica que el corredor anotó.
+    int destination(int initialBase, int hitBases) {
+      final next = initialBase + hitBases;
+      return next >= 4 ? 0 : next;
+    }
+    int? firstTo = first ? destination(1, batterBase) : null;
+    int? secondTo = second ? destination(2, batterBase) : null;
+    int? thirdTo = third ? destination(3, batterBase) : null;
+    if (!mounted) return null;
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) {
+          Widget choice(String title, int value, List<int> options,
+              void Function(int) change) => DropdownButtonFormField<int>(
+            value: value,
+            decoration: InputDecoration(labelText: title),
+            items: [for (final n in options) DropdownMenuItem(
+              value: n, child: Text(n == 0 ? 'Anota carrera' : n == 4
+                  ? 'Jonrón' : 'Base $n'))],
+            onChanged: (n) { if (n != null) update(() => change(n)); },
+          );
+          int? runs;
+          try {
+            final preview = live.playState.hit(
+              batterBase: batterBase, firstTo: firstTo,
+              secondTo: secondTo, thirdTo: thirdTo,
+            );
+            runs = live.isTop ? preview.awayRuns - live.awayRuns :
+                preview.homeRuns - live.homeRuns;
+          } on StateError {
+            // El botón permanece desactivado hasta que los destinos sean válidos.
+          }
+          return AlertDialog(
+            title: const Text('BATAZO · PIZARRA OFICIAL'),
+            content: SingleChildScrollView(child: Column(
+              mainAxisSize: MainAxisSize.min, children: [
+                Text('Turno $order · $batterName  #$batterJersey\n$batterCode'),
+                choice('Batazo del bateador', batterBase, [1, 2, 3, 4], (n) {
+                  batterBase = n;
+                  if (first) firstTo = destination(1, n);
+                  if (second) secondTo = destination(2, n);
+                  if (third) thirdTo = destination(3, n);
+                }),
+                if (first) choice('Corredor en primera', firstTo!, [2, 3, 0],
+                    (n) => firstTo = n),
+                if (second) choice('Corredor en segunda', secondTo!, [2, 3, 0],
+                    (n) => secondTo = n),
+                if (third) choice('Corredor en tercera', thirdTo!, [3, 0],
+                    (n) => thirdTo = n),
+                if (runs != null) Text('Carreras de la jugada: $runs'),
+                if (runs == null) const Text('Revisa el orden y los destinos de los corredores',
+                    style: TextStyle(color: Colors.redAccent)),
+              ],
+            )),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('CANCELAR')),
+              FilledButton(onPressed: runs == null ? null : () =>
+                  Navigator.pop(dialogContext, {
+                    'p_batter_id': batterId,
+                    'p_batter_base': batterBase,
+                    'p_first_to': firstTo,
+                    'p_second_to': secondTo,
+                    'p_third_to': thirdTo,
+                  }), child: const Text('CONFIRMAR BATAZO')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _submitLiveAction(String action) async {
+    final snapshot = _currentLiveSnapshot;
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (_liveActionInFlight || widget.onLiveAction == null ||
+        snapshot?.canScore(userId) != true) return;
+    setState(() { _liveActionInFlight = true; _liveActionError = null; });
+    try {
+      final hitParams = action == 'HIT' ? await _chooseLiveHit() : null;
+      if (action == 'HIT' && hitParams == null) return;
+      await widget.onLiveAction!(snapshot!.version, action, hitParams);
+      await _refreshLiveScore();
+    } catch (error) {
+      if (mounted) setState(() => _liveActionError =
+          'No se pudo registrar la jugada: $error');
+    } finally {
+      if (mounted) setState(() => _liveActionInFlight = false);
+    }
+  }
+
+  Widget _buildLiveMainButtons() {
+    final snapshot = _currentLiveSnapshot;
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    final allowed = snapshot?.canScore(userId) == true &&
+        widget.onLiveAction != null && !_liveActionInFlight;
+    Widget liveButton(String label, String action, Color color) => Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: color,
+            disabledBackgroundColor: const Color(0xFF26313C),
+            padding: const EdgeInsets.symmetric(vertical: 15)),
+          onPressed: allowed ? () => _submitLiveAction(action) : null,
+          child: Text(label, style: const TextStyle(fontSize: 12,
+            fontWeight: FontWeight.w900, color: Colors.white)),
+        ),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (!allowed && !_liveActionInFlight)
+          const Text('Solo anota el mánager del equipo al bate',
+            style: TextStyle(color: Colors.amber, fontSize: 11)),
+        if (_liveActionError != null)
+          Text(_liveActionError!, style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
+        Row(children: [
+          liveButton('BOLA', 'BALL', const Color(0xFF10B981)),
+          liveButton('STRIKE', 'STRIKE', const Color(0xFFEF4444)),
+          liveButton('OUT', 'OUT', const Color(0xFFF59E0B)),
+          liveButton('BATAZO / HIT', 'HIT', const Color(0xFF8B5CF6)),
+        ]),
+      ]),
+    );
+  }
+
   Widget _buildMainButtons() {
+    if (widget.liveSnapshot != null) return _buildLiveMainButtons();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10),
       child: Column(

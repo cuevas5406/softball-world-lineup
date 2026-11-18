@@ -1,0 +1,15 @@
+Flutter 3.50.0 · Eclipse Temurin JDK 21 · Android SDK 36
+flutter build apk --no-pub --release
+Salida del comando: 0
+Running Gradle task 'assembleRelease'...
+Running Gradle task 'assembleRelease'...                          138.6s
+✓ Built build/app/outputs/flutter-apk/app-release.apk (55.5MB)
+
+apksigner verify --print-certs: salida 0
+package: name='com.softballworld.lineup.softball_world_lineup' versionCode='1' versionName='1.0.0' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'
+sdkVersion:'24'
+targetSdkVersion:'36'
+native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'
+Tamaño: 55461974 bytes
+SHA-256: fd816aec24fee40bfadb6000753a0206ae6d003c049a5d7ad9f18613ec145eae
+Compilación con valor de prueba para la configuración de Supabase.

@@ -1,0 +1,85 @@
+flutter test --no-pub --reporter expanded
+
+00:00 +0: loading test/swl_official_scoreboard_test.dart
+00:00 +0: test/swl_official_scoreboard_test.dart: (setUpAll)
+00:00 +0: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +1: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +2: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +3: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +4: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +5: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +6: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +7: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +8: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +9: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +10: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +11: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +12: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +13: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +14: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +15: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +16: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +17: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +18: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +19: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +20: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +21: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +22: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +23: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +24: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +25: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +26: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +27: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:00 +28: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +29: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +30: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +31: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +32: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +33: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +34: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +35: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +36: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +37: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +38: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +39: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +40: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +41: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +42: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +43: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +44: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +45: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +46: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +47: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +48: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +49: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +50: test/swl_play_rules_test.dart: Elevado de sacrificio anota corredor de tercera
+00:01 +51: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +52: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +53: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +54: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +55: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +56: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +57: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +58: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +59: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:01 +59: test/swl_play_rules_test.dart: No se puede retirar corredor inexistente
+00:01 +60: test/swl_play_rules_test.dart: Rechaza base fuera de rango
+00:01 +61: test/swl_play_rules_test.dart: Doble play con cero outs registra dos outs
+00:01 +62: test/swl_play_rules_test.dart: Doble play con un out termina media entrada
+00:01 +63: test/swl_play_rules_test.dart: Doble play exige corredor real
+00:01 +64: test/swl_play_rules_test.dart: Doble play rechaza dos outs previos
+00:01 +65: test/swl_play_rules_test.dart: Doble play no elimina otros corredores con cero outs
+00:01 +66: test/swl_play_rules_test.dart: Hit rechaza corredor que usa 4 en vez de 0 para anotar
+00:01 +67: test/swl_play_rules_test.dart: Hit permite jonrón de bateador con corredor que anota con 0
+00:01 +68: test/swl_play_rules_test.dart: Avance de corredores rechaza conteo de outs inválido
+00:01 +69: test/swl_play_rules_test.dart: Jonrón con corredor en primera exige que anote
+00:01 +70: test/swl_play_rules_test.dart: Jonrón con bases llenas no deja corredores en base
+00:01 +71: test/swl_play_rules_test.dart: Boleto rechaza outs inválidos
+00:01 +72: test/swl_play_rules_test.dart: Hit rechaza strikes inválidos
+00:01 +73: test/swl_play_rules_test.dart: Ponche rechaza inning inválido
+00:01 +74: test/swl_play_rules_test.dart: Doble play rechaza marcador negativo
+00:01 +75: test/swl_play_rules_test.dart: Sencillo permite corredor en segunda quedarse si no forzado
+00:01 +76: test/swl_play_rules_test.dart: Sencillo obliga corredor de primera a avanzar
+00:01 +77: test/swl_play_rules_test.dart: Bases llenas fuerzan corredor de tercera a anotar
+00:01 +78: test/swl_play_rules_test.dart: Sencillo permite corredor de tercera quedarse
+00:01 +79: All tests passed!

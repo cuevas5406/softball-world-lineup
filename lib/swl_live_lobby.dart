@@ -1,3 +1,5 @@
+import 'swl_advanced_scoreboard.dart';
+import 'swl_live_scoreboard_snapshot.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +12,17 @@ import 'swl_substitution_rules.dart';
 class SwlLiveLobby extends StatefulWidget {
   final List<Map<String, dynamic>> authorizedTeams;
   final String? initialJoinPin;
-  const SwlLiveLobby({super.key, required this.authorizedTeams, this.initialJoinPin});
+  final bool readOnly;
+  final String? initialOpponent;
+  final String? preferredHomeId;
+  const SwlLiveLobby({
+    super.key,
+    required this.authorizedTeams,
+    this.initialJoinPin,
+    this.readOnly = false,
+    this.initialOpponent,
+    this.preferredHomeId,
+  });
 
   @override
   State<SwlLiveLobby> createState() => _SwlLiveLobbyState();
@@ -25,6 +37,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   Map<String, dynamic>? _away;
   final Map<String, String> _teamNames = {};
   Map<String, dynamic>? _game;
+  final _scoreboard = ValueNotifier<SwlLiveScoreboardSnapshot?>(null);
   List<Map<String, dynamic>> _savedLineups = [];
   Map<String, String> _lineupPlayerNames = {};
   bool _lineupsLoading = false;
@@ -42,14 +55,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   bool _uncertainPlay = false;
   int _recordGeneration = 0;
   String? _scoringMessage;
-  // RPC swl_v53_record_play instalado y verificado en LAB.
-  // SOLO contadores básicos; no representa una anotación completa.
-  static const bool _scoringBackendReady = true;
   bool _searching = false;
   bool _refreshing = false;
   bool _refreshQueued = false;
   int _watchGeneration = 0;
-  DateTime? _lastSuccessfulRefresh;
   String? _connectionWarning;
   List<Map<String, dynamic>> _recentEvents = [];
   List<Map<String, dynamic>> _substitutionHistory = [];
@@ -71,19 +80,25 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   String? _error;
   // V5.5: acceso guiado. El PIN identifica el partido; la sesión autoriza el equipo.
   bool _teamConfirmed = false;
-  bool _scoreboardOpened = false;
 
   @override
   void initState() {
     super.initState();
-    _homeId = widget.authorizedTeams.isEmpty
-        ? null
-        : widget.authorizedTeams.first['id']?.toString();
-    if (widget.initialJoinPin != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _joinFromPin(widget.initialJoinPin!);
-      });
-    }
+    final primaryTeam = widget.preferredHomeId;
+    _homeId = widget.authorizedTeams.any((team) => team['id']?.toString() == primaryTeam)
+        ? primaryTeam
+        : widget.authorizedTeams.firstOrNull?['id']?.toString();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final pin = widget.initialJoinPin;
+      final opponent = widget.initialOpponent;
+      if (pin != null) {
+        _joinFromPin(pin);
+      } else if (opponent != null) {
+        _teamSearch.text = opponent;
+        _searchTeams(opponent);
+      }
+    });
   }
 
   Future<void> _joinFromPin(String supplied) async {
@@ -95,9 +110,26 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       return;
     }
     _pin.text = digits;
-    await _run(() => _client.rpc('swl_v5_join_game',
-        params: {'p_game_pin': 'SWL-$digits'}));
-    if (_game != null) await _loadNames();
+    final pin = 'SWL-$digits';
+    await _run(() async {
+      final game = await _client.from('swl_live_games')
+          .select().eq('game_pin', pin).maybeSingle()
+          .timeout(const Duration(seconds: 12));
+      final userId = _client.auth.currentUser?.id;
+      final teams = widget.authorizedTeams;
+      if (!widget.readOnly && userId != null && teams.isNotEmpty) {
+        final canJoin = game == null ||
+            (game['home_manager_id'] != userId &&
+             game['away_manager_id'] == null &&
+             game['status'] != 'FINAL' && game['status'] != 'OFFICIAL' &&
+             teams.any((team) => team['id'] == game['away_team_id']));
+        if (canJoin) {
+          return _client.rpc('swl_v5_join_game', params: {'p_game_pin': pin});
+        }
+      }
+      if (game == null) throw StateError('Partido no disponible para este PIN.');
+      return game;
+    });
   }
 
   Future<void> _searchTeams(String term) async {
@@ -110,16 +142,22 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     setState(() => _searching = true);
     _searchTimer = Timer(const Duration(milliseconds: 350), () async {
       try {
-        final safe = term.trim().replaceAll('%', r'\%').replaceAll('_', r'\_');
-        final rows = await _client.from('teams')
-            .select('id,name,province')
-            .or('name.ilike.%$safe%,province.ilike.%$safe%')
-            .order('name').limit(20);
+        final safe = term.trim().replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
+        final searches = await Future.wait([
+          for (final column in ['name', 'province'])
+            _client.from('teams').select('id,name,province')
+                .ilike(column, '%$safe%').order('name').order('id').limit(20),
+        ]).timeout(const Duration(seconds: 12));
+        final teams = {
+          for (final results in searches)
+            for (final team in results)
+              if (team['id'].toString() != _homeId) team['id']: team,
+        }.values.toList();
+        teams.sort((a, b) => a['name'].toString().compareTo(b['name'].toString()));
         if (!mounted || searchGeneration != _searchGeneration ||
             _teamSearch.text.trim() != term.trim()) return;
         setState(() {
-          _matches = List<Map<String, dynamic>>.from(rows)
-              .where((t) => t['id'].toString() != _homeId).toList();
+          _matches = teams.take(20).toList();
           _searching = false;
         });
       } catch (e) {
@@ -134,19 +172,17 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     if (_busy) return;
     setState(() { _busy = true; _error = null; });
     try {
-      final result = await action();
+      final result = await action().timeout(const Duration(seconds: 20));
       if (!mounted) return;
       final game = Map<String, dynamic>.from(result as Map);
       setState(() {
         _game = game;
         _teamConfirmed = false;
-        _scoreboardOpened = false;
         _savedLineups = [];
         _lineupPlayerNames = {};
         _lineupsError = null;
         _lineupsGeneration++;
         _connectionWarning = null;
-        _lastSuccessfulRefresh = null;
         _recentEvents = [];
         _substitutionHistory = [];
         _substitutionHistoryGeneration++;
@@ -162,10 +198,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         _recording = false;
         _scoringMessage = null;
       });
+      _scoreboard.value = SwlLiveScoreboardSnapshot.fromGame(game);
       _subscribe(game['id'].toString());
-      _loadSubstitutionHistory();
       await _refreshGame();
-      await _loadSavedLineups();
+      if (_myTeamId(game) != null) await _loadSavedLineups();
       await _loadNames();
     } catch (e) {
       if (mounted) setState(() => _error = 'No se pudo completar la operación: $e');
@@ -193,9 +229,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         if (incomingVersion >= currentVersion) {
           setState(() {
             _game = incoming;
-            _lastSuccessfulRefresh = DateTime.now();
             _connectionWarning = null;
           });
+          _scoreboard.value = SwlLiveScoreboardSnapshot.fromGame(incoming);
         }
       }
     } catch (_) {
@@ -334,7 +370,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   // Historial de solo lectura. No crea ni modifica eventos.
   Future<void> _loadRecentEvents() async {
     final id = _game?['id']?.toString();
-    if (id == null || (_eventsLoading && _eventsRequestGameId == id)) return;
+    if (!mounted || id == null || (_eventsLoading && _eventsRequestGameId == id)) return;
     _eventsRequestGameId = id;
     final requestGeneration = ++_eventsRequestGeneration;
     setState(() {
@@ -346,7 +382,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       final rows = await _client.from('swl_game_events')
           .select('id,inning,is_top,event_type,event_data,created_at,version')
           .eq('game_id', id)
-          .order('id', ascending: false)
+          .order('version', ascending: false)
           .limit(20)
           .timeout(const Duration(seconds: 12));
       final ids = <String>{};
@@ -434,7 +470,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
 
   Future<void> _loadBattingStats() async {
     final id = _game?['id']?.toString();
-    if (id == null) return;
+    if (!mounted || id == null) return;
     if (_battingStatsLoading) {
       _battingStatsQueued = true;
       return;
@@ -621,308 +657,152 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         'El conteo de bolas y strikes se reiniciará.';
   }
 
-  /// Valida la vista previa; Supabase LAB vuelve a verificar todo bajo bloqueo.
-  String? _hitDestinationError(int batterBase, bool first, bool second,
-      bool third, int? firstTo, int? secondTo, int? thirdTo) {
-    if (batterBase < 1 || batterBase > 4) return 'Base del bateador inválida.';
-    if ((first && firstTo == null) || (second && secondTo == null) ||
-        (third && thirdTo == null)) return 'Falta el destino de un corredor.';
-    if ((!first && firstTo != null) || (!second && secondTo != null) ||
-        (!third && thirdTo != null)) return 'Hay un corredor inexistente.';
-    if (first && ![0, 2, 3].contains(firstTo)) return 'Destino de primera inválido.';
-    if (second && ![0, 2, 3].contains(secondTo)) return 'Destino de segunda inválido.';
-    if (third && ![0, 3].contains(thirdTo)) return 'Destino de tercera inválido.';
-    if (first && second && secondTo == 2) {
-      return 'El corredor de segunda debe avanzar: está forzado.';
-    }
-    if (first && second && third && thirdTo == 3) {
-      return 'Con bases llenas, el corredor de tercera debe anotar.';
-    }
-    if (batterBase == 4 &&
-        ((first && firstTo != 0) || (second && secondTo != 0) ||
-         (third && thirdTo != 0))) {
-      return 'El jonrón debe impulsar a todos los corredores a home.';
-    }
-    final occupied = <int>[batterBase, if (first) firstTo!,
-      if (second) secondTo!, if (third) thirdTo!]
-        .where((base) => base != 0 && base != 4).toList();
-    if (occupied.toSet().length != occupied.length) {
-      return 'Dos corredores no pueden ocupar la misma base.';
-    }
-    return null;
-  }
-
-  /// Captura los destinos de TODOS los corredores antes de anotar el hit.
-  /// La versión se vuelve a verificar al confirmar para evitar jugadas obsoletas.
-  Future<void> _showHitDialog() async {
-    final game = _game;
-    if (game == null || _recording || _confirmingPlay || _uncertainPlay ||
-        _substitutionPending || _substitutionUncertain) return;
-    final gameId = game['id']?.toString();
-    final version = game['version'];
-    final bases = Map<String, dynamic>.from(game['bases_state'] as Map? ?? {});
-    final first = bases['first'] == true;
-    final second = bases['second'] == true;
-    final third = bases['third'] == true;
-    final battingTeamId = (game['is_top'] == true
-        ? game['away_team_id'] : game['home_team_id'])?.toString();
-    final matching = _savedLineups.where(
-        (row) => row['team_id']?.toString() == battingTeamId);
-    final slots = matching.isEmpty ? <dynamic>[] :
-        List<dynamic>.from(matching.first['lineup'] as List? ?? []);
-    final batterIds = slots.whereType<Map>().map(
-        (slot) => slot['player_id']?.toString() ?? '').where(
-        (id) => id.isNotEmpty).toList();
-    if (batterIds.isEmpty) {
-      if (mounted) setState(() => _scoringMessage =
-          'Primero guarda y actualiza la alineación del equipo que batea.');
-      return;
-    }
-    // La fuente de verdad del turno es LAB, no una selección manual.
-    int nextOrder = 1;
-    try {
-      final cursor = await _client.from('swl_game_batting_turns')
-          .select('next_order')
-          .eq('game_id', gameId!)
-          .eq('team_id', battingTeamId!)
-          .maybeSingle()
-          .timeout(const Duration(seconds: 12));
-      nextOrder = (cursor?['next_order'] as num?)?.toInt() ?? 1;
-    } catch (_) {
-      if (mounted) setState(() => _scoringMessage =
-          'No se pudo consultar el turno al bate. Actualiza y reintenta.');
-      return;
-    }
-    if (!mounted || _game?['id']?.toString() != gameId ||
-        nextOrder < 1 || nextOrder > batterIds.length) {
-      if (mounted) setState(() => _scoringMessage =
-          'Turno no válido. Revisa la alineación y actualiza el partido.');
-      return;
-    }
-    final batterId = batterIds[nextOrder - 1];
-    int batterBase = 1;
-    int? firstTo = first ? 2 : null;
-    int? secondTo = second ? (first ? 3 : 2) : null;
-    int? thirdTo = third ? (first && second ? 0 : 3) : null;
-    setState(() => _confirmingPlay = true);
-    Map<String, dynamic>? selected;
-    try {
-      selected = await showDialog<Map<String, dynamic>>(
-        context: context,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (context, updateDialog) {
-            Widget destination(String label, int? current, void Function(int) change,
-                List<int> options) => DropdownButtonFormField<int>(
-              value: current,
-              decoration: InputDecoration(labelText: label),
-              items: [for (final v in options) DropdownMenuItem(
-                value: v, child: Text(v == 0 ? 'Anota carrera' : 'Base $v'))],
-              onChanged: (v) { if (v != null) updateDialog(() => change(v)); },
-            );
-            final destinationError = _hitDestinationError(
-                batterBase, first, second, third, firstTo, secondTo, thirdTo);
-            final runs = (batterBase == 4 ? 1 : 0) +
-                (firstTo == 0 ? 1 : 0) +
-                (secondTo == 0 ? 1 : 0) +
-                (thirdTo == 0 ? 1 : 0);
-            return AlertDialog(
-              title: const Text('Registrar hit completo · LAB'),
-              content: SingleChildScrollView(child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ListTile(
-                    title: Text('Turno $nextOrder · ${_lineupPlayerNames[batterId] ?? batterId}'),
-                    subtitle: const Text('Bateador asignado por la alineación guardada'),
-                  ),
-                  const SizedBox(height: 8),
-                  destination('Bateador', batterBase, (v) {
-                    batterBase = v;
-                    if (v == 4) {
-                      if (first) firstTo = 0;
-                      if (second) secondTo = 0;
-                      if (third) thirdTo = 0;
-                    }
-                  }, [1, 2, 3, 4]),
-                  if (first) destination('Corredor en primera', firstTo,
-                      (v) => firstTo = v, [2, 3, 0]),
-                  if (second) destination('Corredor en segunda', secondTo,
-                      (v) => secondTo = v, [2, 3, 0]),
-                  if (third) destination('Corredor en tercera', thirdTo,
-                      (v) => thirdTo = v, [3, 0]),
-                  const SizedBox(height: 12),
-                  Text('Carreras de esta jugada: $runs',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  if (destinationError != null)
-                    Text(destinationError,
-                        style: const TextStyle(color: Colors.redAccent)),
-                  const Text('4 = jonrón. 0 = corredor anota. El servidor también valida la jugada.'),
-                ],
-              )),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(dialogContext),
-                    child: const Text('CANCELAR')),
-                FilledButton(onPressed: destinationError != null ? null : () => Navigator.pop(dialogContext, {
-                  'p_batter_id': batterId,
-                  'p_batter_base': batterBase,
-                  'p_first_to': firstTo,
-                  'p_second_to': secondTo,
-                  'p_third_to': thirdTo,
-                }), child: const Text('CONFIRMAR HIT')),
-              ],
-            );
-          },
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _confirmingPlay = false);
-    }
-    if (!mounted || selected == null || _recording || _uncertainPlay ||
-        _substitutionPending || _substitutionUncertain ||
-        _game?['id']?.toString() != gameId || _game?['version'] != version) return;
-    await _recordPlay('HIT', hitParams: selected);
-  }
-
-  Future<void> _recordPlay(String action, {Map<String, dynamic>? hitParams}) async {
-    final game = _game;
+  Future<void> _recordPlay(
+    String gameId,
+    int expectedVersion,
+    String action,
+    Map<String, dynamic>? hitParams,
+  ) async {
     final userId = _client.auth.currentUser?.id;
-    if (!_scoringBackendReady || game == null || _recording || _confirmingPlay ||
-        _uncertainPlay || _substitutionPending || _substitutionUncertain || userId == null) return;
-    if (game['home_manager_id'] == null || game['away_manager_id'] == null ||
-        (game['home_manager_id']?.toString() != userId &&
-         game['away_manager_id']?.toString() != userId)) return;
-    if (game['status'] == 'FINAL' || game['status'] == 'OFFICIAL') return;
-    if (hitParams == null && !{'BALL', 'STRIKE', 'OUT'}.contains(action)) return;
-    // Los contadores manuales pueden alterar el resultado de un partido.
-    // Exigir confirmación explícita antes de enviarlos al servidor.
-    if (action == 'RUN' || (action == 'HIT' && hitParams == null) || action == 'ERROR' ||
-        (action == 'BALL' && ((game['balls'] as num?)?.toInt() ?? 0) == 3) ||
-        (action == 'STRIKE' && ((game['strikes'] as num?)?.toInt() ?? 0) == 2) ||
-        (action == 'OUT' && ((game['outs'] as num?)?.toInt() ?? 0) == 2)) {
+    if (!mounted || _game?['id']?.toString() != gameId) return;
+    if (_uncertainPlay || _substitutionUncertain) {
+      throw StateError(_scoringMessage ?? 'Revisa el historial antes de volver a anotar.');
+    }
+    if (_recording || _confirmingPlay || _substitutionPending) return;
+
+    final latest = await _client.from('swl_live_games').select()
+        .eq('id', gameId).single().timeout(const Duration(seconds: 12));
+    if (!mounted || _game?['id']?.toString() != gameId) return;
+    final game = Map<String, dynamic>.from(latest);
+    final snapshot = SwlLiveScoreboardSnapshot.fromGame(game);
+    if (_recording || _confirmingPlay || _substitutionPending) return;
+    if (!snapshot.canScore(userId) || _myTeamId(game) != snapshot.battingTeamId ||
+        _client.auth.currentUser?.id != userId) {
+      throw StateError('El partido no está en curso o no corresponde tu turno.');
+    }
+    if (snapshot.version != expectedVersion ||
+        SwlLiveScoreboardSnapshot.fromGame(_game!).version > expectedVersion) {
+      throw StateError('El marcador cambió. Revisa la pizarra antes de confirmar la jugada.');
+    }
+    final isHit = action == 'HIT' && hitParams != null;
+    if (!isHit && !{'BALL', 'STRIKE', 'OUT'}.contains(action)) {
+      throw StateError('Jugada no disponible.');
+    }
+    if (isHit) {
+      snapshot.playState.hit(
+        batterBase: hitParams['p_batter_base'] as int,
+        firstTo: hitParams['p_first_to'] as int?,
+        secondTo: hitParams['p_second_to'] as int?,
+        thirdTo: hitParams['p_third_to'] as int?,
+      );
+    }
+    if ((action == 'BALL' && snapshot.balls == 3) ||
+        (action == 'STRIKE' && snapshot.strikes == 2) ||
+        (action == 'OUT' && snapshot.outs == 2)) {
       setState(() => _confirmingPlay = true);
       bool? accepted;
       try {
         accepted = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Confirmar anotación de prueba'),
-          content: Text(action == 'BALL' ? _walkPreview(game) : action == 'STRIKE' ? 'El tercer strike registrará ponche y out. Si es el tercero, cambiará la mitad de la entrada. ¿Confirmas?' : action == 'OUT'
-              ? 'Este es el tercer out: cambiará la mitad de la entrada, '
-                'reiniciará bolas, strikes y outs y limpiará las bases. '
-                '¿Confirmas el cambio?'
-              : '¿Registrar $action manualmente? Esta acción se guarda '
-                'en Supabase LAB y se comparte con el otro dispositivo. '
-                'Todavía no mueve corredores ni actualiza el box score.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('CANCELAR')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('CONFIRMAR')),
-          ],
-        ),
-      );
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Confirmar jugada'),
+            content: Text(action == 'BALL' ? _walkPreview(game) :
+                action == 'STRIKE'
+                    ? 'El tercer strike registra ponche y out. ¿Confirmas?'
+                    : 'El tercer out cambia la mitad y limpia las bases. ¿Confirmas?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('CANCELAR')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('CONFIRMAR')),
+            ],
+          ),
+        );
       } finally {
         if (mounted) setState(() => _confirmingPlay = false);
       }
-      if (accepted != true || !mounted || _recording || _uncertainPlay ||
-          _substitutionPending || _substitutionUncertain ||
-          _game?['id'] != game['id'] ||
-          _game?['version'] != game['version']) return;
+      if (accepted != true || !mounted || _game?['id']?.toString() != gameId) return;
+      if (_client.auth.currentUser?.id != userId ||
+          SwlLiveScoreboardSnapshot.fromGame(_game!).version > expectedVersion) {
+        throw StateError('Cambió la sesión o el marcador. Vuelve a revisar la jugada.');
+      }
     }
-    final gameId = game['id']?.toString();
-    final version = (game['version'] as num?)?.toInt();
-    if (gameId == null || version == null) return;
-    final isPlateAction = hitParams == null &&
-        (action == 'BALL' || action == 'STRIKE' || action == 'OUT');
     final requestGeneration = ++_recordGeneration;
     setState(() { _recording = true; _scoringMessage = null; });
+    var sent = false;
     try {
       String? plateBatterId;
-      if (isPlateAction) {
-        final teamId = (game['is_top'] == true
-            ? game['away_team_id'] : game['home_team_id'])?.toString();
-        final lineups = _savedLineups.where(
-            (row) => row['team_id']?.toString() == teamId);
-        if (teamId == null || lineups.isEmpty) {
+      if (!isHit) {
+        final lineup = await _client.from('swl_game_lineups').select('lineup')
+            .eq('game_id', gameId).eq('team_id', snapshot.battingTeamId)
+            .maybeSingle().timeout(const Duration(seconds: 12));
+        final slots = lineup?['lineup'];
+        final cursor = await _client.from('swl_game_batting_turns')
+            .select('next_order').eq('game_id', gameId)
+            .eq('team_id', snapshot.battingTeamId)
+            .maybeSingle().timeout(const Duration(seconds: 12));
+        final nextOrder = (cursor?['next_order'] as num?)?.toInt() ?? 1;
+        if (slots is! List || nextOrder < 1 || nextOrder > slots.length ||
+            slots[nextOrder - 1] is! Map) {
           throw StateError('Guarda y actualiza la alineación del equipo que batea.');
         }
-        final slots = List<dynamic>.from(
-            lineups.first['lineup'] as List? ?? []);
-        final cursor = await _client.from('swl_game_batting_turns')
-            .select('next_order')
-            .eq('game_id', gameId)
-            .eq('team_id', teamId)
-            .maybeSingle()
-            .timeout(const Duration(seconds: 12));
-        final nextOrder = (cursor?['next_order'] as num?)?.toInt() ?? 1;
-        if (nextOrder < 1 || nextOrder > slots.length) {
-          throw StateError('Turno inválido. Actualiza la alineación.');
-        }
-        plateBatterId =
-            (slots[nextOrder - 1] as Map)['player_id']?.toString();
+        plateBatterId = (slots[nextOrder - 1] as Map)['player_id']?.toString();
         if (plateBatterId == null || plateBatterId.isEmpty) {
           throw StateError('El bateador no tiene identificador válido.');
         }
       }
-      await _client.rpc(hitParams != null
-          ? 'swl_v53_apply_hit_for_player'
-          : isPlateAction
-              ? 'swl_v53_record_plate_action'
-              : 'swl_v53_record_plate_action', params: {
+      if (!mounted || _game?['id']?.toString() != gameId) return;
+      if (_client.auth.currentUser?.id != userId ||
+          SwlLiveScoreboardSnapshot.fromGame(_game!).version > expectedVersion) {
+        throw StateError('Cambió la sesión o el marcador. Vuelve a revisar la jugada.');
+      }
+      sent = true;
+      await _client.rpc(isHit ? 'swl_v53_apply_hit_for_player' :
+          'swl_v53_record_plate_action', params: {
         'p_game_id': gameId,
-        'p_expected_version': version,
-        if (hitParams == null) 'p_action': action,
-        if (isPlateAction) 'p_batter_id': plateBatterId,
-        if (hitParams != null) ...hitParams,
+        'p_expected_version': expectedVersion,
+        if (!isHit) 'p_action': action,
+        if (!isHit) 'p_batter_id': plateBatterId,
+        if (isHit) ...hitParams,
       }).timeout(const Duration(seconds: 12));
-      if (!mounted || requestGeneration != _recordGeneration ||
-          _game?['id']?.toString() != gameId) return;
-      setState(() => _scoringMessage = '${hitParams != null ? 'Hit completo registrado' : action == 'RUN' || action == 'HIT' || action == 'ERROR' ? 'Contador manual registrado' : 'Jugada registrada'}. Actualizando marcador…');
-      // La escritura ya fue confirmada. Errores de lectura posteriores
-      // no deben presentarse como una anotación de resultado incierto.
-      try {
-        await _refreshGame();
-        await _loadRecentEvents();
-        await _loadBattingStats();
-      } catch (_) {
-        if (mounted && requestGeneration == _recordGeneration) {
-          setState(() => _scoringMessage =
-              'Jugada guardada; no se pudo refrescar la pantalla. Revisa el marcador.');
-        }
-      }
-    } catch (_) {
-      if (!mounted || requestGeneration != _recordGeneration ||
-          _game?['id']?.toString() != gameId) return;
-      // Un timeout no significa que el servidor haya rechazado la jugada.
-      // Reconciliar contra el historial persistido antes de sugerir reintento.
-      setState(() { _uncertainPlay = true; _scoringMessage =
-          'Verificando si la jugada llegó al servidor…'; });
-      try {
-        final rows = await _client.from('swl_game_events')
-            .select('actor_id,event_type,version')
-            .eq('game_id', gameId)
-            .eq('version', version + 1)
-            .limit(1)
-            .timeout(const Duration(seconds: 8));
-        if (!mounted || requestGeneration != _recordGeneration ||
-            _game?['id']?.toString() != gameId) return;
-        final recorded = rows.isNotEmpty &&
-            rows.first['actor_id']?.toString() == userId &&
-            rows.first['event_type']?.toString() == action;
-        setState(() { _uncertainPlay = !recorded; _scoringMessage = recorded
-            ? 'La jugada sí fue registrada. Marcador actualizado.'
-            : rows.isNotEmpty
-                ? 'El partido cambió desde otro dispositivo. Revisa el marcador antes de anotar.'
-                : 'No se pudo confirmar el resultado. Anotación bloqueada hasta revisar el historial.'; });
-      } catch (_) {
-        if (mounted && requestGeneration == _recordGeneration &&
-            _game?['id']?.toString() == gameId) {
-          setState(() => _scoringMessage =
-              'Conexión incierta: anotación bloqueada hasta revisar el historial.');
-        }
-      }
       await _refreshGame();
       await _loadRecentEvents();
       await _loadBattingStats();
+    } catch (error) {
+      if (!sent) rethrow;
+      if (error is PostgrestException) {
+        final status = int.tryParse(error.code ?? '');
+        if (status == null || status < 500) {
+          await _refreshGame();
+          throw StateError(error.message);
+        }
+      }
+      if (!mounted || requestGeneration != _recordGeneration ||
+          _game?['id']?.toString() != gameId) return;
+      setState(() {
+        _uncertainPlay = true;
+        _scoringMessage = 'La respuesta se interrumpió. Revisa el historial antes de volver a anotar.';
+      });
+      try {
+        final event = await _client.from('swl_game_events')
+            .select('version')
+            .eq('game_id', gameId).eq('version', expectedVersion + 1)
+            .maybeSingle().timeout(const Duration(seconds: 8));
+        if (!mounted || requestGeneration != _recordGeneration ||
+            _game?['id']?.toString() != gameId) return;
+        if (event != null) {
+          setState(() {
+            _uncertainPlay = false;
+            _scoringMessage =
+                'El partido avanzó. Revisa el historial antes de anotar otra jugada.';
+          });
+        }
+      } catch (_) {
+        // El bloqueo se mantiene si el historial no permite resolver el envío.
+      }
+      await _refreshGame();
+      await _loadRecentEvents();
+      if (_scoringMessage != null) throw StateError(_scoringMessage!);
     } finally {
       if (mounted && requestGeneration == _recordGeneration) {
         setState(() => _recording = false);
@@ -944,24 +824,21 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           // Realtime puede entregar campos incompletos o eventos fuera de orden.
           // La lectura SELECT con versión es la fuente de verdad.
           _refreshGame();
-          _loadBattingStats();
-          _loadSubstitutionHistory();
+          if (_teamConfirmed && !_lineupsLoading) _loadSavedLineups();
         },
       ).subscribe();
     _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       // La recepción de un evento Realtime no garantiza que la conexión
       // continúe activa. La consulta periódica permite detectar cortes.
       _refreshGame();
-      _loadSavedLineups();
-      _loadBattingStats();
-      // Respaldo por polling si se pierde un mensaje Realtime.
-      _loadSubstitutionHistory();
+      if (_teamConfirmed && !_lineupsLoading) _loadSavedLineups();
     });
   }
 
   void _stopWatching() {
     _watchGeneration++;
     _lineupsGeneration++;
+    _lineupsLoading = false;
     _battingStatsGeneration++;
     _battingStatsQueued = false;
     _battingStatsLoading = false;
@@ -1021,6 +898,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   @override
   void dispose() {
     _stopWatching();
+    _scoreboard.dispose();
     _searchTimer?.cancel();
     _searchGeneration++;
     _pin.dispose();
@@ -1351,8 +1229,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           SnackBar(content: Text('Sustitución inválida: ${e.message}')));
         return;
       }
-      final latestVersion = (_game?['version'] as num?)?.toInt();
-      if (latestVersion == null) return;
+      final version = (game['version'] as num?)?.toInt();
+      if (version == null || _game?['version'] != game['version']) {
+        throw StateError('El partido cambió. Revisa la sustitución antes de enviarla.');
+      }
       // Una respuesta perdida puede significar que el servidor SI confirmó
       // el cambio. No permitir otro intento hasta reconciliar el estado.
       var rpcStarted = false;
@@ -1365,7 +1245,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         'p_outgoing_id': outgoingId,
         'p_incoming_id': incomingId,
         'p_expected_revision': revision,
-        'p_expected_game_version': latestVersion,
+        'p_expected_game_version': version,
         }).timeout(const Duration(seconds: 12));
       } catch (e) {
         // Un rechazo explicito de PostgREST confirma que la operacion fallo.
@@ -1399,13 +1279,15 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   }
 
   String? _myTeamId(Map<String, dynamic> game) {
+    if (widget.readOnly) return null;
     final userId = _client.auth.currentUser?.id;
     if (userId == null) return null;
-    if (game['home_manager_id']?.toString() == userId) {
-      return game['home_team_id']?.toString();
-    }
-    if (game['away_manager_id']?.toString() == userId) {
-      return game['away_team_id']?.toString();
+    for (final side in ['home', 'away']) {
+      final teamId = game['${side}_team_id']?.toString();
+      if (game['${side}_manager_id']?.toString() == userId && teamId != null &&
+          widget.authorizedTeams.any((team) => team['id']?.toString() == teamId)) {
+        return teamId;
+      }
     }
     return null;
   }
@@ -1428,7 +1310,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         style: TextStyle(color: Colors.amber, fontSize: 20,
           fontWeight: FontWeight.bold)),
       const SizedBox(height: 10),
-      Text('Partido ${game['game_pin'] ?? ''}',
+      SelectableText('Partido ${game['game_pin'] ?? ''}',
         style: const TextStyle(color: Colors.white70)),
       const SizedBox(height: 14),
       for (final side in [
@@ -1446,15 +1328,20 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         )),
       const SizedBox(height: 12),
       if (myTeamId == null)
-        const Text('Esta cuenta no figura como mánager de ninguno de los equipos. '
-          'El PIN no concede permisos de edición.',
-          style: TextStyle(color: Colors.orangeAccent))
+        FilledButton.icon(
+          onPressed: _openOriginalScoreboardPreview,
+          icon: const Icon(Icons.visibility),
+          label: const Text('VER RESULTADO EN VIVO'),
+        )
       else ...[
         Text('Tu equipo autorizado: ${_name(myTeamId)}',
           style: const TextStyle(color: Colors.greenAccent)),
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: () => setState(() => _teamConfirmed = true),
+          onPressed: () {
+            setState(() => _teamConfirmed = true);
+            _loadSavedLineups();
+          },
           icon: const Icon(Icons.arrow_forward),
           label: const Text('CONTINUAR A MI ALINEACIÓN'),
         ),
@@ -1494,14 +1381,47 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       const SizedBox(height: 12),
       if (_hasMyLineup(game))
         FilledButton.icon(
-          onPressed: () => setState(() => _scoreboardOpened = true),
+          onPressed: _openOriginalScoreboardPreview,
           icon: const Icon(Icons.sports_baseball),
-          label: const Text('IR A LA PIZARRA Y ANOTACIONES'),
+          label: const Text('ABRIR PIZARRA OFICIAL'),
         )
       else
         const Text('Guarda tu alineación para continuar a la pizarra. '
           'El rival prepara la suya desde su propio dispositivo.',
           style: TextStyle(color: Colors.white70)),
+      if (_hasMyLineup(game) && game['status'] == 'IN_PROGRESS')
+        OutlinedButton(
+          onPressed: _substitutionPending || _substitutionUncertain ? null :
+              () => _substituteBatter(myTeamId, _name(myTeamId)),
+          child: const Text('SUSTITUIR BATEADOR'),
+        ),
+      OutlinedButton(
+        onPressed: () => _showActiveRoster(myTeamId, _name(myTeamId)),
+        child: const Text('VER ROSTER ACTIVO'),
+      ),
+      ExpansionTile(
+        title: const Text('Estadísticas e historial'),
+        onExpansionChanged: (expanded) {
+          if (expanded) {
+            _loadRecentEvents();
+            _loadSubstitutionHistory();
+            _loadBattingStats();
+          }
+        },
+        children: [
+          _inningAudit(game),
+          if (_battingStatsLoading || _substitutionHistoryLoading || _eventsLoading)
+            const LinearProgressIndicator(),
+          for (final message in [_battingStatsError, _substitutionHistoryError,
+            _eventsError, if (_substitutionHistoryTruncated)
+              'El historial completo de sustituciones supera el límite de consulta.'])
+            if (message != null) Text(message),
+          _battingBoxScore(game),
+          if (_eventsQueried)
+            for (final event in _recentEvents)
+              ListTile(title: Text(_eventDescription(event))),
+        ],
+      ),
       TextButton(onPressed: () => setState(() => _teamConfirmed = false),
         child: const Text('VOLVER A MI EQUIPO')),
     ]);
@@ -1511,8 +1431,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _stopWatching();
     setState(() {
       _game = null;
+      _battingStats = [];
       _teamConfirmed = false;
-      _scoreboardOpened = false;
       _away = null;
       _teamNames.clear();
       _error = null;
@@ -1522,281 +1442,24 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     });
   }
 
-  Widget _gameView() {
-    final game = _game!;
-    final connected = game['home_manager_id'] != null && game['away_manager_id'] != null;
-    final top = game['is_top'] != false;
-    final inning = game['inning'] ?? 1;
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SelectableText('PIN: ${game['game_pin']}',
-          style: const TextStyle(color: Colors.amber, fontSize: 25, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 16),
-      Text('HOME CLUB: ${_name(game['home_team_id'])}',
-          style: const TextStyle(color: Colors.white)),
-      Text('VISITANTE: ${_name(game['away_team_id'])}',
-          style: const TextStyle(color: Colors.white)),
-      Wrap(spacing: 8, children: [
-        OutlinedButton(onPressed: () => _showActiveRoster(
-          game['home_team_id']?.toString() ?? '', _name(game['home_team_id'])),
-          child: const Text('VER ROSTER LOCAL')),
-        OutlinedButton(onPressed: () => _showActiveRoster(
-          game['away_team_id']?.toString() ?? '', _name(game['away_team_id'])),
-          child: const Text('VER ROSTER VISITANTE')),
-        OutlinedButton(onPressed: () => _draftLineup(
-          game['home_team_id']?.toString() ?? '', _name(game['home_team_id'])),
-          child: const Text('EDITAR ALINEACIÓN LOCAL')),
-        OutlinedButton(onPressed: () => _draftLineup(
-          game['away_team_id']?.toString() ?? '', _name(game['away_team_id'])),
-          child: const Text('EDITAR ALINEACIÓN VISITANTE')),
-        OutlinedButton(onPressed: _substitutionPending || _substitutionUncertain ||
-          _recording || _confirmingPlay || _uncertainPlay ? null : () => _substituteBatter(
-          game['home_team_id']?.toString() ?? '', _name(game['home_team_id'])),
-          child: const Text('SUSTITUIR LOCAL')),
-        OutlinedButton(onPressed: _substitutionPending || _substitutionUncertain ||
-          _recording || _confirmingPlay || _uncertainPlay ? null : () => _substituteBatter(
-          game['away_team_id']?.toString() ?? '', _name(game['away_team_id'])),
-          child: const Text('SUSTITUIR VISITANTE')),
-      ]),
-      _lineupStatus(game['home_team_id']?.toString() ?? '', 'Alineación local'),
-      _lineupStatus(game['away_team_id']?.toString() ?? '', 'Alineación visitante'),
-      if (_lineupsLoading) const LinearProgressIndicator(),
-      if (_lineupsError != null) Text(_lineupsError!,
-          style: const TextStyle(color: Colors.orangeAccent)),
-      TextButton.icon(onPressed: _loadSavedLineups,
-          icon: const Icon(Icons.sync), label: const Text('ACTUALIZAR ALINEACIONES')),
-      const SizedBox(height: 14),
-      if (!connected)
-        const Text('Esperando al mánager visitante…',
-            style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))
-      else ...[
-        const Text('¡Ambos mánagers están vinculados!',
-            style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 20),
-        const Text('MARCADOR EN VIVO',
-            style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 19)),
-        const SizedBox(height: 12),
-        Card(color: const Color(0xFF162131), child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(children: [
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Expanded(child: Text(_name(game['away_team_id']), style: const TextStyle(color: Colors.white))),
-              Text('${game['away_runs'] ?? 0}', style: const TextStyle(color: Colors.amber, fontSize: 24)),
-            ]),
-            const Divider(),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Expanded(child: Text(_name(game['home_team_id']), style: const TextStyle(color: Colors.white))),
-              Text('${game['home_runs'] ?? 0}', style: const TextStyle(color: Colors.amber, fontSize: 24)),
-            ]),
-            _inningAudit(game),
-            const SizedBox(height: 12),
-            Text('ENTRADA $inning · ${top ? 'ALTA' : 'BAJA'} · '
-                '${top ? 'Batea el visitante' : 'Batea el local'}',
-                style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 10),
-            Text('HITS  ${game['away_hits'] ?? 0} – ${game['home_hits'] ?? 0}   '
-                'ERRORES  ${game['away_errors'] ?? 0} – ${game['home_errors'] ?? 0}',
-                style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 8),
-            Text('Bolas: ${game['balls'] ?? 0}  ·  '
-                'Strikes: ${game['strikes'] ?? 0}  ·  '
-                'Outs: ${game['outs'] ?? 0}',
-                style: const TextStyle(color: Colors.white)),
-            const SizedBox(height: 10),
-            Wrap(spacing: 14, runSpacing: 6, alignment: WrapAlignment.center,
-              children: [
-                _baseLabel('1B', _baseOccupied(game, 'first')),
-                _baseLabel('2B', _baseOccupied(game, 'second')),
-                _baseLabel('3B', _baseOccupied(game, 'third')),
-              ]),
-            const SizedBox(height: 8),
-            Text('Estado: ${game['status'] ?? 'SCHEDULED'}  ·  '
-                'Versión: ${game['version'] ?? 0}',
-                style: const TextStyle(color: Colors.white54, fontSize: 12)),
-          ]),
-        )),
-      ],
-      const SizedBox(height: 12),
-      if (_connectionWarning != null)
-        Text(_connectionWarning!,
-            style: const TextStyle(color: Colors.orangeAccent)),
-      if (_lastSuccessfulRefresh != null)
-        Text('Última actualización recibida: '
-            '${TimeOfDay.fromDateTime(_lastSuccessfulRefresh!).format(context)}',
-            style: const TextStyle(color: Colors.white54, fontSize: 12)),
-      const SizedBox(height: 16),
-      if (_scoringBackendReady &&
-          (_client.auth.currentUser?.id == game['home_manager_id']?.toString() ||
-           _client.auth.currentUser?.id == game['away_manager_id']?.toString())) ...[
-        Text('CONTROLES DE ANOTACIÓN',
-            style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-        Wrap(spacing: 8, children: [
-          for (final action in ['BALL', 'STRIKE', 'OUT'])
-            ElevatedButton(
-              onPressed: _recording || _confirmingPlay || _uncertainPlay ||
-                _substitutionPending || _substitutionUncertain ||
-                game['home_manager_id'] == null || game['away_manager_id'] == null ||
-                game['status'] == 'FINAL' || game['status'] == 'OFFICIAL'
-                ? null : () => _recordPlay(action),
-              child: Text(action),
-            ),
-        ]),
-        ElevatedButton.icon(
-          icon: const Icon(Icons.sports_baseball),
-          label: const Text('HIT / JONRÓN CON CORREDORES'),
-          onPressed: _recording || _confirmingPlay || _uncertainPlay ||
-            _substitutionPending || _substitutionUncertain ||
-              game['home_manager_id'] == null || game['away_manager_id'] == null ||
-              game['status'] == 'FINAL' || game['status'] == 'OFFICIAL'
-              ? null : _showHitDialog,
+  // La pizarra oficial es la única pantalla de anotación del partido.
+  void _openOriginalScoreboardPreview() {
+    final game = _game;
+    if (game == null) return;
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ValueListenableBuilder(
+        valueListenable: _scoreboard,
+        builder: (context, live, child) => SwlAdvancedScoreboard(
+        gamePin: game['game_pin']?.toString() ?? '',
+        homeTeam: _name(game['home_team_id']?.toString() ?? ''),
+        awayTeam: _name(game['away_team_id']?.toString() ?? ''),
+        liveSnapshot: live ?? SwlLiveScoreboardSnapshot.fromGame(game),
+        onLiveAction: _myTeamId(game) == null ? null :
+            (version, action, hitParams) =>
+                _recordPlay(game['id'].toString(), version, action, hitParams),
         ),
-        if (_substitutionUncertain)
-          ListTile(
-            title: const Text('Sustitución sin confirmación de red',
-                style: TextStyle(color: Colors.orangeAccent)),
-            subtitle: const Text('No repitas el cambio. Consulta el estado '
-                'del servidor para comprobar si fue aplicado.'),
-            trailing: FilledButton(
-              onPressed: _substitutionPending ? null : () async {
-                try {
-                  final gameId = _game?['id']?.toString();
-                  if (gameId == null) return;
-                  // Lecturas directas: los métodos de refresco normales capturan
-                  // sus errores y por sí solos no prueban una reconciliación.
-                  final latestGame = await _client.from('swl_live_games')
-                      .select('version').eq('id', gameId).single()
-                      .timeout(const Duration(seconds: 12));
-                  await _client.from('swl_game_lineups')
-                      .select('team_id,revision').eq('game_id', gameId)
-                      .timeout(const Duration(seconds: 12));
-                  if (!mounted || _game?['id']?.toString() != gameId) return;
-                  await _refreshGame();
-                  await _loadSavedLineups();
-                  await _loadSubstitutionHistory();
-                  if (!mounted || _game?['id']?.toString() != gameId) return;
-                  if (_connectionWarning != null ||
-                      (_game?['version'] as num?)?.toInt() !=
-                      (latestGame['version'] as num?)?.toInt()) {
-                    throw StateError('El estado local aún no está actualizado.');
-                  }
-                  setState(() => _substitutionUncertain = false);
-                } catch (_) {
-                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('No se pudo reconciliar el cambio.')));
-                }
-              },
-              child: const Text('VERIFICAR'),
-            ),
-          ),
-        if (_uncertainPlay)
-          OutlinedButton.icon(
-            icon: const Icon(Icons.fact_check),
-            label: const Text('REVISAR Y DESBLOQUEAR ANOTACIÓN'),
-            onPressed: _recording ? null : () async {
-              await _refreshGame();
-              await _loadRecentEvents();
-              if (!mounted || !_uncertainPlay) return;
-              final reviewed = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: const Text('Resultado no confirmado'),
-                  content: const Text(
-                    'Antes de continuar, verifica el marcador y el historial '
-                    'en ambos dispositivos. No repitas la jugada anterior '
-                    'sin comprobar si se registró. ¿Ya lo verificaste?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('MANTENER BLOQUEO')),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('YA VERIFIQUÉ')),
-                  ],
-                ),
-              );
-              if (mounted && reviewed == true) {
-                setState(() {
-                  _uncertainPlay = false;
-                  _scoringMessage = 'Bloqueo retirado tras revisión manual.';
-                });
-              }
-            },
-          ),
-        if (_recording) const LinearProgressIndicator(),
-        if (_scoringMessage != null)
-          Text(_scoringMessage!, style: const TextStyle(color: Colors.amber)),
-      ],
-      if (!_scoringBackendReady)
-        const Text('Modo de conexión y visualización. La anotación sincronizada todavía no está habilitada.', 
-          style: TextStyle(color: Colors.white70)),
-      const SizedBox(height: 16),
-      OutlinedButton.icon(onPressed: _refreshGame,
-          icon: const Icon(Icons.refresh), label: const Text('ACTUALIZAR ESTADO')),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(
-        onPressed: _eventsLoading ? null : _loadRecentEvents,
-        icon: const Icon(Icons.history),
-        label: const Text('CONSULTAR ÚLTIMAS JUGADAS'),
       ),
-      if (_eventsLoading) const LinearProgressIndicator(),
-      if (_eventsError != null)
-        Text(_eventsError!, style: const TextStyle(color: Colors.orangeAccent)),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(
-        onPressed: _battingStatsLoading ? null : _loadBattingStats,
-        icon: const Icon(Icons.query_stats),
-        label: const Text('ESTADÍSTICAS POR PELOTERO · PRELIMINARES'),
-      ),
-      if (_battingStatsLoading) const LinearProgressIndicator(),
-      if (_battingStatsError != null)
-        Text(_battingStatsError!,
-            style: const TextStyle(color: Colors.orangeAccent)),
-      if (!_battingStatsLoading && _battingStats.isEmpty &&
-          _battingStatsError == null)
-        const Text('Sin estadísticas individuales registradas todavía.',
-            style: TextStyle(color: Colors.white70)),
-      if (_battingStats.isNotEmpty) _battingBoxScore(game),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(
-        onPressed: _substitutionHistoryLoading ? null : _loadSubstitutionHistory,
-        icon: const Icon(Icons.swap_horiz),
-        label: const Text('CONSULTAR TODAS LAS SUSTITUCIONES'),
-      ),
-      if (_substitutionHistoryLoading) const LinearProgressIndicator(),
-      if (_substitutionHistoryError != null)
-        Text(_substitutionHistoryError!,
-            style: const TextStyle(color: Colors.orangeAccent)),
-      if (_substitutionHistoryTruncated)
-        const Text('Solo se muestran las 500 sustituciones más recientes.',
-            style: TextStyle(color: Colors.orangeAccent)),
-      for (final event in _substitutionHistory)
-        ListTile(
-          dense: true,
-          title: Text(_eventDescription(event),
-              style: const TextStyle(color: Colors.white)),
-          subtitle: Text('Entrada ${event['inning'] ?? '?'} · '
-              'Versión ${event['version'] ?? '?'}',
-              style: const TextStyle(color: Colors.white70)),
-        ),
-      if (_recentEvents.isNotEmpty) ...[
-        const SizedBox(height: 8),
-        const Text('HISTORIAL REGISTRADO',
-            style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-        ..._recentEvents.map((event) => ListTile(
-          dense: true,
-          title: Text(_eventDescription(event),
-              style: const TextStyle(color: Colors.white)),
-          subtitle: Text('Entrada ${event['inning'] ?? '?'} · '
-              '${event['is_top'] == true ? 'Alta' : 'Baja'} · '
-              'Versión ${event['version'] ?? '?'}',
-              style: const TextStyle(color: Colors.white70)),
-        )),
-      ],
-      if (_eventsQueried && _recentEvents.isEmpty && !_eventsLoading && _eventsError == null)
-        const Text('Sin jugadas consultadas o registradas.',
-            style: TextStyle(color: Colors.white54, fontSize: 12)),
-      TextButton(onPressed: _leaveGame,
-        child: const Text('SALIR DEL PARTIDO')),
-    ]);
+    ));
   }
 
   @override
@@ -1810,9 +1473,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       body: ListView(padding: const EdgeInsets.all(18), children: [
         if (_game != null) ...[
           if (!_teamConfirmed) _teamConfirmationView()
-          else if (!_scoreboardOpened) _lineupPreparationView()
-          else _gameView(),
+          else _lineupPreparationView(),
         ] else ...[
+          if (owned.isNotEmpty) ...[
           const Text('CREAR PARTIDO COMO LOCAL',
               style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
@@ -1838,7 +1501,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
               labelText: 'Buscar visitante por nombre o provincia',
               prefixIcon: Icon(Icons.search),
               labelStyle: TextStyle(color: Colors.white70)),
-            onChanged: _searchTeams,
+            onChanged: (term) {
+              if (_away != null) setState(() => _away = null);
+              _searchTeams(term);
+            },
           ),
           if (_searching) const LinearProgressIndicator(),
           if (_matches.isNotEmpty) ...[
@@ -1868,12 +1534,12 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
               await _run(() => _client.rpc('swl_v5_create_game', params: {
                 'p_home_team_id': homeId, 'p_away_team_id': _away!['id'],
               }));
-              await _loadNames();
             },
             child: const Text('CREAR Y GENERAR PIN'),
           ),
           const Divider(height: 36),
-          const Text('UNIRME COMO MÁNAGER VISITANTE',
+          ],
+          const Text('CONECTARME POR PIN',
               style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
           TextField(
             controller: _pin,
@@ -1895,6 +1561,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             child: const Text('CONECTARME AL PARTIDO'),
           ),
         ],
+        if (_connectionWarning != null) Text(_connectionWarning!),
         if (_busy) const Center(child: CircularProgressIndicator()),
         if (_error != null) Padding(padding: const EdgeInsets.only(top: 12),
           child: Text(_error!, style: const TextStyle(color: Colors.redAccent))),
