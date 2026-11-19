@@ -1,3 +1,6 @@
+import 'swl_lineup_identity.dart';
+import 'swl_pitching_stats.dart';
+import 'swl_team_lookup.dart';
 import 'swl_advanced_scoreboard.dart';
 import 'swl_live_scoreboard_snapshot.dart';
 import 'dart:async';
@@ -14,6 +17,8 @@ class SwlLiveLobby extends StatefulWidget {
   final String? initialJoinPin;
   final bool readOnly;
   final String? initialOpponent;
+  final String? initialOpponentId;
+  final String? openGameId;
   final String? preferredHomeId;
   const SwlLiveLobby({
     super.key,
@@ -21,6 +26,8 @@ class SwlLiveLobby extends StatefulWidget {
     this.initialJoinPin,
     this.readOnly = false,
     this.initialOpponent,
+    this.initialOpponentId,
+    this.openGameId,
     this.preferredHomeId,
   });
 
@@ -36,6 +43,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   String? _homeId;
   Map<String, dynamic>? _away;
   final Map<String, String> _teamNames = {};
+  final Map<String, String> _teamLogos = {};
   Map<String, dynamic>? _game;
   final _scoreboard = ValueNotifier<SwlLiveScoreboardSnapshot?>(null);
   List<Map<String, dynamic>> _savedLineups = [];
@@ -48,6 +56,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   Timer? _searchTimer;
   int _searchGeneration = 0;
   bool _busy = false;
+  bool _startingGame = false;
   bool _recording = false;
   bool _substitutionPending = false;
   bool _substitutionUncertain = false;
@@ -92,13 +101,45 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (!mounted) return;
       final pin = widget.initialJoinPin;
       final opponent = widget.initialOpponent;
-      if (pin != null) {
+      final gameId = widget.openGameId;
+      if (gameId != null) {
+        _openSavedGame(gameId);
+      } else if (pin != null) {
         _joinFromPin(pin);
       } else if (opponent != null) {
         _teamSearch.text = opponent;
-        _searchTeams(opponent);
+        final opponentId = widget.initialOpponentId;
+        if (opponentId == null) {
+          _searchTeams(opponent);
+        } else {
+          _selectScheduledOpponent(opponentId);
+        }
       }
     });
+  }
+
+  Future<void> _openSavedGame(String id) async {
+    await _run(() => _client.from('swl_live_games').select().eq('id', id).single());
+    if (mounted && _game?['id']?.toString() == id) {
+      _openOriginalScoreboardPreview(exitLobbyOnReturn: true);
+    }
+  }
+
+  Future<void> _selectScheduledOpponent(String id) async {
+    final term = _teamSearch.text;
+    try {
+      final team = await _client.from('teams').select('id,name,province')
+          .eq('id', id).single().timeout(const Duration(seconds: 12));
+      if (!mounted || _teamSearch.text != term) return;
+      setState(() {
+        _away = team;
+        _teamSearch.text = team['name']?.toString() ?? term;
+      });
+    } catch (_) {
+      if (mounted && _teamSearch.text == term) {
+        setState(() => _error = 'El rival seleccionado ya no está disponible. Busca el equipo nuevamente.');
+      }
+    }
   }
 
   Future<void> _joinFromPin(String supplied) async {
@@ -145,8 +186,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         final safe = term.trim().replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
         final searches = await Future.wait([
           for (final column in ['name', 'province'])
-            _client.from('teams').select('id,name,province')
-                .ilike(column, '%$safe%').order('name').order('id').limit(20),
+            swlQueryTeams((columns) async => await _client.from('teams').select(columns)
+                .ilike(column, '%$safe%').order('name').order('id').limit(20)),
         ]).timeout(const Duration(seconds: 12));
         final teams = {
           for (final results in searches)
@@ -254,19 +295,20 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   }
 
   /// Lee la alineación confirmada en LAB. No usa borradores locales.
-  Future<void> _loadSavedLineups() async {
+  Future<void> _loadSavedLineups({bool announce = false}) async {
     final gameId = _game?['id']?.toString();
     if (gameId == null || !mounted) return;
     final generation = ++_lineupsGeneration;
     setState(() { _lineupsLoading = true; _lineupsError = null; });
     try {
       final rows = await _client.from('swl_game_lineups')
-          .select('team_id,lineup,revision,updated_at')
+          .select()
           .eq('game_id', gameId)
           .timeout(const Duration(seconds: 12));
       final saved = List<Map<String, dynamic>>.from(rows);
       final ids = <String>{};
       for (final row in saved) {
+        if (row['pitcher_id'] != null) ids.add(row['pitcher_id'].toString());
         final lineup = row['lineup'];
         if (lineup is! List) continue;
         for (final slot in lineup) {
@@ -298,6 +340,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         _savedLineups = saved;
         _lineupPlayerNames = {..._lineupPlayerNames, ...names};
       });
+      if (announce) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alineaciones confirmadas actualizadas.')),
+      );
     } catch (_) {
       if (!mounted || generation != _lineupsGeneration ||
           _game?['id']?.toString() != gameId) return;
@@ -332,6 +377,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('$label · $count bateadores · revisión $revision',
             style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+        if (saved['designated_hitter_id'] != null)
+          Text('Bateador designado: ${_lineupPlayerNames[saved['designated_hitter_id'].toString()] ?? 'Pelotero pendiente'}'),
+        if (saved['pitcher_id'] != null)
+          Text('Pitcher titular: ${_lineupPlayerNames[saved['pitcher_id'].toString()] ?? 'Pelotero pendiente'}'
+            '${saved['pitcher_bats'] == false ? ' · solo defensa' : ''}'),
         for (final slot in slots)
           if (slot is Map)
             Text('${slot['order']}. ${_lineupPlayerNames[slot['player_id']?.toString()] ?? 'Pelotero no disponible'}',
@@ -736,17 +786,16 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         final lineup = await _client.from('swl_game_lineups').select('lineup')
             .eq('game_id', gameId).eq('team_id', snapshot.battingTeamId)
             .maybeSingle().timeout(const Duration(seconds: 12));
-        final slots = lineup?['lineup'];
+        final slots = swlConfirmedBattingSlots(lineup?['lineup']);
         final cursor = await _client.from('swl_game_batting_turns')
             .select('next_order').eq('game_id', gameId)
             .eq('team_id', snapshot.battingTeamId)
             .maybeSingle().timeout(const Duration(seconds: 12));
         final nextOrder = (cursor?['next_order'] as num?)?.toInt() ?? 1;
-        if (slots is! List || nextOrder < 1 || nextOrder > slots.length ||
-            slots[nextOrder - 1] is! Map) {
+        if (nextOrder < 1 || nextOrder > slots.length) {
           throw StateError('Guarda y actualiza la alineación del equipo que batea.');
         }
-        plateBatterId = (slots[nextOrder - 1] as Map)['player_id']?.toString();
+        plateBatterId = slots[nextOrder - 1]['player_id']?.toString();
         if (plateBatterId == null || plateBatterId.isEmpty) {
           throw StateError('El bateador no tiene identificador válido.');
         }
@@ -756,15 +805,33 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           SwlLiveScoreboardSnapshot.fromGame(_game!).version > expectedVersion) {
         throw StateError('Cambió la sesión o el marcador. Vuelve a revisar la jugada.');
       }
+      final authorized = await _client.rpc('swl_can_manage_roster',
+          params: {'p_team_id': snapshot.battingTeamId}).timeout(const Duration(seconds: 12));
+      if (!mounted || _game?['id']?.toString() != gameId) return;
+      if (authorized != true || _client.auth.currentUser?.id != userId ||
+          SwlLiveScoreboardSnapshot.fromGame(_game!).version > expectedVersion) {
+        throw StateError('Ya no tienes permiso vigente para anotar esta jugada.');
+      }
       sent = true;
-      await _client.rpc(isHit ? 'swl_v53_apply_hit_for_player' :
-          'swl_v53_record_plate_action', params: {
+      final params = {
         'p_game_id': gameId,
         'p_expected_version': expectedVersion,
         if (!isHit) 'p_action': action,
         if (!isHit) 'p_batter_id': plateBatterId,
         if (isHit) ...hitParams,
-      }).timeout(const Duration(seconds: 12));
+      };
+      try {
+        await _client.rpc(isHit ? 'swl_v56_apply_hit' :
+            'swl_v56_record_plate_action', params: params)
+            .timeout(const Duration(seconds: 12));
+      } on PostgrestException catch (error) {
+        // PGRST202 indica que PostgREST no pudo invocar la función nueva.
+        // Una respuesta incierta sigue el flujo de reconciliación.
+        if (error.code != 'PGRST202' || _savedLineups.any((row) => row['pitcher_id'] != null)) rethrow;
+        await _client.rpc(isHit ? 'swl_v53_apply_hit_for_player' :
+            'swl_v53_record_plate_action', params: params)
+            .timeout(const Duration(seconds: 12));
+      }
       await _refreshGame();
       await _loadRecentEvents();
       await _loadBattingStats();
@@ -774,7 +841,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         final status = int.tryParse(error.code ?? '');
         if (status == null || status < 500) {
           await _refreshGame();
-          throw StateError(error.message);
+          throw StateError(error.code == 'PGRST202' || error.code == '42883'
+              ? 'La anotación V5.6 requiere habilitar las funciones de LAB.'
+              : error.message);
         }
       }
       if (!mounted || requestGeneration != _recordGeneration ||
@@ -879,14 +948,19 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     final game = _game;
     if (game == null) return;
     try {
-      final rows = await _client.from('teams').select('id,name,province')
-          .inFilter('id', [game['home_team_id'], game['away_team_id']]);
+      final ids = [game['home_team_id'], game['away_team_id']].whereType<String>().toList();
+      if (ids.isEmpty) return;
+      final rows = await swlQueryTeams((columns) async =>
+          await _client.from('teams').select(columns).inFilter('id', ids)
+             .timeout(const Duration(seconds: 12)));
       if (!mounted || _game?['id'] != game['id']) return;
       setState(() {
         for (final row in rows) {
           final id = row['id']?.toString();
           final name = row['name']?.toString();
           if (id != null && name != null) _teamNames[id] = name;
+          final logo = swlTeamLogo(row);
+          if (id != null && logo != null) _teamLogos[id] = logo;
           if (row['id'] == game['away_team_id']) {
             _away = Map<String, dynamic>.from(row);
           }
@@ -1024,83 +1098,160 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           if (player != null) selected.add(player);
         }
       }
-      await showDialog<void>(context: context, builder: (dialogContext) =>
-        StatefulBuilder(builder: (context, update) => AlertDialog(
-          title: Text('Alineación · $teamName'),
-          content: SizedBox(width: 450, height: 420, child: Column(children: [
-            Text('Orden al bate: ${selected.length}/13 · Mínimo 9 jugadores',
-              style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            const Text('El guardado valida los peloteros en Supabase LAB.',
-              style: TextStyle(fontSize: 12)),
-            const Text('Por seguridad, la alineación queda bloqueada al registrar la primera jugada de un bateador. Las sustituciones durante el partido aún no están habilitadas.',
-              style: TextStyle(fontSize: 12, color: Colors.deepOrange)),
-            const Divider(),
-            Expanded(child: ListView(children: [
-              for (final player in players) CheckboxListTile(
-                dense: true,
-                value: selected.any((p) => p.playerId == player.playerId),
-                title: Text('${player.name} · #${player.number}'),
-                subtitle: Text('${player.position} · ${player.universalId}'),
-                onChanged: (checked) => update(() {
-                  selected.removeWhere((p) => p.playerId == player.playerId);
-                  if (checked == true && selected.length < 13) selected.add(player);
-                }),
-              ),
-            ])),
-            if (selected.isNotEmpty) SizedBox(height: 120,
-              child: ReorderableListView.builder(
-                itemCount: selected.length,
-                onReorder: (oldIndex, newIndex) => update(() {
-                  if (newIndex > oldIndex) newIndex--;
-                  selected.insert(newIndex, selected.removeAt(oldIndex));
-                }),
+      final saved = loadedLineup.firstOrNull;
+      final positions = <String, String>{
+        if (saved?['defensive_positions'] case final Map values)
+          for (final entry in values.entries) entry.key.toString(): entry.value.toString(),
+      };
+      String? pitcherId = saved?['pitcher_id']?.toString();
+      String? designatedId = saved?['designated_hitter_id']?.toString();
+      bool pitcherBats = saved?['pitcher_bats'] != false;
+      if (pitcherId != null && players.any((p) => p.playerId == pitcherId) &&
+          selected.every((p) => p.playerId != pitcherId)) {
+        selected.add(players.firstWhere((p) => p.playerId == pitcherId));
+      }
+      while (mounted && _game?['id'] == game['id']) {
+        final proceed = await showDialog<bool>(context: context, builder: (dialog) =>
+          StatefulBuilder(builder: (context, update) {
+            final battingCount = selected.where((p) => pitcherBats || p.playerId != pitcherId).length;
+            return AlertDialog(
+              title: Text('Elegir mi alineación · $teamName'),
+              content: SizedBox(width: 450, height: 420, child: Column(children: [
+                Text('$battingCount bateadores · entre 9 y 13'),
+                DropdownButtonFormField<String>(
+                  initialValue: pitcherId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Pitcher titular'),
+                  items: [for (final p in selected)
+                    DropdownMenuItem(value: p.playerId, child: Text(p.name, overflow: TextOverflow.ellipsis))],
+                  onChanged: selected.isEmpty ? null : (id) => update(() {
+                    positions.removeWhere((_, position) => position == 'P');
+                    pitcherId = id;
+                    if (id != null) positions[id] = 'P';
+                  }),
+                ),
+                if (pitcherId != null)
+                  SwitchListTile(title: const Text('El pitcher batea'), value: pitcherBats,
+                    onChanged: (value) => update(() => pitcherBats = value)),
+                Expanded(child: ListView(children: [
+                  for (final player in players) ...[
+                    CheckboxListTile(
+                      dense: true,
+                      value: selected.any((p) => p.playerId == player.playerId),
+                      title: Text('${player.name} · #${player.number}'),
+                      subtitle: Text('${player.position} · ${player.universalId}'),
+                      onChanged: (checked) => update(() {
+                        final id = player.playerId;
+                        if (checked == true && selected.length < 14) {
+                          selected.add(player);
+                        } else if (checked == false) {
+                          selected.removeWhere((p) => p.playerId == id);
+                          positions.remove(id);
+                          if (pitcherId == id) { pitcherId = null; pitcherBats = true; }
+                        }
+                      }),
+                    ),
+                    if (selected.any((p) => p.playerId == player.playerId) && player.playerId != pitcherId)
+                      DropdownButton<String>(
+                        value: positions[player.playerId] ?? '',
+                        isExpanded: true,
+                        items: [
+                          const DropdownMenuItem(value: '', child: Text('Sin posición asignada · BD / adicional')),
+                          for (final position in ['C','1B','2B','3B','SS','LF','CF','RF','SF'])
+                            DropdownMenuItem(value: position, child: Text(position),
+                              enabled: !positions.entries.any((e) =>
+                                  e.key != player.playerId && e.value == position)),
+                        ],
+                        onChanged: (position) => update(() {
+                          if (position == null || position.isEmpty) {
+                            positions.remove(player.playerId);
+                          } else {
+                            positions[player.playerId] = position;
+                          }
+                        }),
+                      ),
+                  ],
+                ])),
+              ])),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CANCELAR')),
+                FilledButton(
+                  onPressed: battingCount >= 9 && battingCount <= 13
+                      ? () => Navigator.pop(dialog, true) : null,
+                  child: const Text('CONTINUAR AL ORDEN AL BATE'),
+                ),
+              ],
+            );
+          }),
+        );
+        if (proceed != true || !mounted) return;
+        final batting = selected.where((p) => pitcherBats || p.playerId != pitcherId).toList();
+        final eligibleDesignated = batting.where((p) => !positions.containsKey(p.playerId)).toList();
+        if (pitcherBats || eligibleDesignated.every((p) => p.playerId != designatedId)) {
+          designatedId = null;
+        }
+        final save = await showDialog<bool>(context: context, builder: (dialog) =>
+          StatefulBuilder(builder: (context, update) => AlertDialog(
+            title: Text('Orden al bate · $teamName'),
+            content: SizedBox(width: 450, height: 420, child: Column(children: [
+              if (!pitcherBats)
+                DropdownButtonFormField<String>(
+                  initialValue: designatedId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Bateador designado'),
+                  items: [for (final p in eligibleDesignated)
+                    DropdownMenuItem(value: p.playerId, child: Text(p.name))],
+                  onChanged: (id) => update(() => designatedId = id),
+                ),
+              if (!pitcherBats && eligibleDesignated.isEmpty)
+                const Text('Regresa y selecciona un bateador sin posición defensiva.'),
+              Expanded(child: ReorderableListView.builder(
+                itemCount: batting.length,
+                onReorderItem: (oldIndex, newIndex) => update(() =>
+                    batting.insert(newIndex, batting.removeAt(oldIndex))),
                 itemBuilder: (context, index) => ListTile(
-                  key: ValueKey(selected[index].playerId),
-                  dense: true,
+                  key: ValueKey(batting[index].playerId),
                   leading: Text('${index + 1}'),
-                  title: Text(selected[index].name),
+                  title: Text(batting[index].name),
                   trailing: const Icon(Icons.drag_handle),
                 ),
-              ),
-            ),
-          ])),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('CERRAR')),
-            TextButton(
-              onPressed: selected.length >= 9 && selected.length <= 13
-                ? () async {
-                    final ids = selected.map((p) => p.playerId).toList();
-                    Navigator.pop(dialogContext);
-                    try {
-                      await _client.rpc('swl_v53_save_lineup_checked', params: {
-                        'p_game_id': game['id'],
-                        'p_team_id': teamId,
-                        'p_player_ids': ids,
-                        'p_expected_revision': expectedRevision,
-                      }).timeout(const Duration(seconds: 12));
-                      if (!mounted || _game?['id'] != game['id']) return;
-                      await _loadSavedLineups();
-                      if (!mounted || _game?['id'] != game['id']) return;
-                      ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(
-                        content: Text('Alineación guardada en LAB: ${ids.length} bateadores.')));
-                    } catch (e) {
-                      if (!mounted || _game?['id'] != game['id']) return;
-                      ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(
-                        content: Text(e.toString().contains('LINEUP_LOCKED_AFTER_FIRST_PLATE_ACTION')
-                            ? 'Alineación bloqueada: ya comenzó el bateo. Las sustituciones durante el partido estarán disponibles en una próxima versión.'
-                            : 'No se pudo confirmar la alineación. Comprueba la conexión y vuelve a consultar antes de reintentar: $e')));
-                    }
-                  }
-                : null,
-              child: const Text('GUARDAR EN LAB')),
-          ],
-        )));
+              )),
+            ])),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('CAMBIAR JUGADORES')),
+              FilledButton(onPressed: pitcherBats || designatedId != null
+                ? () => Navigator.pop(dialog, true) : null, child: const Text('GUARDAR ALINEACIÓN')),
+            ],
+          )),
+        );
+        if (!mounted || _game?['id'] != game['id'] || save == null) return;
+        final nonBatters = selected.where((p) => !batting.contains(p)).toList();
+        selected..clear()..addAll(batting)..addAll(nonBatters);
+        if (!save) continue;
+        final extended = pitcherId != null || positions.isNotEmpty || saved?['pitcher_id'] != null ||
+            (saved?['defensive_positions'] is Map && (saved!['defensive_positions'] as Map).isNotEmpty);
+        await _client.rpc(extended ? 'swl_v56_save_lineup' : 'swl_v53_save_lineup_checked', params: {
+          'p_game_id': game['id'],
+          'p_team_id': teamId,
+          'p_player_ids': batting.map((p) => p.playerId).toList(),
+          'p_expected_revision': expectedRevision,
+          if (extended) 'p_pitcher_id': pitcherId,
+          if (extended) 'p_pitcher_bats': pitcherBats,
+          if (extended) 'p_designated_hitter_id': designatedId,
+          if (extended) 'p_defensive_positions': positions,
+        }).timeout(const Duration(seconds: 12));
+        if (!mounted || _game?['id'] != game['id']) return;
+        await _loadSavedLineups(announce: true);
+        return;
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('No se pudo preparar la alineación: $e')));
+        content: Text(e is PostgrestException && e.code == 'PGRST202'
+            ? 'LAB aún no admite guardar pitcher y posiciones. La selección sigue sin confirmarse.'
+            : e.toString().contains('LINEUP_LOCKED_AFTER_FIRST_PLATE_ACTION')
+              ? 'La alineación se bloqueó al comenzar el bateo. Usa SUSTITUIR BATEADOR.'
+              : 'No se pudo confirmar la alineación: $e')));
     }
   }
 
@@ -1136,7 +1287,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (!mounted || _game?['id']?.toString() != gameId) return;
       final currentIds = slots.whereType<Map>()
           .map((slot) => slot['player_id']?.toString()).toSet();
-      final available = roster.where((p) => !currentIds.contains(p.playerId)).toList();
+      final available = roster.where((p) => !currentIds.contains(p.playerId) && p.playerId != saved['pitcher_id']).toList();
       if (available.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('No hay peloteros disponibles fuera de la alineación.')));
@@ -1238,7 +1389,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       var rpcStarted = false;
       try {
         rpcStarted = true;
-        await _client.rpc('swl_v53_substitute_batter', params: {
+        final extended = saved['pitcher_id'] != null ||
+            (saved['defensive_positions'] is Map && (saved['defensive_positions'] as Map).isNotEmpty);
+        await _client.rpc(extended ? 'swl_v56_substitute_batter' : 'swl_v53_substitute_batter', params: {
         'p_game_id': gameId,
         'p_team_id': teamId,
         'p_batting_order': order,
@@ -1318,6 +1471,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         {'id': awayId, 'label': 'VISITANTE'},
       ])
         Card(color: const Color(0xFF162131), child: ListTile(
+          leading: SwlTeamBadge(url: _teamLogos[side['id']]),
           title: Text(_name(side['id']),
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           subtitle: Text(side['label']!,
@@ -1351,10 +1505,155 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     ]);
   }
 
+  bool _hasConfirmedLineup(String? teamId) => teamId != null &&
+      _savedLineups.any((row) => row['team_id']?.toString() == teamId &&
+          row['lineup'] is List && (row['lineup'] as List).length >= 9);
+
+  Future<void> _startGame() async {
+    final game = _game;
+    if (_startingGame || game == null || game['status'] != 'SCHEDULED' ||
+        _myTeamId(game) != game['home_team_id']?.toString()) return;
+    setState(() => _startingGame = true);
+    try {
+      await _client.rpc('swl_v56_start_game', params: {
+        'p_game_id': game['id'],
+        'p_expected_version': game['version'],
+      }).timeout(const Duration(seconds: 12));
+      await _refreshGame();
+    } on PostgrestException catch (error) {
+      if (!mounted) return;
+      final message = error.code == 'PGRST202' || error.code == '42883'
+          ? 'LAB aún no tiene habilitada la transición para iniciar el partido.'
+          : error.message;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } catch (_) {
+      await _refreshGame();
+      if (mounted && _game?['status'] != 'IN_PROGRESS') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No se confirmó el inicio. Actualiza el partido antes de reintentar.')));
+      }
+    } finally {
+      if (mounted) setState(() => _startingGame = false);
+    }
+  }
+
+  Future<void> _showRivalLineup(String rivalId) async {
+    await _loadSavedLineups();
+    if (!mounted || !context.mounted) return;
+    await showDialog<void>(context: context, builder: (dialog) => AlertDialog(
+      title: Text('Alineación rival · ${_name(rivalId)}'),
+      content: SingleChildScrollView(child: _lineupsError == null
+          ? _lineupStatus(rivalId, 'Alineación confirmada')
+          : Text(_lineupsError!)),
+      actions: [TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CERRAR'))],
+    ));
+  }
+
+  Future<void> _changePitcher(SwlLiveScoreboardSnapshot snapshot) async {
+    final game = _game;
+    final team = game == null ? null : _myTeamId(game);
+    if (_substitutionPending || team == null || game == null ||
+        team == snapshot.battingTeamId || snapshot.status != 'IN_PROGRESS') return;
+    final lineup = _savedLineups.where((row) => row['team_id'] == team).firstOrNull;
+    final pitcherId = lineup?['pitcher_id']?.toString();
+    if (pitcherId == null) return;
+    final order = lineup?['lineup'];
+    if (order is! List) return;
+    final batters = {for (final slot in order.whereType<Map>()) slot['player_id']?.toString()};
+    setState(() => _substitutionPending = true);
+    try {
+      final players = await SwlRosterRepository(_client).activePlayers(team)
+          .timeout(const Duration(seconds: 12));
+      if (!mounted || _game?['id'] != game['id']) return;
+      final eligible = players.where((player) => player.playerId != pitcherId &&
+          batters.contains(player.playerId) == (lineup?['pitcher_bats'] != false));
+      final candidate = await showDialog<String>(context: context, builder: (dialog) =>
+        AlertDialog(
+          title: const Text('Cambiar pitcher'),
+          content: SizedBox(width: 400, child: eligible.isEmpty
+              ? const Text('No hay otro pitcher elegible con la regla de bateo actual.')
+              : ListView(shrinkWrap: true, children: [
+                for (final player in eligible)
+                  ListTile(title: Text(player.name), subtitle: Text(player.position),
+                    onTap: () => Navigator.pop(dialog, player.playerId)),
+              ])),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CANCELAR'))],
+        ),
+      );
+      if (!mounted || candidate == null || _game?['id'] != game['id']) return;
+      await _client.rpc('swl_v56_change_pitcher', params: {
+        'p_game_id': game['id'], 'p_team_id': team, 'p_player_id': candidate,
+        'p_expected_version': snapshot.version,
+      }).timeout(const Duration(seconds: 12));
+      await _refreshGame();
+      await _loadSavedLineups(announce: true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+        error is PostgrestException && error.code == 'PGRST202'
+          ? 'LAB aún no admite cambios de pitcher.'
+          : 'No se confirmó el cambio. Actualiza la alineación antes de repetir: $error')));
+    } finally {
+      if (mounted) setState(() => _substitutionPending = false);
+    }
+  }
+
+  Future<void> _showGameDetails(BuildContext scoreboardContext) async {
+    final game = _game;
+    if (game == null) return;
+    final id = game['id'].toString();
+    Map<String, SwlPitchingTotals>? pitching;
+    Map<String, String> pitcherNames = {};
+    String? pitchingError;
+    Future<void> readPitching() async {
+      try {
+        pitching = await swlLoadPitching(_client, id, SwlLiveScoreboardSnapshot.fromGame(game).version);
+        pitcherNames = await _lookupPlayerNames(pitching?.keys.toSet() ?? {});
+      } catch (_) {
+        pitchingError = 'No se pudo leer la estadística de pitcheo.';
+      }
+    }
+    await Future.wait([_loadSavedLineups(), _loadRecentEvents(),
+      _loadSubstitutionHistory(), _loadBattingStats(), readPitching()]);
+    if (!mounted || !scoreboardContext.mounted || _game?['id']?.toString() != id) return;
+    await showDialog<void>(context: scoreboardContext, builder: (dialog) => AlertDialog(
+      title: const Text('Box Score y alineaciones'),
+      content: SizedBox(width: 450, child: SingleChildScrollView(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${_name(game['away_team_id'])} ${game['away_runs'] ?? 0} · '
+            '${_name(game['home_team_id'])} ${game['home_runs'] ?? 0} · ${game['status']}'),
+          _inningAudit(game),
+          for (final side in ['away', 'home'])
+            if (game['${side}_team_id'] != null)
+              _lineupStatus(game['${side}_team_id'].toString(), _name(game['${side}_team_id'])),
+          for (final message in [_lineupsError, _battingStatsError, _substitutionHistoryError,
+            _eventsError, if (_substitutionHistoryTruncated) 'Historial de sustituciones limitado.'])
+            if (message != null) Text(message),
+          _battingBoxScore(game),
+          const Text('Pitcheo individual · jugadas acreditadas'),
+          if (pitchingError != null) Text(pitchingError!),
+          if (pitchingError == null && (pitching == null || pitching!.isEmpty))
+            const Text('Aún no hay estadísticas de pitcheo confirmadas.'),
+          for (final entry in (pitching ?? <String, SwlPitchingTotals>{}).entries)
+            ListTile(title: Text(pitcherNames[entry.key] ?? _lineupPlayerNames[entry.key] ?? 'Pitcher'),
+              subtitle: Text('${entry.value.innings} IP · ${entry.value.strikeouts} K · '
+                '${entry.value.walks} BB · ${entry.value.hits} H')), 
+          const Text('Jugadas recientes'),
+          if (_eventsQueried)
+            for (final event in _recentEvents) ListTile(title: Text(_eventDescription(event))),
+        ]),
+      )),
+      actions: [TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CERRAR'))],
+    ));
+  }
+
   Widget _lineupPreparationView() {
     final game = _game!;
     final myTeamId = _myTeamId(game);
     if (myTeamId == null) return _teamConfirmationView();
+    final homeId = game['home_team_id']?.toString();
+    final awayId = game['away_team_id']?.toString();
+    final rivalId = myTeamId == homeId ? awayId : homeId;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Text('PASO 3 · PREPARA TU ALINEACIÓN',
         style: TextStyle(color: Colors.amber, fontSize: 20,
@@ -1374,11 +1673,23 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         label: const Text('EDITAR MI ALINEACIÓN'),
       ),
       OutlinedButton.icon(
-        onPressed: _loadSavedLineups,
+        onPressed: _lineupsLoading ? null : () => _loadSavedLineups(announce: true),
         icon: const Icon(Icons.sync),
         label: const Text('ACTUALIZAR ALINEACIONES'),
       ),
       const SizedBox(height: 12),
+      if (rivalId != null)
+        OutlinedButton(onPressed: () => _showRivalLineup(rivalId),
+          child: const Text('VER ALINEACIÓN RIVAL')),
+      if (game['status'] == 'SCHEDULED' && myTeamId == homeId)
+        FilledButton(
+          onPressed: _startingGame || game['away_manager_id'] == null ||
+              !_hasConfirmedLineup(homeId) || !_hasConfirmedLineup(awayId)
+                ? null : _startGame,
+          child: Text(_startingGame ? 'INICIANDO…' : 'INICIAR PARTIDO'),
+        ),
+      if (game['status'] == 'SCHEDULED')
+        const Text('El mánager local inicia el partido cuando ambos equipos han confirmado su alineación.'),
       if (_hasMyLineup(game))
         FilledButton.icon(
           onPressed: _openOriginalScoreboardPreview,
@@ -1389,6 +1700,14 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         const Text('Guarda tu alineación para continuar a la pizarra. '
           'El rival prepara la suya desde su propio dispositivo.',
           style: TextStyle(color: Colors.white70)),
+      if (game['status'] == 'IN_PROGRESS' && game['is_top'] is bool &&
+          myTeamId != SwlLiveScoreboardSnapshot.fromGame(game).battingTeamId &&
+          _savedLineups.any((row) => row['team_id'] == myTeamId && row['pitcher_id'] != null))
+        OutlinedButton(
+          onPressed: _substitutionPending || game['balls'] != 0 || game['strikes'] != 0
+              ? null : () => _changePitcher(SwlLiveScoreboardSnapshot.fromGame(game)),
+          child: const Text('CAMBIAR PITCHER'),
+        ),
       if (_hasMyLineup(game) && game['status'] == 'IN_PROGRESS')
         OutlinedButton(
           onPressed: _substitutionPending || _substitutionUncertain ? null :
@@ -1398,29 +1717,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       OutlinedButton(
         onPressed: () => _showActiveRoster(myTeamId, _name(myTeamId)),
         child: const Text('VER ROSTER ACTIVO'),
-      ),
-      ExpansionTile(
-        title: const Text('Estadísticas e historial'),
-        onExpansionChanged: (expanded) {
-          if (expanded) {
-            _loadRecentEvents();
-            _loadSubstitutionHistory();
-            _loadBattingStats();
-          }
-        },
-        children: [
-          _inningAudit(game),
-          if (_battingStatsLoading || _substitutionHistoryLoading || _eventsLoading)
-            const LinearProgressIndicator(),
-          for (final message in [_battingStatsError, _substitutionHistoryError,
-            _eventsError, if (_substitutionHistoryTruncated)
-              'El historial completo de sustituciones supera el límite de consulta.'])
-            if (message != null) Text(message),
-          _battingBoxScore(game),
-          if (_eventsQueried)
-            for (final event in _recentEvents)
-              ListTile(title: Text(_eventDescription(event))),
-        ],
       ),
       TextButton(onPressed: () => setState(() => _teamConfirmed = false),
         child: const Text('VOLVER A MI EQUIPO')),
@@ -1435,6 +1731,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       _teamConfirmed = false;
       _away = null;
       _teamNames.clear();
+      _teamLogos.clear();
       _error = null;
       _connectionWarning = null;
       _savedLineups = [];
@@ -1443,10 +1740,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   }
 
   // La pizarra oficial es la única pantalla de anotación del partido.
-  void _openOriginalScoreboardPreview() {
+  Future<void> _openOriginalScoreboardPreview({bool exitLobbyOnReturn = false}) async {
     final game = _game;
     if (game == null) return;
-    Navigator.of(context).push(MaterialPageRoute<void>(
+    await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ValueListenableBuilder(
         valueListenable: _scoreboard,
         builder: (context, live, child) => SwlAdvancedScoreboard(
@@ -1454,12 +1751,16 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         homeTeam: _name(game['home_team_id']?.toString() ?? ''),
         awayTeam: _name(game['away_team_id']?.toString() ?? ''),
         liveSnapshot: live ?? SwlLiveScoreboardSnapshot.fromGame(game),
+        onLiveDetails: () => _showGameDetails(context),
+        homeLogo: _teamLogos[game['home_team_id']],
+        awayLogo: _teamLogos[game['away_team_id']],
         onLiveAction: _myTeamId(game) == null ? null :
             (version, action, hitParams) =>
                 _recordPlay(game['id'].toString(), version, action, hitParams),
         ),
       ),
     ));
+    if (mounted && exitLobbyOnReturn) Navigator.of(context).pop();
   }
 
   @override
@@ -1510,6 +1811,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           if (_matches.isNotEmpty) ...[
             const SizedBox(height: 6),
             ..._matches.map((t) => ListTile(
+              leading: SwlTeamBadge(url: swlTeamLogo(t)),
               title: Text(t['name']?.toString() ?? 'Equipo',
                   style: const TextStyle(color: Colors.white)),
               subtitle: Text(t['province']?.toString() ?? '',

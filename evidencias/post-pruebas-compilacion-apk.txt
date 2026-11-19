@@ -1,0 +1,10 @@
+Flutter 3.50.0 · Temurin JDK 21 · Android 36
+flutter build apk --no-pub --release
+Salida: 0. Compilación con un valor de prueba para la clave de LAB.
+Running Gradle task 'assembleRelease'...
+Running Gradle task 'assembleRelease'...                          280.0s
+✓ Built build/app/outputs/flutter-apk/app-release.apk (56.4MB)
+
+Firma verificada con apksigner. Tres ABI confirmadas.
+Tamaño: 56363658 bytes.
+SHA-256: cbb2e84455a7267eb7bec4880802c9b090fdcc2b323f95599b82452ce06c3b6f

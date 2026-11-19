@@ -1,3 +1,5 @@
+import 'swl_team_logo_editor.dart';
+import 'swl_team_lookup.dart';
 import 'swl_live_lobby.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -583,16 +585,15 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       if (row is! Map) throw StateError('Respuesta de registro inesperada: $data');
       createdId = (row['v_player_id'] ?? row['player_id'] ?? row['id'])?.toString();
       createdCode = (row['v_universal_id'] ?? row['universal_id'])?.toString();
-      if (createdId != null) {
-        _pendingRegisteredPlayer = {
-          'player_id': createdId, 'first_name': first, 'last_name': last,
-          'universal_id': createdCode ?? '',
-        };
-        _pendingTeamId = team;
+      if (createdId == null || !RegExp(r'^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$').hasMatch(createdId)) {
+        createdId = null;
+        throw StateError('Respuesta sin UUID válido. Busca el pelotero antes de volver a registrarlo.');
       }
-      if (createdId == null || !RegExp(r'^[0-9a-fA-F-]{36}$').hasMatch(createdId)) {
-        throw StateError('Jugador registrado, pero la respuesta no incluyó un UUID válido. Verifica players antes de reintentar.');
-      }
+      _pendingRegisteredPlayer = {
+        'player_id': createdId, 'first_name': first, 'last_name': last,
+        'universal_id': createdCode ?? '',
+      };
+      _pendingTeamId = team;
       final rosterId = await Supabase.instance.client.rpc('swl_sign_player', params: {
         'p_team_id': team,
         'p_player_id': createdId,
@@ -610,7 +611,10 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = createdId != null
         ? 'El pelotero YA fue registrado (ID: $createdId; código: ${createdCode ?? "no disponible"}), '
           'pero el fichaje NO se confirmó. No vuelvas a registrarlo: busca su código para ficharlo. Detalle: $e'
-        : 'No se pudo confirmar el registro. Revisa players antes de reintentar para evitar duplicados. Detalle: $e');
+        : e is PostgrestException && e.code == '23505' &&
+            e.message.contains('players_universal_id_key')
+          ? 'El servidor intentó asignar un código SWL que ya existe. El nuevo pelotero no se registró. El generador de códigos de LAB requiere revisión.'
+          : 'No se pudo confirmar el registro. Revisa el catálogo de peloteros antes de reintentar para evitar duplicados. Detalle: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -1385,15 +1389,20 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
   String? scheduledHomeId;
   int lobbyRequest = 0;
 
-  void _activateMatch(String opponent, String homeId) {
-    setState(() {
-      pendingJoinPin = null;
-      scheduledOpponent = opponent;
-      scheduledHomeId = homeId;
-      lobbyRequest++;
-      _currentIndex = 1;
-    });
+  void _openGameLobby({String? pin, String? opponent, String? opponentId, String? homeId}) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SwlLiveLobby(
+        authorizedTeams: widget.authorizedTeams,
+        initialOpponent: opponent,
+        initialOpponentId: opponentId,
+        initialJoinPin: pin,
+        preferredHomeId: homeId ?? _activeTeam?['id']?.toString(),
+      ),
+    ));
   }
+
+  void _activateMatch(String opponent, String homeId, String opponentId) =>
+      _openGameLobby(opponent: opponent, homeId: homeId, opponentId: opponentId);
 
   Future<void> _logout() async {
     try {
@@ -1412,27 +1421,18 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     final activeProvince = _activeTeam?['province']?.toString() ?? widget.teamProvince;
     final List<Widget> screens = [
       MasterHomeTab(
-        onPlayNowTap: () => setState(() => _currentIndex = 1),
-        onGameJoined: (pin) => setState(() {
-          // La unión real se realiza mediante la RPC en SwlLiveLobby.
-          pendingJoinPin = pin;
-          scheduledOpponent = null;
-          scheduledHomeId = null;
-          lobbyRequest++;
-          _currentIndex = 1;
-        }),
+        onPlayNowTap: () => _openGameLobby(),
+        onGameJoined: (pin) => _openGameLobby(pin: pin),
       ),
       MasterScoreboardTab(
-        key: ValueKey(lobbyRequest),
-        initialJoinPin: pendingJoinPin,
-        initialOpponent: scheduledOpponent,
-        preferredHomeId: scheduledHomeId ?? _activeTeam?['id']?.toString(),
+        teamId: _activeTeam?['id']?.toString(),
         authorizedTeams: widget.authorizedTeams,
       ),
       MasterScheduleTab(
         myTeamName: activeName,
         teamId: _activeTeam?['id']?.toString(),
         onActivateMatch: _activateMatch,
+        onOpenLinkedGame: (pin) => _openGameLobby(pin: pin),
       ),
       MasterTeamTab(
         userRole: widget.userRole,
@@ -1738,33 +1738,105 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
 }
 
 // =========================================================================
-// PESTAÑA 2: PIZARRA OFICIAL EN VIVO (CONECTADA POR PIN DINÁMICO)
+// PESTAÑA 2: PARTIDOS DE MI EQUIPO (SIN FORMULARIO DE CREACIÓN)
 // =========================================================================
 class MasterScoreboardTab extends StatefulWidget {
-  final String? initialJoinPin;
-  final String? initialOpponent;
-  final String? preferredHomeId;
+  final String? teamId;
   final List<Map<String, dynamic>> authorizedTeams;
-
-  const MasterScoreboardTab({
-    super.key,
-    this.initialJoinPin,
-    this.initialOpponent,
-    this.preferredHomeId,
-    required this.authorizedTeams,
-  });
+  const MasterScoreboardTab({super.key, required this.teamId,
+    required this.authorizedTeams});
 
   @override
   State<MasterScoreboardTab> createState() => _MasterScoreboardTabState();
 }
 
 class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
+  late Future<List<Map<String, dynamic>>> _games;
+
   @override
-  Widget build(BuildContext context) => SwlLiveLobby(
-    authorizedTeams: widget.authorizedTeams,
-    initialJoinPin: widget.initialJoinPin,
-    initialOpponent: widget.initialOpponent,
-    preferredHomeId: widget.preferredHomeId,
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void didUpdateWidget(covariant MasterScoreboardTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.teamId != widget.teamId) _reload();
+  }
+
+  void _reload() {
+    final id = widget.teamId;
+    _games = id == null ? Future.value(<Map<String, dynamic>>[]) :
+        _fetchGames(id);
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchGames(String id) async {
+    final rows = await Supabase.instance.client.from('swl_live_games')
+        .select('id,game_pin,home_team_id,away_team_id,status,inning,is_top,home_runs,away_runs,created_at')
+        .or('home_team_id.eq.$id,away_team_id.eq.$id')
+        .order('created_at', ascending: false).limit(100)
+        .timeout(const Duration(seconds: 15));
+    return [for (final row in rows) Map<String, dynamic>.from(row)];
+  }
+
+  void _refresh() => setState(_reload);
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFF080D14),
+    appBar: AppBar(title: const Text('⚾ PARTIDOS DE MI EQUIPO'),
+      actions: [IconButton(onPressed: _refresh,
+        tooltip: 'Actualizar partidos', icon: const Icon(Icons.refresh))]),
+    body: widget.teamId == null
+      ? const Center(child: Padding(padding: EdgeInsets.all(24),
+          child: Text('No tienes un equipo autorizado seleccionado.',
+            textAlign: TextAlign.center)))
+      : FutureBuilder<List<Map<String, dynamic>>>(
+          future: _games,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Column(mainAxisSize: MainAxisSize.min,
+                children: [const Text('No se pudieron cargar los partidos.'),
+                  TextButton(onPressed: _refresh, child: const Text('REINTENTAR'))]));
+            }
+            final games = snapshot.data ?? [];
+            if (games.isEmpty) {
+              return const Center(child: Padding(padding: EdgeInsets.all(24),
+                child: Text('Tu equipo todavía no tiene partidos registrados. '
+                  'Para crear uno, ve a Inicio → ¡A JUGAR AHORA!',
+                  textAlign: TextAlign.center)));
+            }
+            return RefreshIndicator(onRefresh: () async {
+              _refresh();
+              await _games;
+            }, child: ListView.builder(
+              itemCount: games.length,
+              itemBuilder: (context, index) {
+                final game = games[index];
+                final status = game['status']?.toString() ?? 'SCHEDULED';
+                final pin = game['game_pin']?.toString() ?? '';
+                return Card(color: const Color(0xFF172334),
+                  child: ListTile(
+                    leading: const Icon(Icons.sports_baseball, color: Colors.amber),
+                    title: Text('Partido $pin'),
+                    subtitle: Text('$status · Entrada ${game['inning'] ?? 1} · '
+                      '${game['away_runs'] ?? 0} - ${game['home_runs'] ?? 0}'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: pin.isEmpty ? null : () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => SwlLiveLobby(
+                        authorizedTeams: widget.authorizedTeams,
+                        openGameId: game['id']?.toString(),
+                        preferredHomeId: widget.teamId,
+                      ))).then((_) { if (mounted) _refresh(); }),
+                  ));
+              },
+            ));
+          },
+        ),
   );
 }
 
@@ -1774,13 +1846,15 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
 class MasterScheduleTab extends StatefulWidget {
   final String myTeamName;
   final String? teamId;
-  final void Function(String opponent, String homeId) onActivateMatch;
+  final void Function(String opponent, String homeId, String opponentId) onActivateMatch;
+  final ValueChanged<String> onOpenLinkedGame;
 
   const MasterScheduleTab({
     super.key,
     required this.myTeamName,
     required this.teamId,
     required this.onActivateMatch,
+    required this.onOpenLinkedGame,
   });
 
   @override
@@ -1790,10 +1864,195 @@ class MasterScheduleTab extends StatefulWidget {
 class _MasterScheduleTabState extends State<MasterScheduleTab> {
   final List<Map<String, String>> matches = [];
 
+  final _client = Supabase.instance.client;
+  List<Map<String, dynamic>> _inbox = [];
+  Map<String, Map<String, dynamic>> _agendaTeams = {};
+  bool _loadingAgenda = false;
+  bool _changingChallenge = false;
+  bool _agendaAvailable = true;
+  Set<String>? _observedIncoming;
+  String? _agendaError;
+  int _agendaRequest = 0;
+  Timer? _agendaTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshAgenda();
+    _agendaTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_agendaAvailable) _refreshAgenda();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant MasterScheduleTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.teamId != widget.teamId) {
+      _loadingAgenda = false;
+      _inbox = [];
+      _agendaTeams = {};
+      _observedIncoming = null;
+      _refreshAgenda();
+    }
+  }
+
+  @override
+  void dispose() {
+    _agendaTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshAgenda() async {
+    final team = widget.teamId;
+    if (team == null || _loadingAgenda) return;
+    final request = ++_agendaRequest;
+    setState(() { _loadingAgenda = true; _agendaError = null; });
+    try {
+      final rows = await _client.from('swl_v56_challenges').select()
+          .or('home_team_id.eq.$team,away_team_id.eq.$team')
+          .order('scheduled_at', ascending: false).limit(100)
+          .timeout(const Duration(seconds: 12));
+      final ids = {
+        for (final row in rows)
+          for (final key in ['home_team_id', 'away_team_id'])
+            if (row[key] != null) row[key].toString(),
+      };
+      final teams = ids.isEmpty ? <Map<String, dynamic>>[] :
+          await swlQueryTeams((columns) async =>
+            await _client.from('teams').select(columns).inFilter('id', ids.toList())
+              .timeout(const Duration(seconds: 12)));
+      if (!mounted || request != _agendaRequest || widget.teamId != team) return;
+      final incoming = {
+        for (final row in rows)
+          if (row['away_team_id'] == team && row['status'] == 'SENT') row['id'].toString(),
+      };
+      final previous = _observedIncoming;
+      _observedIncoming = incoming;
+      if (previous != null && incoming.difference(previous).isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Recibiste un reto. Puedes responder desde Agenda.')),
+        );
+      }
+      setState(() {
+        _agendaAvailable = true;
+        _inbox = rows;
+        _agendaTeams = {for (final item in teams) item['id'].toString(): item};
+      });
+    } on PostgrestException catch (error) {
+      if (!mounted || request != _agendaRequest || widget.teamId != team) return;
+      setState(() {
+        _agendaAvailable = error.code != 'PGRST205' && error.code != '42P01';
+        _agendaError = _agendaAvailable ? 'No se pudo leer la Agenda compartida.' :
+            'Agenda compartida pendiente de habilitación en LAB.';
+      });
+    } catch (_) {
+      if (mounted && request == _agendaRequest && widget.teamId == team) {
+        setState(() => _agendaError = 'No se pudo leer la Agenda compartida.');
+      }
+    } finally {
+      if (mounted && request == _agendaRequest) setState(() => _loadingAgenda = false);
+    }
+  }
+
+  Future<void> _sendChallenge(Map<String, String> draft) async {
+    if (_changingChallenge || widget.teamId != draft['homeId']) return;
+    setState(() => _changingChallenge = true);
+    try {
+      await _client.rpc('swl_v56_send_challenge', params: {
+        'p_home_team_id': draft['homeId'],
+        'p_away_team_id': draft['awayId'],
+        'p_external_team_name': draft['awayId'] == null ? draft['away'] : null,
+        'p_scheduled_at': draft['scheduledAt'],
+        'p_stadium': draft['play'],
+      }).timeout(const Duration(seconds: 12));
+      if (!mounted) return;
+      setState(() => matches.remove(draft));
+      await _refreshAgenda();
+    } catch (error) {
+      _showAgendaActionError(error);
+    } finally {
+      if (mounted) setState(() => _changingChallenge = false);
+    }
+  }
+
+  void _showAgendaActionError(Object error) {
+    if (!mounted) return;
+    final message = error is PostgrestException
+        ? (error.code == 'PGRST202' ? 'La Agenda compartida aún no está habilitada en LAB.' : error.message)
+        : 'No se confirmó la operación. Actualiza la Agenda antes de reintentar.';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _changeChallenge(Map<String, dynamic> challenge, String action) async {
+    if (_changingChallenge) return;
+    setState(() => _changingChallenge = true);
+    final team = widget.teamId;
+    try {
+      final result = action == 'OPEN' ? challenge :
+          await _client.rpc('swl_v56_act_challenge', params: {
+            'p_id': challenge['id'], 'p_action': action,
+          }).timeout(const Duration(seconds: 12));
+      final row = result is List ? result.single : result;
+      if (row is! Map) throw StateError('Respuesta de Agenda incompleta.');
+      if (row['game_id'] != null && (action == 'OPEN' || action == 'PREPARE')) {
+        final game = await _client.from('swl_live_games').select('game_pin')
+            .eq('id', row['game_id']).single().timeout(const Duration(seconds: 12));
+        final pin = game['game_pin']?.toString();
+        if (mounted && widget.teamId == team && pin != null) widget.onOpenLinkedGame(pin);
+      }
+      if (mounted) await _refreshAgenda();
+    } catch (error) {
+      _showAgendaActionError(error);
+    } finally {
+      if (mounted) setState(() => _changingChallenge = false);
+    }
+  }
+
+  Widget _challengeCard(Map<String, dynamic> challenge) {
+    final isHome = challenge['home_team_id'] == widget.teamId;
+    final status = challenge['status'];
+    final homeTeam = _agendaTeams[challenge['home_team_id']];
+    final home = homeTeam?['name'] ?? 'Local';
+    final awayTeam = _agendaTeams[challenge['away_team_id']];
+    final away = awayTeam?['name'] ?? challenge['external_team_name'] ?? 'Visitante';
+    final scheduled = DateTime.tryParse(challenge['scheduled_at']?.toString() ?? '')?.toLocal();
+    final date = scheduled == null ? '' : '${MaterialLocalizations.of(context).formatShortDate(scheduled)} · '
+      '${TimeOfDay.fromDateTime(scheduled).format(context)}';
+    final label = switch (status) {
+      'SENT' => isHome ? 'ENVIADO' : 'RETO RECIBIDO',
+      'ACCEPTED' => 'ACEPTADO',
+      'REJECTED' => 'RECHAZADO',
+      'CANCELLED' => 'CANCELADO',
+      'EXTERNAL' => 'PROGRAMADO · RIVAL EXTERNO',
+      _ => 'ESTADO PENDIENTE',
+    };
+    Widget action(String label, String code) => TextButton(
+      onPressed: _changingChallenge ? null : () => _changeChallenge(challenge, code),
+      child: Text(label),
+    );
+    return Card(child: Column(children: [
+      ListTile(leading: SwlTeamBadge(url: swlTeamLogo(awayTeam)), title: Text('$home vs $away'),
+        subtitle: Text('$label · $date · ${challenge['stadium'] ?? ''}')),
+      Wrap(children: [
+        if (status == 'SENT' && !isHome) ...[
+          action('ACEPTAR', 'ACCEPT'), action('RECHAZAR', 'REJECT'),
+        ],
+        if (status == 'ACCEPTED' && challenge['game_id'] != null)
+          action('ABRIR PARTIDO', 'OPEN')
+        else ...[
+          if (isHome && status == 'ACCEPTED') action('PREPARAR PARTIDO EN VIVO', 'PREPARE'),
+          if (isHome && ['SENT', 'ACCEPTED', 'EXTERNAL'].contains(status))
+            action('CANCELAR ENCUENTRO', 'CANCEL'),
+        ],
+      ]),
+    ]));
+  }
+
   Future<void> _scheduleChallenge() async {
     final homeId = widget.teamId;
     if (homeId == null) return;
     var rival = '';
+    Map<String, dynamic>? rivalTeam;
     var stadium = '';
     final today = DateUtils.dateOnly(DateTime.now());
     var date = today;
@@ -1806,10 +2065,10 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
           backgroundColor: const Color(0xFF16202C),
           title: const Text('Retar a un Equipo', style: TextStyle(color: Colors.amber)),
           content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-              onChanged: (value) => update(() => rival = value.trim()),
-              decoration: const InputDecoration(labelText: 'Nombre del equipo rival'),
-            ),
+            SwlTeamLookup(excludeId: homeId, onSelection: (name, team) => update(() {
+              rival = name;
+              rivalTeam = team;
+            })),
             TextField(
               onChanged: (value) => stadium = value.trim(),
               decoration: const InputDecoration(labelText: 'Estadio'),
@@ -1834,29 +2093,47 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
             FilledButton(
               onPressed: rival.isEmpty ? null : () => Navigator.pop(ctx, {
+                'scheduledAt': DateTime(date.year, date.month, date.day,
+                  time.hour, time.minute).toUtc().toIso8601String(),
                 'date': '${localization.formatMediumDate(date)} · ${localization.formatTimeOfDay(time)}',
                 'away': rival,
+                if (rivalTeam != null) 'awayId': rivalTeam!['id'].toString(),
+                if (swlTeamLogo(rivalTeam) case final String url) 'awayLogo': url,
                 'home': widget.myTeamName,
                 'homeId': homeId,
                 'play': stadium,
               }),
-              child: const Text('RETAR'),
+              child: const Text('GUARDAR BORRADOR'),
             ),
           ],
         );
       }),
     );
-    if (mounted && draft != null) setState(() => matches.add(draft));
+    if (mounted && draft != null && widget.teamId == homeId) {
+      final duplicate = matches.any((other) => other['homeId'] == homeId &&
+          other['scheduledAt'] == draft['scheduledAt'] &&
+          (draft['awayId'] != null ? other['awayId'] == draft['awayId'] :
+            other['awayId'] == null && other['away']?.toLowerCase() == draft['away']?.toLowerCase()));
+      if (duplicate) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Ya existe un borrador para este rival y horario.')),
+        );
+      } else {
+        setState(() => matches.add(draft));
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final teamMatches = matches.where((row) => row['homeId'] == widget.teamId).toList();
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1722),
         title: const Text("📅 AGENDA & RETOS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
         actions: [
+          IconButton(onPressed: _refreshAgenda, tooltip: 'Actualizar Agenda', icon: const Icon(Icons.refresh)),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4)),
             icon: const Icon(Icons.add, color: Colors.black, size: 16),
@@ -1866,14 +2143,16 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
           const SizedBox(width: 8),
         ],
       ),
-      body: matches.isEmpty
-          ? const Center(child: Text("No hay partidos agendados aún.\nToca '+ RETAR' para programar el primero.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white38)))
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: matches.length,
-              itemBuilder: (ctx, i) {
-                final m = matches[i];
-                return Container(
+      body: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          if (_loadingAgenda) const LinearProgressIndicator(),
+          if (_agendaError != null) ListTile(title: Text(_agendaError!)),
+          if (teamMatches.isEmpty && _inbox.isEmpty && !_loadingAgenda)
+            const ListTile(title: Text('Tu equipo aún no tiene encuentros en la Agenda.')),
+          for (final challenge in _inbox) _challengeCard(challenge),
+          for (final m in teamMatches)
+                Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(color: const Color(0xFF121B27), borderRadius: BorderRadius.circular(10)),
@@ -1888,7 +2167,15 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Text("${m["home"]!} vs ${m["away"]!}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      ListTile(
+                        leading: SwlTeamBadge(url: m['awayLogo']),
+                        title: Text('${m['home']} vs ${m['away']}'),
+                        subtitle: Text(m['awayId'] == null ? 'Equipo externo' : 'Equipo registrado'),
+                      ),
+                      TextButton(
+                        onPressed: _changingChallenge ? null : () => _sendChallenge(m),
+                        child: Text(m['awayId'] == null ? 'PROGRAMAR EXTERNO' : 'ENVIAR RETO'),
+                      ),
                       if (m['play']?.isNotEmpty == true)
                         Text(m['play']!, style: const TextStyle(color: Colors.white70)),
                       const SizedBox(height: 8),
@@ -1898,15 +2185,15 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.teal.shade700),
                           icon: const Icon(Icons.play_arrow, color: Colors.white, size: 18),
                           label: const Text("🟢 PREPARAR PARTIDO EN VIVO", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
-                          onPressed: widget.teamId == null ? null :
-                              () => widget.onActivateMatch(m['away']!, m['homeId']!),
+                          onPressed: m['awayId'] == null ? null :
+                              () => widget.onActivateMatch(m['away']!, m['homeId']!, m['awayId']!),
                         ),
                       ),
                     ],
                   ),
-                );
-              },
-            ),
+                ),
+        ],
+      ),
     );
   }
 }
@@ -2191,6 +2478,8 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             ]),
           ),
           const SizedBox(height: 12),
+          if (_selectedTeamId case final String teamId)
+            SwlTeamLogoEditor(key: ValueKey(teamId), teamId: teamId),
           FutureBuilder<List<Map<String, dynamic>>>(
             future: _teams,
             builder: (context, snapshot) {

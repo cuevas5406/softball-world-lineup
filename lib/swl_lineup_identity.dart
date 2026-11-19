@@ -71,3 +71,21 @@ class SwlLineupIdentity {
       {'batting_order': i + 1, ...lineup[i].toJson()}];
   }
 }
+
+/// Comprueba el orden declarado por el servidor antes de atribuir una jugada.
+List<Map> swlConfirmedBattingSlots(Object? raw) {
+  if (raw is! List || raw.isEmpty) return const [];
+  final byOrder = <int, Map>{};
+  final ids = <String>{};
+  for (final slot in raw) {
+    if (slot is! Map) return const [];
+    final order = slot['order'] ?? slot['batting_order'];
+    final id = slot['player_id']?.toString();
+    if (order is! int || order < 1 || order > raw.length ||
+        byOrder.containsKey(order) || id == null || id.isEmpty || !ids.add(id)) {
+      return const [];
+    }
+    byOrder[order] = slot;
+  }
+  return [for (var order = 1; order <= byOrder.length; order++) byOrder[order]!];
+}

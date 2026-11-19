@@ -37,4 +37,21 @@ void main() {
     expect(SwlLiveScoreboardSnapshot.fromGame(game()).canScore('fan'), isFalse);
     expect(SwlLiveScoreboardSnapshot.fromGame(game()).canScore(null), isFalse);
   });
+  test('Un partido programado presenta la causa del bloqueo', () {
+    final pending = SwlLiveScoreboardSnapshot.fromGame(game(status: 'SCHEDULED'));
+    expect(pending.scoringBlock('away-manager'), contains('programado'));
+    expect(pending.scoringBlock('away-manager', authorized: false), contains('solo lectura'));
+  });
+
+  test('Una mitad desconocida jamás habilita al local', () {
+    final snapshot = SwlLiveScoreboardSnapshot.fromGame(game()..remove('is_top'));
+    expect(snapshot.canScore('home-manager'), isFalse);
+    expect(snapshot.canScore('away-manager'), isFalse);
+  });
+
+  test('La misma cuenta no puede asumir ambos lados', () {
+    final snapshot = SwlLiveScoreboardSnapshot.fromGame(game()
+      ..['away_manager_id'] = 'home-manager');
+    expect(snapshot.canScore('home-manager'), isFalse);
+  });
 }

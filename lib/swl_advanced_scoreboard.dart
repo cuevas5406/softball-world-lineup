@@ -1,3 +1,6 @@
+import 'swl_lineup_identity.dart';
+import 'swl_pitching_stats.dart';
+import 'swl_team_lookup.dart';
 import 'swl_live_scoreboard_snapshot.dart';
 import 'dart:math';
 import 'dart:async';
@@ -159,7 +162,10 @@ class SwlScoreGameSnapshot {
 }
 
 class SwlAdvancedScoreboard extends StatefulWidget {
-  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction});
+  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.homeLogo, this.awayLogo});
+  final String? homeLogo;
+  final String? awayLogo;
+  final VoidCallback? onLiveDetails;
   final SwlLiveScoreboardSnapshot? liveSnapshot;
   final Future<void> Function(int version, String action, Map<String, dynamic>? hitParams)? onLiveAction;
   final String gamePin;
@@ -177,6 +183,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   bool _refreshInFlight = false;
   bool _liveActionInFlight = false;
   bool _lineupsLoading = false;
+  bool _pitchingConfirmed = false;
+  bool _awayBatterConfirmed = false;
+  bool _homeBatterConfirmed = false;
   int _lastLineupRefreshVersion = -1;
   int _livePollCount = 0;
   String? _lineupLoadError;
@@ -188,7 +197,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     try {
       final client = Supabase.instance.client;
       final rawLineups = await client.from('swl_game_lineups')
-          .select('team_id,lineup').eq('game_id', live.gameId)
+          .select().eq('game_id', live.gameId)
           .timeout(const Duration(seconds: 12));
       final rawTurns = await client.from('swl_game_batting_turns')
           .select('team_id,next_order').eq('game_id', live.gameId)
@@ -225,7 +234,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           totals['bb'] = totals['bb']! + 1;
         }
       }
-      final ids = <String>{};
+      final ids = <String>{
+        for (final row in rawLineups)
+          if (row['pitcher_id'] != null) row['pitcher_id'].toString(),
+      };
       for (final row in rawLineups) {
         final slots = row['lineup'];
         if (slots is List) {
@@ -254,11 +266,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       List<SwlScorePlayer>? parseLineup(String teamId) {
         for (final row in rawLineups) {
           if (row['team_id']?.toString() != teamId) continue;
-          final slots = row['lineup'];
-          if (slots is! List || slots.isEmpty) return null;
+          final slots = swlConfirmedBattingSlots(row['lineup']);
+          if (slots.isEmpty) return null;
           final result = <SwlScorePlayer>[];
           for (final slot in slots) {
-            if (slot is! Map) continue;
             final id = slot['player_id']?.toString();
             final player = players[id];
             final name = player == null ? 'Pelotero no disponible' :
@@ -280,7 +291,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         for (final row in rawTurns) {
           if (row['team_id']?.toString() == teamId) {
             final order = (row['next_order'] as num?)?.toInt() ?? 1;
-            return order >= 1 && order <= length ? order - 1 : 0;
+            return order >= 1 && order <= length ? order - 1 : -1;
           }
         }
         return 0;
@@ -319,17 +330,48 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           batterName: name.isEmpty ? 'Partido' : name,
         );
       }).toList();
+      Map<String, SwlPitchingTotals>? pitching;
+      try {
+        pitching = await swlLoadPitching(client, live.gameId, live.version);
+      } catch (_) {
+        // La lectura de pitcheo es independiente de la identidad del lanzador.
+      }
+      if (!mounted || _currentLiveSnapshot?.gameId != live.gameId ||
+          _currentLiveSnapshot?.version != live.version) return;
       final away = parseLineup(live.awayTeamId);
       final home = parseLineup(live.homeTeamId);
+      SwlScorePitcher readPitcher(String teamId, String teamName) {
+        final lineup = rawLineups.where((row) => row['team_id']?.toString() == teamId).firstOrNull;
+        final id = lineup?['pitcher_id']?.toString();
+        final player = players[id];
+        final totals = pitching?[id];
+        final name = '${player?['first_name'] ?? ''} ${player?['last_name'] ?? ''}'.trim();
+        return SwlScorePitcher(
+          name: name.isEmpty ? 'Lanzador por confirmar' : name,
+          number: player?['jersey_number']?.toString() ?? '-',
+          teamName: teamName,
+          outsRecorded: totals?.outs ?? 0,
+          strikeouts: totals?.strikeouts ?? 0,
+          walks: totals?.walks ?? 0,
+          hitsAllowed: totals?.hits ?? 0,
+        );
+      }
       setState(() {
+        _pitchingConfirmed = pitching != null && pitching.isNotEmpty;
+        homePitcher = readPitcher(live.homeTeamId, homeName);
+        visitorPitcher = readPitcher(live.awayTeamId, visitorName);
         playsLog
           ..clear()
           ..addAll(history);
-        if (away != null) {
+        _awayBatterConfirmed = away != null &&
+            nextIndex(live.awayTeamId, away.length) >= 0;
+        _homeBatterConfirmed = home != null &&
+            nextIndex(live.homeTeamId, home.length) >= 0;
+        if (_awayBatterConfirmed && away != null) {
           visitorLineup = away;
           visitorLineupIndex = nextIndex(live.awayTeamId, away.length);
         }
-        if (home != null) {
+        if (_homeBatterConfirmed && home != null) {
           homeLineup = home;
           homeLineupIndex = nextIndex(live.homeTeamId, home.length);
         }
@@ -1593,14 +1635,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   @override
   Widget build(BuildContext context) {
     final syncedBatter = _lastLineupRefreshVersion == _currentLiveSnapshot?.version &&
+        (isTopInning ? _awayBatterConfirmed : _homeBatterConfirmed) &&
         currentBatter.playerId != null;
     final batter = widget.liveSnapshot == null || syncedBatter
         ? currentBatter
         : SwlScorePlayer(name: 'Bateador por sincronizar', number: '-');
-    final pitcher = widget.liveSnapshot == null
-        ? activePitcher
-        : SwlScorePitcher(name: 'Lanzador por sincronizar', number: '-',
-            teamName: isTopInning ? homeName : visitorName);
+    final pitcher = activePitcher;
 
     final scoreboard = Scaffold(
       backgroundColor: const Color(0xFF0B1118),
@@ -1609,6 +1649,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         elevation: 0,
         title: Text(widget.liveSnapshot == null ? '⚾ PIZARRA · PRUEBA LOCAL' : '⚾ PIZARRA · EN VIVO', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
         actions: [
+          if (widget.onLiveDetails != null)
+            IconButton(
+              tooltip: 'Box Score, alineaciones e historial',
+              onPressed: widget.onLiveDetails,
+              icon: const Icon(Icons.analytics_outlined, color: Colors.amber),
+            ),
           if (widget.liveSnapshot == null) PopupMenuButton<String>(
             tooltip: 'Sustituciones',
             icon: const Icon(Icons.swap_horiz, color: Colors.amber),
@@ -1728,7 +1774,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              widget.liveSnapshot == null
+                              widget.liveSnapshot == null || (_pitchingConfirmed && pitcher.name != "Lanzador por confirmar")
                                   ? "${pitcher.ip} IP · ${pitcher.strikeouts} K"
                                   : "— IP · — K",
                               style: const TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.w900, fontSize: 11),
@@ -1864,6 +1910,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     child: Row(
                       children: [
                         if (isTopInning) const Icon(Icons.arrow_right, color: Colors.amber, size: 14),
+                        if (widget.awayLogo != null) SwlTeamBadge(url: widget.awayLogo, size: 18),
                         Text(visitorName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
                       ],
                     ),
@@ -1895,6 +1942,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     child: Row(
                       children: [
                         if (!isTopInning) const Icon(Icons.arrow_right, color: Colors.amber, size: 14),
+                        if (widget.homeLogo != null) SwlTeamBadge(url: widget.homeLogo, size: 18),
                         Text(homeName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
                       ],
                     ),
@@ -2054,8 +2102,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     }
     final lineupRow = await client.from('swl_game_lineups').select('lineup')
         .eq('game_id', live.gameId).eq('team_id', teamId).maybeSingle().timeout(const Duration(seconds: 12));
-    final lineup = lineupRow?['lineup'];
-    if (lineup is! List || lineup.length < 9) {
+    final lineup = swlConfirmedBattingSlots(lineupRow?['lineup']);
+    if (lineup.length < 9) {
       throw StateError('Alineación no disponible');
     }
     final turn = await client.from('swl_game_batting_turns')
@@ -2065,7 +2113,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     if (order < 1 || order > lineup.length) {
       throw StateError('Turno al bate inválido');
     }
-    final batterId = (lineup[order - 1] as Map)['player_id']?.toString();
+    final batterId = lineup[order - 1]['player_id']?.toString();
     if (batterId == null || batterId.isEmpty) {
       throw StateError('Bateador no disponible');
     }
@@ -2182,8 +2230,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   Widget _buildLiveMainButtons() {
     final snapshot = _currentLiveSnapshot;
     final userId = Supabase.instance.client.auth.currentUser?.id;
-    final allowed = snapshot?.canScore(userId) == true &&
-        widget.onLiveAction != null && !_liveActionInFlight;
+    final block = snapshot?.scoringBlock(userId, authorized: widget.onLiveAction != null);
+    final allowed = snapshot != null && block == null && !_liveActionInFlight;
     Widget liveButton(String label, String action, Color color) => Expanded(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -2200,9 +2248,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        if (!allowed && !_liveActionInFlight)
-          const Text('Solo anota el mánager del equipo al bate',
-            style: TextStyle(color: Colors.amber, fontSize: 11)),
+        if (block != null)
+          Text(block,
+            style: const TextStyle(color: Colors.amber, fontSize: 11)),
         if (_liveActionError != null)
           Text(_liveActionError!, style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
         Row(children: [

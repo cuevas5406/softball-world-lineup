@@ -1,0 +1,10 @@
+Análisis sintáctico local con pglast. Sin conexión a PostgreSQL.
+
+00_inspeccion_solo_lectura.sql: 10 sentencias y 0 cuerpos PL/pgSQL analizados
+01_inicio_y_alineacion.sql: 9 sentencias y 2 cuerpos PL/pgSQL analizados
+02_retos.sql: 13 sentencias y 2 cuerpos PL/pgSQL analizados
+03_logos.sql: 13 sentencias y 1 cuerpos PL/pgSQL analizados
+04_generador_swl_revision_previa.sql: 8 sentencias y 0 cuerpos PL/pgSQL analizados
+05_cambio_pitcher.sql: 10 sentencias y 1 cuerpos PL/pgSQL analizados
+06_anotacion_y_pitcheo.sql: 13 sentencias y 4 cuerpos PL/pgSQL analizados
+07_sustitucion_integrada.sql: 5 sentencias y 1 cuerpos PL/pgSQL analizados

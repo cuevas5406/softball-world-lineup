@@ -11,6 +11,7 @@ class SwlLiveScoreboardSnapshot {
   final int version;
   final int inning;
   final bool isTop;
+  final bool hasKnownHalf;
   final int balls;
   final int strikes;
   final int outs;
@@ -37,6 +38,7 @@ class SwlLiveScoreboardSnapshot {
     required this.version,
     required this.inning,
     required this.isTop,
+    this.hasKnownHalf = true,
     required this.balls,
     required this.strikes,
     required this.outs,
@@ -74,6 +76,7 @@ class SwlLiveScoreboardSnapshot {
       version: _number(game['version']),
       inning: _number(game['inning']),
       isTop: game['is_top'] == true,
+      hasKnownHalf: game['is_top'] is bool,
       balls: _number(game['balls']),
       strikes: _number(game['strikes']),
       outs: _number(game['outs']),
@@ -102,7 +105,21 @@ class SwlLiveScoreboardSnapshot {
 
   String? get battingManagerId => isTop ? awayManagerId : homeManagerId;
   String get battingTeamId => isTop ? awayTeamId : homeTeamId;
-  bool canScore(String? userId) => userId != null &&
-      userId.isNotEmpty && homeManagerId != null && awayManagerId != null &&
-      userId == battingManagerId && status == 'IN_PROGRESS';
+  String? scoringBlock(String? userId, {bool authorized = true}) {
+    if (!authorized || userId == null || userId.isEmpty) return 'Modo de solo lectura.';
+    if (homeManagerId == null || homeManagerId!.isEmpty ||
+        awayManagerId == null || awayManagerId!.isEmpty ||
+        homeManagerId == awayManagerId || homeTeamId.isEmpty ||
+        awayTeamId.isEmpty || homeTeamId == awayTeamId) {
+      return 'Verifica la asignación de los dos equipos y mánagers.';
+    }
+    if (status == 'SCHEDULED') return 'El partido está programado. El local debe iniciarlo desde la preparación.';
+    if (status == 'FINAL' || status == 'OFFICIAL') return 'Partido finalizado.';
+    if (status != 'IN_PROGRESS') return 'El partido no está en curso ($status).';
+    if (!hasKnownHalf) return 'No se pudo confirmar qué equipo está al bate.';
+    if (userId != battingManagerId) return 'Solo anota el mánager del equipo al bate.';
+    return null;
+  }
+
+  bool canScore(String? userId) => scoringBlock(userId) == null;
 }

@@ -1,0 +1,93 @@
+flutter test --no-pub --reporter expanded
+
+00:00 +0: loading test/swl_inning_totals_test.dart
+00:00 +0: test/swl_inning_totals_test.dart: Carrera visitante en alta de primera
+00:00 +1: test/swl_inning_totals_test.dart: Carrera local en baja y cambio a segunda
+00:00 +2: test/swl_inning_totals_test.dart: Tercer out sin carrera conserva entrada previa
+00:00 +3: test/swl_inning_totals_test.dart: Rechaza carrera del equipo que no batea
+00:00 +4: test/swl_inning_totals_test.dart: Rechaza salto de entrada
+00:00 +5: test/swl_inning_totals_test.dart: Rechaza marcador desactualizado frente al desglose
+00:00 +6: test/swl_inning_totals_test.dart: Rechaza entradas futuras
+00:00 +7: test/swl_inning_totals_test.dart: Acepta continuidad de carreras en segunda entrada
+00:00 +8: test/swl_lineup_identity_test.dart: Alineación de nueve con IDs únicos produce orden 1 a 9
+00:00 +9: test/swl_lineup_identity_test.dart: No permite IDs duplicados
+00:00 +10: test/swl_lineup_identity_test.dart: No atribuye estadísticas sin ID
+00:00 +11: test/swl_lineup_identity_test.dart: DH no puede coexistir con pitcher en orden al bate
+00:00 +12: test/swl_lineup_identity_test.dart: No permite repetir posición defensiva
+00:00 +13: test/swl_lineup_identity_test.dart: Serialización conserva identidad
+00:00 +14: test/swl_roster_repository_test.dart: conserva UUID real y código universal
+00:00 +15: test/swl_roster_repository_test.dart: rechaza emparejamiento de roster con otro jugador
+00:00 +16: test/swl_play_rules_test.dart: Boleto con bases vacías ocupa primera
+00:00 +17: test/swl_play_rules_test.dart: Boleto con corredor en segunda no lo fuerza
+00:00 +18: test/swl_play_rules_test.dart: Boleto con primera y segunda fuerza tercera
+00:00 +19: test/swl_play_rules_test.dart: Boleto con bases llenas anota carrera visitante
+00:00 +20: test/swl_play_rules_test.dart: Boleto con bases llenas anota carrera local
+00:00 +21: test/swl_play_rules_test.dart: Ponche con dos outs cambia de alta a baja
+00:00 +22: test/swl_play_rules_test.dart: Ponche en baja con dos outs avanza entrada
+00:00 +23: test/swl_play_rules_test.dart: No se permite boleto prematuro
+00:00 +24: test/swl_play_rules_test.dart: Sencillo con bases vacías deja bateador en primera
+00:00 +25: test/swl_play_rules_test.dart: Doble con corredor en primera que anota
+00:00 +26: test/swl_play_rules_test.dart: Jonrón con bases llenas suma cuatro carreras
+00:00 +27: test/swl_play_rules_test.dart: Rechaza dos corredores en la misma base
+00:00 +28: test/swl_play_rules_test.dart: Un doble no puede dejar atrás al corredor que estaba en segunda
+00:00 +29: test/swl_play_rules_test.dart: El corredor que venía de primera no puede rebasar al de segunda
+00:00 +30: test/swl_play_rules_test.dart: Rechaza hit sin destino de corredor existente
+00:00 +31: test/swl_play_rules_test.dart: Rechaza corredor que permanece en primera
+00:00 +32: test/swl_play_rules_test.dart: Robo de segunda conserva conteo de bateador
+00:00 +33: test/swl_play_rules_test.dart: Avance desde tercera anota sin cambiar conteo
+00:00 +34: test/swl_play_rules_test.dart: Rechaza dos corredores en segunda
+00:00 +35: test/swl_play_rules_test.dart: Rechaza avance sin declarar todos los corredores
+00:00 +36: test/swl_play_rules_test.dart: Rechaza retroceso de tercera a segunda
+00:00 +37: test/swl_play_rules_test.dart: Elevado de sacrificio anota corredor de tercera
+00:00 +38: test/swl_play_rules_test.dart: Elevado de sacrificio conserva corredor que no avanza
+00:00 +39: test/swl_play_rules_test.dart: Tercer out en elevado cambia la mitad
+00:00 +40: test/swl_play_rules_test.dart: No acredita carrera en tercer out del bateador
+00:00 +41: test/swl_play_rules_test.dart: Rechaza ocupación duplicada tras elevado
+00:00 +42: test/swl_play_rules_test.dart: Cogido robando primera: elimina corredor y conserva conteo
+00:00 +43: test/swl_play_rules_test.dart: Corredor retirado en segunda conserva corredores restantes
+00:00 +44: test/swl_play_rules_test.dart: Tercer out en alta limpia bases y cambia a baja
+00:00 +45: test/swl_play_rules_test.dart: Tercer out en baja avanza entrada
+00:00 +46: test/swl_play_rules_test.dart: No se puede retirar corredor inexistente
+00:00 +47: test/swl_play_rules_test.dart: Rechaza base fuera de rango
+00:00 +48: test/swl_play_rules_test.dart: Doble play con cero outs registra dos outs
+00:00 +49: test/swl_play_rules_test.dart: Doble play con un out termina media entrada
+00:00 +50: test/swl_play_rules_test.dart: Doble play exige corredor real
+00:00 +51: test/swl_play_rules_test.dart: Doble play rechaza dos outs previos
+00:00 +52: test/swl_play_rules_test.dart: Doble play no elimina otros corredores con cero outs
+00:00 +53: test/swl_play_rules_test.dart: Hit rechaza corredor que usa 4 en vez de 0 para anotar
+00:00 +54: test/swl_play_rules_test.dart: Hit permite jonrón de bateador con corredor que anota con 0
+00:00 +55: test/swl_play_rules_test.dart: Avance de corredores rechaza conteo de outs inválido
+00:00 +56: test/swl_play_rules_test.dart: Jonrón con corredor en primera exige que anote
+00:00 +57: test/swl_play_rules_test.dart: Jonrón con bases llenas no deja corredores en base
+00:00 +58: test/swl_play_rules_test.dart: Boleto rechaza outs inválidos
+00:00 +59: test/swl_play_rules_test.dart: Hit rechaza strikes inválidos
+00:00 +60: test/swl_play_rules_test.dart: Ponche rechaza inning inválido
+00:00 +61: test/swl_play_rules_test.dart: Doble play rechaza marcador negativo
+00:00 +62: test/swl_play_rules_test.dart: Sencillo permite corredor en segunda quedarse si no forzado
+00:00 +63: test/swl_play_rules_test.dart: Sencillo obliga corredor de primera a avanzar
+00:00 +64: test/swl_play_rules_test.dart: Bases llenas fuerzan corredor de tercera a anotar
+00:00 +65: test/swl_play_rules_test.dart: Sencillo permite corredor de tercera quedarse
+00:00 +66: test/swl_substitution_rules_test.dart: accepts valid distinct roster replacement
+00:00 +67: test/swl_substitution_rules_test.dart: rejects stale outgoing slot
+00:00 +68: test/swl_substitution_rules_test.dart: rejects player already in lineup
+00:00 +69: test/swl_substitution_rules_test.dart: rejects player no longer on active roster
+00:00 +70: test/swl_substitution_rules_test.dart: rejects missing batting slot
+00:00 +71: test/swl_substitution_rules_test.dart: rejects the same outgoing and incoming player
+00:00 +72: test/swl_substitution_rules_test.dart: rejects missing revision
+00:00 +73: test/swl_substitution_rules_test.dart: rejects reentry until league rule is specified
+00:00 +74: test/swl_live_scoreboard_snapshot_test.dart: Alta: solo el mánager visitante puede anotar
+00:00 +75: test/swl_live_scoreboard_snapshot_test.dart: Baja: solo el mánager local puede anotar
+00:00 +76: test/swl_live_scoreboard_snapshot_test.dart: Partidos no iniciados o finalizados no admiten anotaciones
+00:00 +77: test/swl_live_scoreboard_snapshot_test.dart: Un espectador no puede anotar
+00:00 +78: test/swl_live_scoreboard_snapshot_test.dart: Un partido programado presenta la causa del bloqueo
+00:00 +79: test/swl_live_scoreboard_snapshot_test.dart: Una mitad desconocida jamás habilita al local
+00:00 +80: test/swl_confirmed_lineup_test.dart: Ordena la alineación por turno confirmado y conserva el ID
+00:00 +81: test/swl_confirmed_lineup_test.dart: Ordena la alineación por turno confirmado y conserva el ID
+00:00 +82: test/swl_confirmed_lineup_test.dart: Descarta órdenes repetidos, incompletos e identidades duplicadas
+00:00 +83: test/swl_confirmed_lineup_test.dart: El pitcheo suma outs y mantiene entradas en formato deportivo
+00:01 +84: test/swl_official_scoreboard_test.dart: (setUpAll)
+00:01 +84: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +85: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:01 +86: test/swl_official_scoreboard_test.dart: La pizarra oficial de solo lectura acepta un cambio de turno
+00:02 +87: test/swl_official_scoreboard_test.dart: (tearDownAll)
+00:02 +87: All tests passed!
