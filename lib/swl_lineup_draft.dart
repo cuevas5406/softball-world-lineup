@@ -25,6 +25,57 @@ class SwlLineupDraft {
     this.designatedId,
   });
 
+  Map<String, dynamic> toLocalJson() => {
+    'selected': List<String>.of(selected),
+    'positions': Map<String, String>.of(positions),
+    'pitcherBats': pitcherBats,
+    'designatedId': designatedId,
+  };
+
+  factory SwlLineupDraft.fromLocalJson(
+    Map<String, dynamic> json,
+    Set<String> activeIds,
+  ) {
+    final selected = (json['selected'] as List)
+        .whereType<String>()
+        .where(activeIds.contains)
+        .toSet()
+        .take(13)
+        .toList();
+    final positions = <String, String>{};
+    for (final entry in (json['positions'] as Map).entries) {
+      final id = entry.key;
+      final position = entry.value;
+      if (id is String &&
+          activeIds.contains(id) &&
+          position is String &&
+          swlDefensivePositions.contains(position) &&
+          !positions.containsValue(position)) {
+        positions[id] = position;
+      }
+    }
+    final pitcherBats =
+        json['pitcherBats'] != false || !positions.containsValue('P');
+    if (!pitcherBats) {
+      selected.remove(
+        positions.entries.firstWhere((entry) => entry.value == 'P').key,
+      );
+    }
+    final designated = json['designatedId'];
+    return SwlLineupDraft(
+      selected,
+      positions,
+      pitcherBats: pitcherBats,
+      designatedId:
+          !pitcherBats &&
+              designated is String &&
+              selected.contains(designated) &&
+              !positions.containsKey(designated)
+          ? designated
+          : null,
+    );
+  }
+
   String? get pitcherId {
     for (final entry in positions.entries) {
       if (entry.value == 'P') return entry.key;
@@ -46,22 +97,30 @@ class SwlLineupDraft {
   }
 
   void assign(String id, String? position) {
+    final previousPitcher = pitcherId;
     final previous = positions[id];
     final occupant = positions.entries
         .where((entry) => entry.value == position)
         .firstOrNull
         ?.key;
     if (occupant == id) return;
-    // A tap may swap any occupied defensive position, not only P.
-    // This changes the field assignments without touching batting order.
+    // Keep batting order independent of defense, except when a new
+    // defense-only pitcher would otherwise remain in the batting order.
     positions.remove(id);
     if (occupant != null) {
       positions.remove(occupant);
       if (previous != null) positions[occupant] = previous;
     }
     if (position != null) positions[id] = position;
-    if (pitcherId == null) pitcherBats = true;
-    if (pitcherBats || positions.containsKey(designatedId)) designatedId = null;
+    final newPitcher = pitcherId;
+    if (newPitcher == null) pitcherBats = true;
+    if (!pitcherBats && newPitcher != previousPitcher) {
+      selected.remove(newPitcher);
+    }
+    if (pitcherBats ||
+        positions.containsKey(designatedId) ||
+        !selected.contains(designatedId))
+      designatedId = null;
   }
 
   void moveBatter(int index, int offset) {
@@ -110,12 +169,13 @@ class SwlLineupDraft {
     if (requireDefense && !pitcherBats && selected.contains(pitcherId)) {
       return 'Si el pitcher no batea, retíralo del orden al bate.';
     }
-    if (requireDefense && (pitcherBats
-        ? designatedId != null
-        : designatedId == null ||
-            !order.contains(designatedId) ||
-            positions.containsKey(designatedId) ||
-            designatedId == pitcherId)) {
+    if (requireDefense &&
+        (pitcherBats
+            ? designatedId != null
+            : designatedId == null ||
+                  !order.contains(designatedId) ||
+                  positions.containsKey(designatedId) ||
+                  designatedId == pitcherId)) {
       return 'Elige un bateador designado del orden al bate sin posición defensiva.';
     }
     return null;

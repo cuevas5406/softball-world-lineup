@@ -562,7 +562,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = 'Nombre y apellido obligatorios (máximo 100 caracteres).');
       return;
     }
-    final primary = _position.text.trim();
+    final primary = _position.text.trim().toUpperCase();
     final secondary = _secondaryPosition.text.trim().toUpperCase();
     final positionError = swlValidatePlayerPositions(primary, secondary);
     if (positionError != null) {
@@ -2410,7 +2410,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
               TextButton(onPressed: saving ? null : () => Navigator.pop(dialog),
                 child: const Text('CANCELAR')),
               FilledButton(onPressed: saving ? null : () async {
-                final first = primary.trim();
+                final first = primary.trim().toUpperCase();
                 final second = secondary.trim().toUpperCase();
                 final validation = swlValidatePlayerPositions(first, second);
                 if (validation != null) {

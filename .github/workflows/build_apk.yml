@@ -2,8 +2,9 @@ name: Compilar APK Android - Softball World Lineup
 
 on:
   push:
-    branches: [main, master, pruebasv5-6]
+    branches: [main, master]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest

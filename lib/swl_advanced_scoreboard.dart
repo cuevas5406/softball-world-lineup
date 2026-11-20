@@ -194,6 +194,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   bool _refreshInFlight = false;
   bool _liveActionInFlight = false;
   bool _lineupsLoading = false;
+  bool _lineupsQueued = false;
   bool _pitchingConfirmed = false;
   bool _awayBatterConfirmed = false;
   bool _homeBatterConfirmed = false;
@@ -203,7 +204,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   Future<void> _loadLiveLineups() async {
     final live = _currentLiveSnapshot;
-    if (!mounted || live == null || live.gameId.isEmpty || _lineupsLoading) return;
+    if (!mounted || live == null || live.gameId.isEmpty) return;
+    if (_lineupsLoading) {
+      _lineupsQueued = true;
+      return;
+    }
     _lineupsLoading = true;
     try {
       final client = Supabase.instance.client;
@@ -360,6 +365,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           'No se pudo actualizar la alineación real');
     } finally {
       _lineupsLoading = false;
+      if (_lineupsQueued) {
+        _lineupsQueued = false;
+        if (mounted) unawaited(_loadLiveLineups());
+      }
     }
   }
 
@@ -514,7 +523,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       // Una alineación puede cambiar sin incrementar la versión del marcador.
       // Revalidarla periódicamente evita mostrar un orden al bate obsoleto.
       _livePollCount++;
-      if (versionChanged || _livePollCount % 3 == 0) {
+      if (versionChanged || _lastLineupRefreshVersion != latest.version ||
+          _livePollCount % 3 == 0) {
         await _loadLiveLineups();
       }
     } catch (_) {

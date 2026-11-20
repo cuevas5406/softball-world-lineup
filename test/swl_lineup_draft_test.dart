@@ -5,7 +5,9 @@ import 'package:softball_world_lineup/swl_roster_repository.dart';
 
 void main() {
   final ids = List.generate(9, (index) => 'b${index + 1}');
-  final fullDefense = {for (var i = 0; i < 9; i++) ids[i]: swlDefensivePositions[i]};
+  final fullDefense = {
+    for (var i = 0; i < 9; i++) ids[i]: swlDefensivePositions[i],
+  };
 
   Map<String, dynamic> payload(SwlLineupDraft draft, {bool extended = true}) =>
       draft.saveParameters(
@@ -42,7 +44,10 @@ void main() {
   test('pitcher with BD is defensive only and BD keeps its offensive slot', () {
     final draft = SwlLineupDraft(
       [...ids],
-      {for (var i = 0; i < 8; i++) ids[i]: swlDefensivePositions[i + 1], 'starter': 'P'},
+      {
+        for (var i = 0; i < 8; i++) ids[i]: swlDefensivePositions[i + 1],
+        'starter': 'P',
+      },
       pitcherBats: false,
       designatedId: 'b9',
     );
@@ -83,17 +88,24 @@ void main() {
     },
   );
 
-  test('swapping two occupied non-pitcher positions preserves batting order', () {
-    final draft = SwlLineupDraft([...ids], {...fullDefense});
-    final original = List<String>.of(draft.batting);
-    final first = draft.positions.entries.firstWhere((e) => e.value == '1B').key;
-    final second = draft.positions.entries.firstWhere((e) => e.value == '2B').key;
-    draft.assign(first, '2B');
-    expect(draft.positions[first], '2B');
-    expect(draft.positions[second], '1B');
-    expect(draft.batting, original);
-    expect(draft.validate(), isNull);
-  });
+  test(
+    'swapping two occupied non-pitcher positions preserves batting order',
+    () {
+      final draft = SwlLineupDraft([...ids], {...fullDefense});
+      final original = List<String>.of(draft.batting);
+      final first = draft.positions.entries
+          .firstWhere((e) => e.value == '1B')
+          .key;
+      final second = draft.positions.entries
+          .firstWhere((e) => e.value == '2B')
+          .key;
+      draft.assign(first, '2B');
+      expect(draft.positions[first], '2B');
+      expect(draft.positions[second], '1B');
+      expect(draft.batting, original);
+      expect(draft.validate(), isNull);
+    },
+  );
 
   test('unlisted non-pitcher defender is rejected before the RPC', () {
     final defense = {...fullDefense};
@@ -160,4 +172,34 @@ void main() {
       expect(swlValidatePlayerPositions('P', 'BD'), isNotNull);
     },
   );
+  test('borrador recupera los turnos 12 y 13 con pitcher defensivo y DH', () {
+    final batting = List.generate(13, (i) => 'b${i + 1}');
+    final draft = SwlLineupDraft(
+      batting,
+      {
+        'pitcher': 'P',
+        for (var i = 0; i < 8; i++) batting[i]: swlDefensivePositions[i + 1],
+      },
+      pitcherBats: false,
+      designatedId: 'b13',
+    );
+    draft.moveBatter(12, -1);
+
+    final recovered = SwlLineupDraft.fromLocalJson(draft.toLocalJson(), {
+      ...batting,
+      'pitcher',
+    });
+    expect(recovered.batting.sublist(11), ['b13', 'b12']);
+    expect(recovered.pitcherId, 'pitcher');
+    expect(recovered.pitcherBats, false);
+    expect(recovered.designatedId, 'b13');
+    expect(payload(recovered)['p_player_ids'], recovered.batting);
+
+    final withoutRemoved = SwlLineupDraft.fromLocalJson(
+      draft.toLocalJson(),
+      {...batting, 'pitcher'}..remove('b13'),
+    );
+    expect(withoutRemoved.batting.length, 12);
+    expect(withoutRemoved.designatedId, isNull);
+  });
 }
