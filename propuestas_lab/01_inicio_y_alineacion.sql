@@ -59,16 +59,29 @@ begin
   if g.status::text is null or g.status::text not in ('SCHEDULED', 'IN_PROGRESS') then
     raise exception 'El partido no admite cambios de alineación.';
   end if;
-  if p_pitcher_bats is null or (p_pitcher_id is null and not p_pitcher_bats)
-      or (p_pitcher_id is not null and (
-        not exists (select 1 from public.rosters r where r.team_id = p_team_id
-                    and r.player_id = p_pitcher_id and r.removed_at is null)
-        or ((p_pitcher_id = any(p_player_ids)) is distinct from p_pitcher_bats)
-        or (p_defensive_positions ->> p_pitcher_id::text) is distinct from 'P')) then
-    raise exception 'Pitcher o participación al bate inválidos.';
+  if p_player_ids is null or cardinality(p_player_ids) not between 9 and 13
+      or array_position(p_player_ids, null::uuid) is not null
+      or (select count(distinct id) from unnest(p_player_ids) as t(id)) <> cardinality(p_player_ids) then
+    raise exception 'El orden al bate requiere entre 9 y 13 peloteros distintos.';
   end if;
   if jsonb_typeof(p_defensive_positions) is distinct from 'object' then
-    raise exception 'Posiciones defensivas inválidas.';
+    raise exception 'Las posiciones defensivas deben enviarse por ID de pelotero.';
+  end if;
+  if p_pitcher_bats is null or (p_pitcher_id is null and
+      (not p_pitcher_bats or p_defensive_positions <> '{}'::jsonb)) then
+    raise exception 'Asigna un pitcher titular en la posición P.';
+  end if;
+  if p_pitcher_id is not null then
+    if not exists (select 1 from public.rosters r where r.team_id = p_team_id
+                   and r.player_id = p_pitcher_id and r.removed_at is null) then
+      raise exception 'El pitcher debe pertenecer al roster activo.';
+    end if;
+    if (p_defensive_positions ->> p_pitcher_id::text) is distinct from 'P' then
+      raise exception 'El pitcher titular debe ocupar P.';
+    end if;
+    if ((p_pitcher_id = any(p_player_ids)) is distinct from p_pitcher_bats) then
+      raise exception 'El orden al bate no coincide con la opción El pitcher batea.';
+    end if;
   end if;
   if (p_pitcher_bats and p_designated_hitter_id is not null)
       or (not p_pitcher_bats and (p_designated_hitter_id is null
@@ -78,13 +91,17 @@ begin
   end if;
   if exists (
     select 1 from jsonb_each_text(p_defensive_positions) p
-    where (p.key::uuid = any(p_player_ids) or p.key::uuid = p_pitcher_id) is not true
-      or p.value is null or p.value not in ('P','C','1B','2B','3B','SS','LF','CF','RF','SF')
-      or (p.value = 'P' and p.key::uuid is distinct from p_pitcher_id)
+    where not exists (select 1 from unnest(p_player_ids) as batter(id)
+                      where batter.id::text = p.key)
+          and p.key is distinct from p_pitcher_id::text
+  ) or exists (
+    select 1 from jsonb_each_text(p_defensive_positions) p
+    where p.value is null or p.value not in ('P','C','1B','2B','3B','SS','LF','CF','RF','SF')
+      or (p.value = 'P' and p.key is distinct from p_pitcher_id::text)
   ) or exists (
     select 1 from jsonb_each_text(p_defensive_positions) p group by p.value having count(*) > 1
   ) then
-    raise exception 'Verifica la identidad y las posiciones únicas de los defensores.';
+    raise exception 'Cada posición defensiva debe ser válida y tener un solo pelotero seleccionado.';
   end if;
   perform public.swl_v53_save_lineup_checked(
     p_game_id, p_team_id, p_player_ids, p_expected_revision

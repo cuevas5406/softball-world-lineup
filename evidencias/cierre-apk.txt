@@ -1,0 +1,4 @@
+flutter build apk --no-pub --release
+Salida 0. Firma y tres ABI verificadas. Clave de prueba para compilar.
+Tamaño: 56560014 bytes
+SHA-256: 37bb1a2b8e9f629c91ca372652cc2dd3eff72bb7d11d531541c5a093f3100316

@@ -1,11 +1,9 @@
-
 name: Compilar APK Android - Softball World Lineup
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, pruebasv5-6]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,66 +21,18 @@ jobs:
       - name: Configurar Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.50.0'
           channel: 'stable'
           cache: true
 
-      - name: Configurar Android e Integracion con WhatsApp
-        run: |
-          flutter create --org com.softballworld.lineup --project-name softball_world_lineup .
-
-          # Permisos de Internet y comunicacion con WhatsApp
-          sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"\/>' android/app/src/main/AndroidManifest.xml
-          sed -i '/<\/manifest>/i \    <queries>\n        <package android:name="com.whatsapp"\/>\n        <intent>\n            <action android:name="android.intent.action.VIEW"\/>\n            <data android:scheme="https"\/>\n        <\/intent>\n    <\/queries>' android/app/src/main/AndroidManifest.xml
-
-          if [ -f android/app/build.gradle ]; then
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' android/app/build.gradle || true
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle || true
-            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle || true
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
-          fi
-
-          # Icono oficial de la aplicacion
-          curl -fL -o android/app/src/main/res/mipmap-hdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
-          curl -fL -o android/app/src/main/res/mipmap-mdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
-          curl -fL -o android/app/src/main/res/mipmap-xhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
-          curl -fL -o android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
-          curl -fL -o android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png" || true
-
-      - name: Registrar retorno de autenticacion Android
-        run: |
-          python3 - <<'PYAUTH'
-          from pathlib import Path
-          from xml.etree import ElementTree as ET
-
-          manifest = Path('android/app/src/main/AndroidManifest.xml')
-          ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
-          tree = ET.parse(manifest)
-          root = tree.getroot()
-          android = '{http://schemas.android.com/apk/res/android}'
-          application = root.find('application')
-          if application is None:
-              raise SystemExit('AndroidManifest.xml sin application')
-          activity = next((a for a in application.findall('activity')
-                           if a.get(android + 'name') in ('.MainActivity', 'com.softballworld.lineup.MainActivity')), None)
-          if activity is None:
-              raise SystemExit('No se encontro MainActivity para configurar el deep link')
-          exists = False
-          for filt in activity.findall('intent-filter'):
-              for data in filt.findall('data'):
-                  if data.get(android + 'scheme') == 'com.softballworld.lineup' and data.get(android + 'host') == 'login-callback':
-                      exists = True
-          if not exists:
-              filt = ET.SubElement(activity, 'intent-filter')
-              ET.SubElement(filt, 'action', {android + 'name': 'android.intent.action.VIEW'})
-              ET.SubElement(filt, 'category', {android + 'name': 'android.intent.category.DEFAULT'})
-              ET.SubElement(filt, 'category', {android + 'name': 'android.intent.category.BROWSABLE'})
-              ET.SubElement(filt, 'data', {android + 'scheme': 'com.softballworld.lineup', android + 'host': 'login-callback'})
-          tree.write(manifest, encoding='utf-8', xml_declaration=True)
-          print('Deep link Android registrado: com.softballworld.lineup://login-callback')
-          PYAUTH
-
       - name: Instalar dependencias
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analizar y probar
+        run: |
+          flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings lib test
+          flutter test --no-pub
+          python3 -m unittest discover -s test -p test_v56_proposal_contracts.py
 
       - name: Compilar APK Oficial
         env:
@@ -93,12 +43,14 @@ jobs:
             exit 1
           }
 
-          flutter build apk --release \
+          chmod +x android/gradlew
+          flutter build apk --no-pub --release \
             --dart-define=SUPABASE_URL=https://wgeziptdoabyicufnrfk.supabase.co \
             --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 
       - name: Guardar instalador APK
         uses: actions/upload-artifact@v4
         with:
+          if-no-files-found: error
           name: Softball-World-Lineup-Instalador
           path: build/app/outputs/flutter-apk/app-release.apk

@@ -1,0 +1,12 @@
+test_close_checks_transition_and_persists_the_completed_half (test_v56_proposal_contracts.ContractTests.test_close_checks_transition_and_persists_the_completed_half) ... ok
+test_lineup_contract_delegates_revision_and_validates_pitcher_and_dh (test_v56_proposal_contracts.ContractTests.test_lineup_contract_delegates_revision_and_validates_pitcher_and_dh) ... ok
+test_pitch_classes_from_actual_sql (test_v56_proposal_contracts.ContractTests.test_pitch_classes_from_actual_sql) ... ok
+test_pitcher_position_change_preserves_individual_history (test_v56_proposal_contracts.ContractTests.test_pitcher_position_change_preserves_individual_history) ... ok
+test_position_proposal_reuses_registration_and_checks_roster_on_edit (test_v56_proposal_contracts.ContractTests.test_position_proposal_reuses_registration_and_checks_roster_on_edit) ... ok
+test_rpc_wrappers_keep_versioned_attribution_and_close_order (test_v56_proposal_contracts.ContractTests.test_rpc_wrappers_keep_versioned_attribution_and_close_order) ... ok
+test_runner_tracker_checks_occupancy_including_unknown_ids (test_v56_proposal_contracts.ContractTests.test_runner_tracker_checks_occupancy_including_unknown_ids) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.005s
+
+OK

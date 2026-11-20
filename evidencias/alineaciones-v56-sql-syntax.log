@@ -1,0 +1,13 @@
+00_inspeccion_solo_lectura.sql: sintaxis SQL y PL/pgSQL analizada
+01_inicio_y_alineacion.sql: sintaxis SQL y PL/pgSQL analizada
+02_retos.sql: sintaxis SQL y PL/pgSQL analizada
+03_logos.sql: sintaxis SQL y PL/pgSQL analizada
+04_generador_swl_revision_previa.sql: sintaxis SQL y PL/pgSQL analizada
+05_cambio_pitcher.sql: sintaxis SQL y PL/pgSQL analizada
+06_anotacion_y_pitcheo.sql: sintaxis SQL y PL/pgSQL analizada
+07_sustitucion_integrada.sql: sintaxis SQL y PL/pgSQL analizada
+08_cierre_transaccional.sql: sintaxis SQL y PL/pgSQL analizada
+09_jugadas_especiales.sql: sintaxis SQL y PL/pgSQL analizada
+10_diagnostico_partido_solo_lectura.sql: sintaxis SQL y PL/pgSQL analizada
+11_conteo_pitcheos.sql: sintaxis SQL y PL/pgSQL analizada
+12_posiciones_del_pelotero.sql: sintaxis SQL y PL/pgSQL analizada

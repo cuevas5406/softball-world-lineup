@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -9,6 +12,13 @@ import 'package:softball_world_lineup/swl_live_scoreboard_snapshot.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final methods = <String>[];
+  Future<http.Response> Function(http.Request)? respond;
+  http.Response jsonResponse(Object body, [int status = 200]) => http.Response(
+    jsonEncode(body),
+    status,
+    headers: {'content-type': 'application/json'},
+  );
+  tearDown(() => respond = null);
   setUpAll(() async {
     await Supabase.initialize(
       url: 'https://swl-test.invalid',
@@ -21,16 +31,22 @@ void main() {
       ),
       httpClient: MockClient((request) async {
         methods.add(request.method);
-        return http.Response('[]', 200, headers: {
-          'content-type': 'application/json',
-        });
+        final response =
+            await (respond?.call(request) ?? Future.value(jsonResponse([])));
+        return http.Response.bytes(
+          response.bodyBytes,
+          response.statusCode,
+          headers: response.headers,
+          request: request,
+        );
       }),
     );
   });
   tearDownAll(() => Supabase.instance.dispose());
 
-  testWidgets('La pizarra oficial de solo lectura acepta un cambio de turno',
-      (tester) async {
+  testWidgets('La pizarra oficial de solo lectura acepta un cambio de turno', (
+    tester,
+  ) async {
     Widget scoreboard(int version, bool top) => MaterialApp(
       home: SwlAdvancedScoreboard(
         gamePin: 'SWL-123456',
@@ -70,6 +86,109 @@ void main() {
     expect(methods.every((method) => method == 'GET'), isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'El historial se recupera aunque falle la consulta de alineaciones',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final firstResponse = Completer<http.Response>();
+      var historyReads = 0;
+      var connected = true;
+      var laterRun = false;
+      Map<String, dynamic> play(String type, Map<String, dynamic> data) => {
+        'event_type': type,
+        'event_data': data,
+        'inning': 1,
+        'is_top': true,
+      };
+      final walk = play('BALL', {'plate_appearance_completed': true});
+      respond = (request) async {
+        if (request.url.path.endsWith('/swl_game_lineups')) {
+          return jsonResponse({
+            'code': '42501',
+            'message': 'Sin acceso a alineaciones',
+          }, 403);
+        }
+        if (request.url.path.endsWith('/swl_game_events')) {
+          expect(request.url.queryParameters['game_id'], 'eq.partido-prueba');
+          expect(request.url.queryParameters.containsKey('version'), isFalse);
+          expect(
+            request.url.queryParameters['order'],
+            'version.asc.nullslast,id.asc.nullslast',
+          );
+          historyReads++;
+          if (historyReads == 1) return firstResponse.future;
+          if (!connected)
+            return jsonResponse({
+              'code': '42501',
+              'message': 'Lectura interrumpida',
+            }, 403);
+          return jsonResponse([
+            play('BALL', {}),
+            play('STRIKE', {'plate_appearance_completed': false}),
+            walk,
+            play('HIT', {'batter_base': '2'}),
+            play('STRIKE', {'plate_appearance_completed': true}),
+            play('RUNNER_MOVE', {}),
+            play('OUT', {}),
+            if (laterRun) play('RUN', {}),
+          ]);
+        }
+        return jsonResponse([]);
+      };
+      Widget scoreboard(int version) => MaterialApp(
+        home: SwlAdvancedScoreboard(
+          gamePin: 'SWL-123456',
+          homeTeam: 'Local',
+          awayTeam: 'Visitante',
+          liveSnapshot: SwlLiveScoreboardSnapshot.fromGame({
+            'id': 'partido-prueba',
+            'version': version,
+            'inning': 1,
+            'is_top': true,
+          }),
+        ),
+      );
+      await tester.pumpWidget(scoreboard(1));
+      await tester.pump();
+      await tester.pumpWidget(scoreboard(2));
+      await tester.pump();
+      firstResponse.complete(jsonResponse([walk]));
+      await tester.pumpAndSettle();
+      expect(historyReads, 2);
+      expect(find.textContaining('Base por bolas'), findsOneWidget);
+      expect(find.textContaining('Doble'), findsOneWidget);
+      expect(find.textContaining('Partido: Out'), findsOneWidget);
+      expect(find.textContaining('Partido: Bola'), findsNothing);
+      expect(find.textContaining('Partido: Strike'), findsNothing);
+      expect(find.textContaining('Ver también lanzamientos'), findsNothing);
+      expect(find.textContaining('Ponche'), findsOneWidget);
+      expect(find.textContaining('Movimiento de corredor'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.textContaining('Base por bolas')).dy,
+        lessThan(tester.getTopLeft(find.textContaining('Doble')).dy),
+      );
+      connected = false;
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Reintentando'), findsOneWidget);
+      expect(find.textContaining('Doble'), findsOneWidget);
+
+      connected = true;
+      laterRun = true;
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Carrera registrada'), findsOneWidget);
+      expect(find.textContaining('Reintentando'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(scoreboard(2));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Carrera registrada'), findsOneWidget);
+      expect(find.textContaining('Doble'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 }
 
 class _TestAuthStorage extends GotrueAsyncStorage {

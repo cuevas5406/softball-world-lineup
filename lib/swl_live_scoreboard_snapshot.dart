@@ -10,6 +10,13 @@ class SwlLiveScoreboardSnapshot {
   final String awayTeamId;
   final int version;
   final int inning;
+  final int regulationInnings;
+  final bool finalHalfCompleted;
+  final bool rosterGhostAllowed;
+  final String? finishReason;
+  final String? finishRequestedBy;
+  final bool homeSigned;
+  final bool awaySigned;
   final bool isTop;
   final bool hasKnownHalf;
   final int balls;
@@ -37,6 +44,13 @@ class SwlLiveScoreboardSnapshot {
     required this.awayTeamId,
     required this.version,
     required this.inning,
+    this.regulationInnings = 6,
+    this.finalHalfCompleted = false,
+    this.rosterGhostAllowed = false,
+    this.finishReason,
+    this.finishRequestedBy,
+    this.homeSigned = false,
+    this.awaySigned = false,
     required this.isTop,
     this.hasKnownHalf = true,
     required this.balls,
@@ -75,6 +89,13 @@ class SwlLiveScoreboardSnapshot {
       awayTeamId: game['away_team_id']?.toString() ?? '',
       version: _number(game['version']),
       inning: _number(game['inning']),
+      regulationInnings: (game['swl_regulation_innings'] as num?)?.toInt() ?? 6,
+      finalHalfCompleted: game['swl_final_half_completed'] == true,
+      rosterGhostAllowed: game['swl_allow_roster_ghost'] == true,
+      finishReason: game['swl_finish_reason']?.toString(),
+      finishRequestedBy: game['swl_finish_requested_by']?.toString(),
+      homeSigned: game['swl_home_signed'] == true,
+      awaySigned: game['swl_away_signed'] == true,
       isTop: game['is_top'] == true,
       hasKnownHalf: game['is_top'] is bool,
       balls: _number(game['balls']),
@@ -119,6 +140,21 @@ class SwlLiveScoreboardSnapshot {
     if (!hasKnownHalf) return 'No se pudo confirmar qué equipo está al bate.';
     if (userId != battingManagerId) return 'Solo anota el mánager del equipo al bate.';
     return null;
+  }
+
+  Set<String> matchActions(String? userId) {
+    if (userId == null || homeManagerId == null || awayManagerId == null ||
+        homeManagerId == awayManagerId ||
+        (userId != homeManagerId && userId != awayManagerId)) return const {};
+    if (status == 'FINAL') {
+      final signed = userId == homeManagerId ? homeSigned : awaySigned;
+      return signed ? const {} : const {'SIGN'};
+    }
+    if (status != 'IN_PROGRESS' || inning < 5 || homeRuns == awayRuns) return const {};
+    if (finishRequestedBy == null) return const {'REQUEST'};
+    if (finishRequestedBy == userId ||
+        (finishRequestedBy != homeManagerId && finishRequestedBy != awayManagerId)) return const {};
+    return const {'ACCEPT', 'REJECT'};
   }
 
   bool canScore(String? userId) => scoringBlock(userId) == null;

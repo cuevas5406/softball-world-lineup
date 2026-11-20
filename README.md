@@ -6,3 +6,7 @@ La entrega V5.6, las pruebas y las instrucciones de compilación de la APK se en
 ## Corrección posterior a las pruebas Android
 
 Consulta [VALIDACION_V5.6_POST_PRUEBAS.md](VALIDACION_V5.6_POST_PRUEBAS.md) para conocer las correcciones de esta entrega, sus resultados y las propuestas de LAB pendientes de autorización.
+
+## V5.6 · Cierre y jugadas avanzadas
+
+Consulta [VALIDACION_V5.6_CIERRE_Y_JUGADAS.md](VALIDACION_V5.6_CIERRE_Y_JUGADAS.md) para revisar el reglamento, la compilación y las pruebas pendientes en LAB y en dos teléfonos.

@@ -1,0 +1,3 @@
+08_cierre_transaccional.sql: 13 sentencias, 4 cuerpos PL/pgSQL; sintaxis analizada, sin ejecución en PostgreSQL.
+09_jugadas_especiales.sql: 13 sentencias, 6 cuerpos PL/pgSQL; sintaxis analizada, sin ejecución en PostgreSQL.
+10_diagnostico_partido_solo_lectura.sql: 5 sentencias, 0 cuerpos PL/pgSQL; sintaxis analizada, sin ejecución en PostgreSQL.

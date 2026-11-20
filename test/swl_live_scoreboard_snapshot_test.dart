@@ -1,14 +1,25 @@
 import 'package:flutter_test/flutter_test.dart';
+
 import '../lib/swl_live_scoreboard_snapshot.dart';
 
 void main() {
-  Map<String, dynamic> game({bool top = true, String status = 'IN_PROGRESS'}) => {
-    'id': 'game-1', 'game_pin': 'SWL-123', 'home_team_id': 'home-uuid',
-    'away_team_id': 'away-uuid', 'home_manager_id': 'home-manager',
-    'away_manager_id': 'away-manager', 'is_top': top, 'status': status,
-    'version': 5, 'inning': 2, 'balls': 1, 'strikes': 2, 'outs': 1,
-    'bases_state': {'first': true, 'second': false, 'third': true},
-  };
+  Map<String, dynamic> game({bool top = true, String status = 'IN_PROGRESS'}) =>
+      {
+        'id': 'game-1',
+        'game_pin': 'SWL-123',
+        'home_team_id': 'home-uuid',
+        'away_team_id': 'away-uuid',
+        'home_manager_id': 'home-manager',
+        'away_manager_id': 'away-manager',
+        'is_top': top,
+        'status': status,
+        'version': 5,
+        'inning': 2,
+        'balls': 1,
+        'strikes': 2,
+        'outs': 1,
+        'bases_state': {'first': true, 'second': false, 'third': true},
+      };
 
   test('Alta: solo el mánager visitante puede anotar', () {
     final snapshot = SwlLiveScoreboardSnapshot.fromGame(game());
@@ -38,20 +49,58 @@ void main() {
     expect(SwlLiveScoreboardSnapshot.fromGame(game()).canScore(null), isFalse);
   });
   test('Un partido programado presenta la causa del bloqueo', () {
-    final pending = SwlLiveScoreboardSnapshot.fromGame(game(status: 'SCHEDULED'));
+    final pending = SwlLiveScoreboardSnapshot.fromGame(
+      game(status: 'SCHEDULED'),
+    );
     expect(pending.scoringBlock('away-manager'), contains('programado'));
-    expect(pending.scoringBlock('away-manager', authorized: false), contains('solo lectura'));
+    expect(
+      pending.scoringBlock('away-manager', authorized: false),
+      contains('solo lectura'),
+    );
   });
 
   test('Una mitad desconocida jamás habilita al local', () {
-    final snapshot = SwlLiveScoreboardSnapshot.fromGame(game()..remove('is_top'));
+    final snapshot = SwlLiveScoreboardSnapshot.fromGame(
+      game()..remove('is_top'),
+    );
     expect(snapshot.canScore('home-manager'), isFalse);
     expect(snapshot.canScore('away-manager'), isFalse);
   });
 
   test('La misma cuenta no puede asumir ambos lados', () {
-    final snapshot = SwlLiveScoreboardSnapshot.fromGame(game()
-      ..['away_manager_id'] = 'home-manager');
+    final snapshot = SwlLiveScoreboardSnapshot.fromGame(
+      game()..['away_manager_id'] = 'home-manager',
+    );
     expect(snapshot.canScore('home-manager'), isFalse);
+  });
+  test('Solicitud desde quinta y respuesta exclusiva del otro mánager', () {
+    final row = {...game(), 'inning': 5, 'home_runs': 4, 'away_runs': 3};
+    expect(
+      SwlLiveScoreboardSnapshot.fromGame(row).matchActions('home-manager'),
+      {'REQUEST'},
+    );
+    row['swl_finish_requested_by'] = 'home-manager';
+    final requested = SwlLiveScoreboardSnapshot.fromGame(row);
+    expect(requested.matchActions('home-manager'), isEmpty);
+    expect(requested.matchActions('away-manager'), {'ACCEPT', 'REJECT'});
+    expect(requested.matchActions('espectador'), isEmpty);
+    row.remove('swl_finish_requested_by');
+    expect(
+      SwlLiveScoreboardSnapshot.fromGame(row).matchActions('away-manager'),
+      {'REQUEST'},
+    );
+  });
+
+  test('En FINAL se bloquea la anotación y la firma es individual', () {
+    final row = {...game(status: 'FINAL'), 'swl_home_signed': true};
+    final finalGame = SwlLiveScoreboardSnapshot.fromGame(row);
+    expect(finalGame.canScore('away-manager'), isFalse);
+    expect(finalGame.matchActions('home-manager'), isEmpty);
+    expect(finalGame.matchActions('away-manager'), {'SIGN'});
+    expect(
+      SwlLiveScoreboardSnapshot.fromGame({...row, 'status': 'OFFICIAL'})
+          .matchActions('away-manager'),
+      isEmpty,
+    );
   });
 }

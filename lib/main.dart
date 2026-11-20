@@ -1,3 +1,5 @@
+import 'swl_player_positions.dart';
+import 'swl_roster_repository.dart';
 import 'swl_team_logo_editor.dart';
 import 'swl_team_lookup.dart';
 import 'swl_live_lobby.dart';
@@ -470,6 +472,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
   final _last = TextEditingController();
   final _jersey = TextEditingController();
   final _position = TextEditingController();
+  final _secondaryPosition = TextEditingController();
   final _photo = TextEditingController();
   final _searchCode = TextEditingController();
   Map<String, dynamic>? _selectedPlayer;
@@ -559,6 +562,13 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = 'Nombre y apellido obligatorios (máximo 100 caracteres).');
       return;
     }
+    final primary = _position.text.trim();
+    final secondary = _secondaryPosition.text.trim().toUpperCase();
+    final positionError = swlValidatePlayerPositions(primary, secondary);
+    if (positionError != null) {
+      setState(() => _notice = positionError);
+      return;
+    }
     final team = _teamId;
     if (team == null) {
       setState(() => _notice = 'Selecciona un equipo autorizado antes de registrar y fichar.');
@@ -566,7 +576,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
     }
     if (!await _confirm('Registrar y fichar',
         '¿Registrar a $first $last y ficharlo en el equipo seleccionado? Son dos operaciones; si el fichaje falla, conservaremos el ID del pelotero.')) return;
-    if (!mounted) return;
+    if (!mounted || _busy || _teamId != team) return;
     setState(() { _busy = true; _notice = null; });
     String? createdId;
     String? createdCode;
@@ -574,11 +584,14 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       final permitted = await Supabase.instance.client.rpc(
         'swl_can_manage_roster', params: {'p_team_id': team});
       if (permitted != true) throw StateError('No tienes autorización activa para administrar ese roster.');
-      final data = await Supabase.instance.client.rpc('swl_register_player', params: {
+      final data = await Supabase.instance.client.rpc(
+        secondary.isEmpty ? 'swl_register_player' : 'swl_v56_register_player_positions', params: {
         'p_first_name': first,
         'p_last_name': last,
         'p_jersey_number': _jersey.text.trim(),
-        'p_primary_position': _position.text.trim(),
+        'p_primary_position': primary,
+        if (secondary.isNotEmpty) 'p_secondary_position': secondary,
+        if (secondary.isNotEmpty) 'p_team_id': team,
         'p_photo_url': _photo.text.trim(),
       });
       final row = data is List && data.isNotEmpty ? data.first : data;
@@ -611,6 +624,8 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
       setState(() => _notice = createdId != null
         ? 'El pelotero YA fue registrado (ID: $createdId; código: ${createdCode ?? "no disponible"}), '
           'pero el fichaje NO se confirmó. No vuelvas a registrarlo: busca su código para ficharlo. Detalle: $e'
+        : secondary.isNotEmpty && e is PostgrestException && e.code == 'PGRST202'
+          ? 'El servidor todavía no admite la posición secundaria. Quita ese campo si deseas registrar solo la principal.'
         : e is PostgrestException && e.code == '23505' &&
             e.message.contains('players_universal_id_key')
           ? 'El servidor intentó asignar un código SWL que ya existe. El nuevo pelotero no se registró. El generador de códigos de LAB requiere revisión.'
@@ -766,7 +781,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
 
   @override
   void dispose() {
-    for (final c in [_first, _last, _jersey, _position, _photo, _searchCode]) {
+    for (final c in [_first, _last, _jersey, _position, _secondaryPosition, _photo, _searchCode]) {
       c.dispose();
     }
     super.dispose();
@@ -789,7 +804,9 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             TextField(controller: _first, maxLength: 100, decoration: const InputDecoration(labelText: 'Nombre *')),
             TextField(controller: _last, maxLength: 100, decoration: const InputDecoration(labelText: 'Apellido *')),
             TextField(controller: _jersey, decoration: const InputDecoration(labelText: 'Número de camiseta (opcional)')),
-            TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición (opcional)')),
+            TextField(controller: _position, decoration: const InputDecoration(labelText: 'Posición principal (opcional)')),
+            TextField(controller: _secondaryPosition, textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Posición secundaria (opcional)', hintText: 'Ej. 1B')),
             TextField(controller: _photo, decoration: const InputDecoration(labelText: 'URL de fotografía (opcional)')),
             FilledButton.icon(onPressed: (_busy || _pendingRegisteredPlayer != null) ? null : _register,
                 icon: const Icon(Icons.person_add_alt_1), label: const Text('Registrar pelotero en LAB')),
@@ -2259,7 +2276,14 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     final rows = await Supabase.instance.client.rpc(
       'swl_get_team_roster', params: {'p_team_id': teamId});
     if (rows is! List) throw StateError('Respuesta de roster inesperada.');
-    return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+    final roster = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+    final positions = await SwlRosterRepository(Supabase.instance.client)
+        .secondaryPositions(roster.map((row) => (row['player_id'] ?? row['id_player'])?.toString()).whereType<String>());
+    for (final row in roster) {
+      final id = (row['player_id'] ?? row['id_player'])?.toString();
+      if (positions.containsKey(id)) row['secondary_position'] = positions[id];
+    }
+    return roster;
   }
 
   void _selectTeam(Map<String, dynamic> team) {
@@ -2353,6 +2377,70 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     }
   }
 
+  Future<void> _editPlayerPositions(
+      String teamId, String playerId, Map<String, dynamic> player) async {
+    var primary = player['primary_position']?.toString() ?? '';
+    var secondary = player['secondary_position']?.toString() ?? '';
+    String? error;
+    bool saving = false;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialog) => StatefulBuilder(builder: (context, update) =>
+        PopScope(
+          canPop: !saving,
+          child: AlertDialog(
+            title: const Text('Editar posiciones del pelotero'),
+            scrollable: true,
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextFormField(
+                initialValue: primary, enabled: !saving,
+                decoration: const InputDecoration(labelText: 'Posición principal'),
+                onChanged: (value) => primary = value,
+              ),
+              TextFormField(
+                initialValue: secondary, enabled: !saving,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Posición secundaria (opcional)'),
+                onChanged: (value) => secondary = value,
+              ),
+              if (error != null) Text(error!),
+            ]),
+            actions: [
+              TextButton(onPressed: saving ? null : () => Navigator.pop(dialog),
+                child: const Text('CANCELAR')),
+              FilledButton(onPressed: saving ? null : () async {
+                final first = primary.trim();
+                final second = secondary.trim().toUpperCase();
+                final validation = swlValidatePlayerPositions(first, second);
+                if (validation != null) {
+                  update(() => error = validation);
+                  return;
+                }
+                update(() { saving = true; error = null; });
+                try {
+                  await Supabase.instance.client.rpc('swl_v56_edit_player_positions', params: {
+                    'p_team_id': teamId, 'p_player_id': playerId,
+                    'p_primary_position': first, 'p_secondary_position': second,
+                  }).timeout(const Duration(seconds: 12));
+                  if (dialog.mounted) Navigator.pop(dialog, true);
+                } catch (e) {
+                  if (dialog.mounted) update(() {
+                    saving = false;
+                    error = e is PostgrestException && e.code == 'PGRST202'
+                        ? 'El servidor todavía no admite editar posiciones.'
+                        : 'No se confirmó el cambio. ${e is PostgrestException ? e.message : "Actualiza el roster antes de reintentar."}';
+                  });
+                }
+              }, child: Text(saving ? 'GUARDANDO…' : 'GUARDAR')),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (saved == true && mounted && _selectedTeamId == teamId) _refreshRoster();
+  }
+
   // V4.9: ficha de consulta. Solo muestra datos recibidos del roster real.
   // No escribe en Supabase ni altera los permisos de retiro/fichaje.
   void _showPlayerDetails(Map<String, dynamic> player) {
@@ -2362,7 +2450,9 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     }
     final name = '${field('first_name')} ${field('last_name')}';
     final teamName = _selectedTeamName ?? widget.teamName;
-    showModalBottomSheet<void>(
+    final teamId = _selectedTeamId;
+    final playerId = (player['player_id'] ?? player['id_player'])?.toString();
+    showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF121B27),
@@ -2380,11 +2470,23 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             const SizedBox(height: 12),
             _playerDetailRow('Código SWL', field('universal_id')),
             _playerDetailRow('Número', field('jersey_number')),
-            _playerDetailRow('Posición', field('primary_position')),
+            _playerDetailRow('Posición principal', field('primary_position')),
+            _playerDetailRow('Posición secundaria', field('secondary_position')),
             _playerDetailRow('Equipo', teamName),
             _playerDetailRow('Condición',
               player['is_refuerzo'] == true ? 'Refuerzo' : 'Regular'),
             const SizedBox(height: 12),
+            if (teamId != null && playerId != null && player['is_refuerzo'] != true)
+              FutureBuilder<bool>(
+                future: _canRemovePlayer,
+                builder: (context, permission) => permission.data == true
+                  ? OutlinedButton.icon(
+                      onPressed: () => Navigator.pop(sheetContext, true),
+                      icon: const Icon(Icons.edit),
+                      label: const Text('Editar posiciones'),
+                    )
+                  : const SizedBox.shrink(),
+              ),
             OutlinedButton.icon(
               onPressed: () => Navigator.of(sheetContext).pop(),
               icon: const Icon(Icons.close),
@@ -2393,7 +2495,12 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
           ]),
         ),
       ),
-    );
+    ).then((edit) async {
+      if (edit == true && mounted && teamId != null && playerId != null &&
+          _selectedTeamId == teamId) {
+        await _editPlayerPositions(teamId, playerId, player);
+      }
+    });
   }
 
   Widget _playerDetailRow(String label, String value) => Padding(
@@ -2602,7 +2709,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                               Text('${p['first_name'] ?? ''} ${p['last_name'] ?? ''}',
                                 style: const TextStyle(color: Colors.white,
                                   fontWeight: FontWeight.bold, fontSize: 12)),
-                              Text('${p['universal_id'] ?? ''} · ${p['primary_position'] ?? ''}'
+                              Text('${p['universal_id'] ?? ''} · ${swlPositionLabel(p['primary_position'], p['secondary_position'])}'
                                 '${p['is_refuerzo'] == true ? ' · Refuerzo' : ''}',
                                 style: const TextStyle(color: Colors.white54, fontSize: 10)),
                             ])),
