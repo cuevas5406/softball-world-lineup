@@ -237,4 +237,29 @@ void main() {
     expect(next.first, true); expect(next.third, true);
   });
 
+
+  test('doble con out en home acredita el doble sin carrera y conserva el turno de la media', () {
+    final next = state(third: true).hit(batterBase: 2, thirdTo: -4);
+    expect(next.outs, 1);
+    expect(next.awayRuns, 0);
+    expect(next.second, true);
+    expect(next.third, false);
+  });
+  test('tercer out anula carreras salvo que el anotador acredite la jugada de tiempo', () {
+    final play = state(outs: 2, first: true, third: true);
+    final thirdOut = play.hit(batterBase: 1, firstTo: -2, thirdTo: 0);
+    expect(thirdOut.awayRuns, 0);
+    expect(thirdOut.isTop, false);
+    expect(thirdOut.first, false);
+    expect(thirdOut.outs, 0);
+    final timed = play.hit(batterBase: 1, firstTo: -4, thirdTo: 0, countRunsOnThirdOut: true);
+    expect(timed.awayRuns, 1);
+    final precedingOut = play.hit(batterBase: 1, firstTo: 0, thirdTo: -4, countRunsOnThirdOut: true);
+    expect(precedingOut.awayRuns, 0);
+  });
+  test('no acepta un out en una base anterior ni cuatro outs', () {
+    expect(() => state(third: true).hit(batterBase: 1, thirdTo: -3), throwsStateError);
+    expect(() => state(outs: 2, first: true, third: true)
+      .hit(batterBase: 1, firstTo: -2, thirdTo: -4), throwsStateError);
+  });
 }

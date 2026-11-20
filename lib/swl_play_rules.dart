@@ -39,62 +39,59 @@ class SwlPlayState {
   }
 
   /// Hit con destinos explícitos para los corredores presentes.
-  /// 0 = anota, 1/2/3 = base de destino. No se permite dejar un
-  /// corredor en la misma base ni retroceder; tampoco ocupar dos veces
-  /// una base. El bateador alcanza la base indicada por [batterBase].
+  /// 0 = anota, 1/2/3 = base y -2/-3/-4 = out en segunda, tercera o home.
+  /// Solo se adjudican carreras en un tercer out de tiempo confirmado.
   /// Esta previsualización no sustituye la operación atómica del servidor.
   SwlPlayState hit({required int batterBase, int? firstTo,
-    int? secondTo, int? thirdTo}) {
+    int? secondTo, int? thirdTo, bool countRunsOnThirdOut = false}) {
     _validateGameState();
     if (batterBase < 1 || batterBase > 4) {
-      throw ArgumentError('La base del bateador debe estar entre 1 y 4');
+      throw ArgumentError.value(batterBase, 'batterBase', 'Base del bateador inválida.');
     }
-    if (first != (firstTo != null) || second != (secondTo != null) ||
-        third != (thirdTo != null)) {
-      throw StateError('Debe indicarse destino para cada corredor presente');
+    final moves = [firstTo, secondTo, thirdTo];
+    final bases = [first, second, third];
+    final outCount = moves.whereType<int>().where((d) => d < 0).length;
+    if (outs + outCount > 3) throw StateError('La jugada supera los tres outs.');
+    if (batterBase == 4 && moves.whereType<int>().any((d) => d != 0)) {
+      throw StateError('En un jonrón todos los corredores anotan.');
     }
-    // Un jonrón válido obliga a anotar a todos los corredores en base.
-    // Rechazar destinos distintos evita dejar bases ocupadas tras el HR.
-    if (batterBase == 4 &&
-        [firstTo, secondTo, thirdTo].whereType<int>().any((d) => d != 0)) {
-      throw StateError('En un jonrón todos los corredores deben anotar');
-    }
-    final destinations = <int>[batterBase, if (firstTo != null) firstTo,
-      if (secondTo != null) secondTo, if (thirdTo != null) thirdTo];
-    // Un corredor puede conservar su base si no está forzado a avanzar.
-    // Primera siempre está forzada por el bateador; segunda lo está si
-    // primera estaba ocupada; tercera si primera y segunda lo estaban.
-    if ((firstTo != null && firstTo != 0 && firstTo < 2) ||
-        (secondTo != null && secondTo != 0 &&
-            secondTo < (first ? 3 : 2)) ||
-        (thirdTo != null && thirdTo != 0 &&
-            thirdTo < (first && second ? 4 : 3))) {
-      throw StateError('Avance forzado incumplido o corredor retrocediendo');
-    }
-    // El bateador solo puede anotar con 4 (jonrón); los corredores
-    // existentes solo pueden anotar con 0. Evita dos convenciones
-    // incompatibles que podrían generar carreras erróneas en el RPC.
-    if ([firstTo, secondTo, thirdTo].whereType<int>()
-        .any((d) => d < 0 || d > 3)) {
-      throw ArgumentError('Destino de corredor fuera de rango (0 a 3)');
-    }
-    // 4 representa home para el bateador; 0 representa home para
-    // corredores existentes. Ambos suman una carrera.
-    final occupied = destinations.where((d) => d >= 1 && d <= 3).toList();
-    if (occupied.toSet().length != occupied.length) {
-      throw StateError('Dos corredores no pueden ocupar la misma base');
-    }
-    final finishOrder = [batterBase, firstTo, secondTo, thirdTo]
-        .whereType<int>().map((base) => base == 0 ? 4 : base).toList();
-    for (var index = 1; index < finishOrder.length; index++) {
-      if (finishOrder[index] < finishOrder[index - 1]) {
-        throw StateError('Un corredor no puede sobrepasar a otro');
+    final occupied = <int>{if (batterBase < 4) batterBase};
+    var previous = batterBase;
+    var runs = batterBase == 4 ? 1 : 0;
+    for (var i = 0; i < moves.length; i++) {
+      final dest = moves[i];
+      if (bases[i] != (dest != null)) throw StateError('Indica cada avance.');
+      if (dest == null) continue;
+      if (dest > 3) throw ArgumentError.value(dest, 'dest', 'Destino inválido.');
+      if (dest < 0) {
+        if (-dest <= i + 1 || -dest > 4) throw StateError('Base del out inválida.');
+        continue;
+      }
+      if (dest == 0) {
+        previous = 4;
+        runs++;
+      } else {
+        final minimum = i + 1 + ((i == 0 || (first && (i == 1 || second))) ? 1 : 0);
+        if (dest < minimum || dest > 3 || dest < previous || !occupied.add(dest)) {
+          throw StateError('Avance, orden o base de destino inválidos.');
+        }
+        previous = dest;
       }
     }
-    final runs = destinations.where((d) => d == 0 || d == 4).length;
-    return copy(balls: 0, strikes: 0,
-      first: occupied.contains(1), second: occupied.contains(2),
-      third: occupied.contains(3),
+    final terminal = outs + outCount == 3;
+    if (terminal) {
+      final retired = moves.indexWhere((dest) => dest != null && dest < 0);
+      final forced = moves[retired] == -(retired + 2) &&
+          (retired == 0 || (first && (retired == 1 || second)));
+      runs = countRunsOnThirdOut && outCount == 1 && !forced
+          ? moves.skip(retired + 1).where((dest) => dest == 0).length : 0;
+    }
+    return copy(balls: 0, strikes: 0, outs: terminal ? 0 : outs + outCount,
+      inning: terminal && !isTop ? inning + 1 : inning,
+      isTop: terminal ? !isTop : isTop,
+      first: !terminal && occupied.contains(1),
+      second: !terminal && occupied.contains(2),
+      third: !terminal && occupied.contains(3),
       homeRuns: homeRuns + (isTop ? 0 : runs),
       awayRuns: awayRuns + (isTop ? runs : 0));
   }

@@ -1,6 +1,6 @@
 import 'swl_player_positions.dart';
 import 'swl_roster_repository.dart';
-import 'swl_team_logo_editor.dart';
+import 'swl_team_settings.dart';
 import 'swl_team_lookup.dart';
 import 'swl_live_lobby.dart';
 import 'dart:async';
@@ -2551,14 +2551,36 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     if (mounted) _refreshRoster();
   }
 
+  Future<void> _openTeamSettings() async {
+    final id = _selectedTeamId;
+    if (id == null) return;
+    final result = await Navigator.of(context).push<Map<String, String>>(MaterialPageRoute(
+      builder: (_) => SwlTeamSettings(teamId: id,
+        name: _selectedTeamName ?? widget.teamName,
+        province: _selectedProvince ?? widget.teamProvince),
+    ));
+    if (!mounted || _selectedTeamId != id || result == null) return;
+    final updated = {...?widget.activeTeam, 'id': id,
+      'name': result['name'], 'province': result['province']};
+    setState(() {
+      _selectedTeamName = result['name'];
+      _selectedProvince = result['province'];
+      _teams = swlAuthorizedTeams();
+    });
+    widget.onTeamChanged?.call(updated);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0F1722),
-        title: Text(_selectedTeamName ?? widget.teamName,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        title: TextButton(
+          onPressed: _selectedTeamId == null ? null : _openTeamSettings,
+          child: Text(_selectedTeamName ?? widget.teamName,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        ),
         actions: [IconButton(onPressed: _refreshRoster,
           tooltip: 'Actualizar roster', icon: const Icon(Icons.refresh))],
       ),
@@ -2576,17 +2598,18 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_selectedTeamName ?? widget.teamName,
-                    style: const TextStyle(color: Colors.white,
-                      fontWeight: FontWeight.bold, fontSize: 15)),
+                  InkWell(
+                    onTap: _selectedTeamId == null ? null : _openTeamSettings,
+                    child: Text(_selectedTeamName ?? widget.teamName,
+                      style: const TextStyle(color: Colors.white,
+                        fontWeight: FontWeight.bold, fontSize: 15))),
+
                   Text(_selectedProvince ?? widget.teamProvince,
                     style: const TextStyle(color: Colors.white54, fontSize: 11)),
                 ])),
             ]),
           ),
           const SizedBox(height: 12),
-          if (_selectedTeamId case final String teamId)
-            SwlTeamLogoEditor(key: ValueKey(teamId), teamId: teamId),
           FutureBuilder<List<Map<String, dynamic>>>(
             future: _teams,
             builder: (context, snapshot) {

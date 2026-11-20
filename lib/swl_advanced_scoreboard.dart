@@ -172,10 +172,12 @@ class SwlScoreGameSnapshot {
 }
 
 class SwlAdvancedScoreboard extends StatefulWidget {
-  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onMatchDecision, this.homeLogo, this.awayLogo});
+  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveSubstitute, this.onLivePitcher, this.onMatchDecision, this.homeLogo, this.awayLogo});
   final String? homeLogo;
   final String? awayLogo;
   final VoidCallback? onLiveDetails;
+  final VoidCallback? onLiveSubstitute;
+  final VoidCallback? onLivePitcher;
   final SwlLiveScoreboardSnapshot? liveSnapshot;
   final Future<void> Function(int version, String action)? onMatchDecision;
   final Future<void> Function(int version, String action, Map<String, dynamic>? hitParams)? onLiveAction;
@@ -246,7 +248,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           totals['hits'] = totals['hits']! + 1;
         } else if (action == 'SACRIFICE_FLY') {
           totals['sf'] = totals['sf']! + 1;
-        } else if (action == 'OUT' || action == 'DOUBLE_PLAY' ||
+        } else if (action == 'OUT' || action == 'DOUBLE_PLAY' || action == 'ERROR' ||
             (action == 'STRIKE' && data['plate_appearance_completed'] == true)) {
           totals['ab'] = totals['ab']! + 1;
         } else if (action == 'BALL' &&
@@ -456,7 +458,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         return SwlScorePlayRecord(
           inning: (event['inning'] as num?)?.toInt() ?? live.inning,
           isTopInning: event['is_top'] == true,
-          description: description,
+          description: (int.tryParse('${data['outs']}') ?? 0) > 0 &&
+              (action == 'HIT' || action == 'ERROR')
+              ? '$description · ${data['outs']} out(s)${[data['p_first_to'], data['p_second_to'], data['p_third_to']].contains(-4) ? ' · out en home' : ''}'
+              : description,
           notation: notation,
           batterName: name.isEmpty ? 'Partido' : name,
         );
@@ -1768,6 +1773,26 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         elevation: 0,
         title: Text(widget.liveSnapshot == null ? '⚾ PIZARRA · PRUEBA LOCAL' : '⚾ PIZARRA · EN VIVO', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
         actions: [
+          if (widget.liveSnapshot != null)
+            IconButton(tooltip: 'Actualizar pizarra', icon: const Icon(Icons.refresh, size: 20),
+              onPressed: () {
+                unawaited(_refreshLiveScore());
+                unawaited(_loadLiveLineups());
+                unawaited(_refreshLiveHistory());
+              }),
+          if (widget.onLiveSubstitute != null || widget.onLivePitcher != null)
+            PopupMenuButton<String>(
+              tooltip: 'Cambios de jugadores',
+              icon: const Icon(Icons.swap_horiz, color: Colors.amber),
+              onSelected: (item) => item == 'batter'
+                  ? widget.onLiveSubstitute?.call() : widget.onLivePitcher?.call(),
+              itemBuilder: (_) => [
+                if (widget.onLiveSubstitute != null)
+                  const PopupMenuItem(value: 'batter', child: Text('Sustituir bateador')),
+                if (widget.onLivePitcher != null)
+                  const PopupMenuItem(value: 'pitcher', child: Text('Cambiar pitcher')),
+              ],
+            ),
           if (widget.onLiveDetails != null)
             IconButton(
               tooltip: 'Box Score, alineaciones e historial',
@@ -2355,7 +2380,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   }
 
   // Selector de batazo dentro de la pizarra oficial, nunca en la pantalla PIN.
-  Future<Map<String, dynamic>?> _chooseLiveHit() async {
+  Future<Map<String, dynamic>?> _chooseLiveHit({required bool defensiveError}) async {
     final live = _currentLiveSnapshot;
     if (live == null) return null;
     final client = Supabase.instance.client;
@@ -2410,6 +2435,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     final second = bases['second'] == true;
     final third = bases['third'] == true;
     int batterBase = 1;
+    bool countRunsOnThirdOut = false;
     // Avance sugerido según el tipo de batazo; editable por el mánager.
     // El valor 0 indica que el corredor anotó.
     int destination(int initialBase, int hitBases) {
@@ -2425,19 +2451,35 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, update) {
           Widget choice(String title, int value, List<int> options,
-              void Function(int) change) => DropdownButtonFormField<int>(
-            value: value,
+              void Function(int) change, {bool batter = false}) => DropdownButtonFormField<int>(
+            key: ValueKey((title, value)),
+            initialValue: value,
             decoration: InputDecoration(labelText: title),
             items: [for (final n in options) DropdownMenuItem(
-              value: n, child: Text(n == 0 ? 'Anota carrera' : n == 4
-                  ? 'Jonrón' : 'Base $n'))],
-            onChanged: (n) { if (n != null) update(() => change(n)); },
+              value: n, child: Text(batter
+                  ? (defensiveError ? '${n}B por error' : const ['Hit', 'Doble', 'Triple', 'Jonrón'][n - 1])
+                  : n == 0 ? 'Anota carrera' : n == -4 ? 'Out en home'
+                  : n < 0 ? 'Out en ${-n}B' : '${n}B'))],
+            onChanged: (n) {
+              if (n != null) update(() {
+                countRunsOnThirdOut = false;
+                change(n);
+              });
+            },
           );
+          final destinations = [firstTo, secondTo, thirdTo];
+          final outCount = destinations.whereType<int>().where((d) => d < 0).length;
+          final retired = destinations.indexWhere((d) => d != null && d < 0);
+          final forced = firstTo == -2 || (first && secondTo == -3) ||
+              (first && second && thirdTo == -4);
+          final timePlay = live.outs + outCount == 3 && outCount == 1 && !forced &&
+              destinations.skip(retired + 1).contains(0);
           int? runs;
           try {
             final preview = live.playState.hit(
               batterBase: batterBase, firstTo: firstTo,
               secondTo: secondTo, thirdTo: thirdTo,
+              countRunsOnThirdOut: timePlay && countRunsOnThirdOut,
             );
             runs = live.isTop ? preview.awayRuns - live.awayRuns :
                 preview.homeRuns - live.homeRuns;
@@ -2445,22 +2487,28 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             // El botón permanece desactivado hasta que los destinos sean válidos.
           }
           return AlertDialog(
-            title: const Text('BATAZO · PIZARRA OFICIAL'),
+            title: Text(defensiveError ? 'Error defensivo' : 'Batazo'),
             content: SingleChildScrollView(child: Column(
               mainAxisSize: MainAxisSize.min, children: [
                 Text('Turno $order · $batterName  #$batterJersey\n$batterCode'),
-                choice('Batazo del bateador', batterBase, [1, 2, 3, 4], (n) {
+                choice('Batazo del bateador', batterBase, [1, 2, 3, if (!defensiveError) 4], (n) {
                   batterBase = n;
                   if (first) firstTo = destination(1, n);
                   if (second) secondTo = destination(2, n);
                   if (third) thirdTo = destination(3, n);
-                }),
-                if (first) choice('Corredor en primera', firstTo!, [2, 3, 0],
+                }, batter: true),
+                if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, -2, -3, -4],
                     (n) => firstTo = n),
-                if (second) choice('Corredor en segunda', secondTo!, [2, 3, 0],
+                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [2, 3, 0, -3, -4],
                     (n) => secondTo = n),
-                if (third) choice('Corredor en tercera', thirdTo!, [3, 0],
+                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [3, 0, -4],
                     (n) => thirdTo = n),
+                if (timePlay)
+                  CheckboxListTile(
+                    title: const Text('Las carreras seleccionadas cruzaron antes del tercer out y este no fue forzado'),
+                    value: countRunsOnThirdOut,
+                    onChanged: (value) => update(() => countRunsOnThirdOut = value == true),
+                  ),
                 if (runs != null) Text('Carreras de la jugada: $runs'),
                 if (runs == null) const Text('Revisa el orden y los destinos de los corredores',
                     style: TextStyle(color: Colors.redAccent)),
@@ -2476,6 +2524,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     'p_first_to': firstTo,
                     'p_second_to': secondTo,
                     'p_third_to': thirdTo,
+                    if (outCount > 0) 'count_runs_on_third_out': timePlay && countRunsOnThirdOut,
                   }), child: const Text('CONFIRMAR BATAZO')),
             ],
           );
@@ -2491,9 +2540,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         snapshot?.canScore(userId) != true) return;
     setState(() { _liveActionInFlight = true; _liveActionError = null; });
     try {
-      final hitParams = action == 'HIT' ? await _chooseLiveHit() : null;
-      if (action == 'HIT' && hitParams == null) return;
-      await widget.onLiveAction!(snapshot!.version, action, hitParams);
+      final battedBall = action == 'HIT' || action == 'ERROR';
+      final hitParams = battedBall ? await _chooseLiveHit(defensiveError: action == 'ERROR') : null;
+      if (battedBall && hitParams == null) return;
+      final combined = hitParams?.containsKey('count_runs_on_third_out') ?? false;
+      await widget.onLiveAction!(snapshot!.version,
+        action == 'HIT' && combined ? 'HIT_WITH_OUT' : action, hitParams);
       unawaited(_refreshLiveHistory());
       await _refreshLiveScore();
     } catch (error) {
@@ -2589,7 +2641,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         ]),
         if (allowed && snapshot.outs < 2 &&
             (snapshot.firstOccupied || snapshot.secondOccupied || snapshot.thirdOccupied))
-          TextButton(onPressed: _liveOutMenu, child: const Text('Jugadas especiales')),
+          TextButton(onPressed: _liveOutMenu, child: const Text('Doble play y jugadas especiales')),
+        if (allowed)
+          TextButton(onPressed: () => _submitLiveAction('ERROR'), child: const Text('Error defensivo')),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
       ]),
     );

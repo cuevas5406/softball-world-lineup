@@ -29,6 +29,12 @@ void main() {
     expect(end(7, 10, 9, complete: false), SwlFinishReason.normal);
     expect(end(7, 9, 10), SwlFinishReason.normal);
   });
+  test('2–0 en alta de sexta solo cierra al cambiar de mitad', () {
+    expect(end(5, 2, 0, top: true), isNull);
+    expect(end(6, 2, 0, top: true, complete: false), isNull);
+    expect(end(6, 2, 0, top: true), SwlFinishReason.normal);
+    expect(end(6, 2, 2, top: true), isNull);
+  });
   test('Umbrales inclusivos y oportunidad del local', () {
     expect(end(3, 0, 15, top: true), isNull);
     expect(end(3, 1, 15), isNull);

@@ -1,7 +1,7 @@
 name: softball_world_lineup
 description: "Plataforma Oficial de Softball - Softball World Lineup"
 publish_to: 'none'
-version: 1.0.0+1
+version: 5.7.0+2
 
 environment:
   sdk: '>=3.13.0 <4.0.0'

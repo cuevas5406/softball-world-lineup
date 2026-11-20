@@ -1,4 +1,12 @@
-# Softball World Lineup V5.6
+# Softball World Lineup V5.7
+
+El [informe de entrega](INFORME_V5.7.md) incluye la matriz de cumplimiento, los archivos modificados y las verificaciones pendientes en LAB y Android.
+
+## APK mediante GitHub Actions
+
+Extrae este ZIP en la raíz del repositorio. Conserva `.github/workflows/build_apk.yml` y configura el secreto de repositorio `SWL_LAB_PUBLISHABLE_KEY`. Ejecuta **Compilar APK Android - Softball World Lineup** en **Actions**. Si finaliza correctamente, el artefacto **Softball-World-Lineup-Instalador** contendrá `app-release.apk`.
+
+## Entrega anterior V5.6
 
 ## Compilar la APK con GitHub Actions
 

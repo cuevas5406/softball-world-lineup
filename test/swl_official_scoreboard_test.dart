@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:softball_world_lineup/swl_advanced_scoreboard.dart';
 import 'package:softball_world_lineup/swl_live_scoreboard_snapshot.dart';
+import 'package:softball_world_lineup/swl_team_settings.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -86,6 +87,110 @@ void main() {
     expect(methods.every((method) => method == 'GET'), isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'La pizarra ofrece sustitución y actualización manual sin barra',
+    (tester) async {
+      var substituted = false;
+      var gameReads = 0;
+      respond = (request) async {
+        if (request.url.path.endsWith('/swl_live_games')) {
+          gameReads++;
+          return jsonResponse([]);
+        }
+        return jsonResponse([]);
+      };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwlAdvancedScoreboard(
+            gamePin: 'SWL-123456',
+            homeTeam: 'Local',
+            awayTeam: 'Visitante',
+            liveSnapshot: SwlLiveScoreboardSnapshot.fromGame({
+              'id': 'partido-prueba',
+              'status': 'IN_PROGRESS',
+              'version': 1,
+              'is_top': true,
+            }),
+            onLiveSubstitute: () => substituted = true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Cambios de jugadores'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Sustituir bateador'));
+      await tester.pumpAndSettle();
+      expect(substituted, true);
+      await tester.tap(find.byTooltip('Actualizar pizarra'));
+      await tester.pumpAndSettle();
+      expect(gameReads, greaterThan(0));
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'Configuración carga y envía cambios con la revisión al guardar',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      Map<String, dynamic>? sent;
+      respond = (request) async {
+        if (request.url.path.endsWith('/swl_v57_team_settings')) {
+          return jsonResponse({
+            'name': 'Los 300',
+            'province': 'Santo Domingo',
+            'revision': 4,
+            'primary_color': '#FFAA00',
+            'delegate': 'Delegada',
+          });
+        }
+        if (request.url.path.endsWith('/swl_v57_update_team_settings')) {
+          sent = jsonDecode(request.body) as Map<String, dynamic>;
+          return jsonResponse({});
+        }
+        return jsonResponse([]);
+      };
+      Map<String, String>? saved;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  saved = await Navigator.of(context).push<Map<String, String>>(
+                    MaterialPageRoute(
+                      builder: (_) => const SwlTeamSettings(
+                        teamId: 'equipo',
+                        name: 'Anterior',
+                        province: '',
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('ABRIR CONFIGURACIÓN'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('ABRIR CONFIGURACIÓN'));
+      await tester.pumpAndSettle();
+      expect(find.text('Los 300'), findsOneWidget);
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Color principal (#RRGGBB)'),
+        '#00aaff',
+      );
+      final save = find.text('GUARDAR CONFIGURACIÓN');
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(sent?['p_expected_revision'], 4);
+      expect((sent?['p_data'] as Map)['primary_color'], '#00AAFF');
+      expect(saved?['primary_color'], '#00AAFF');
+    },
+  );
 
   testWidgets(
     'El historial se recupera aunque falle la consulta de alineaciones',
