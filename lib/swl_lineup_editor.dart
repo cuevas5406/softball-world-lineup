@@ -36,7 +36,7 @@ Future<bool?> showSwlLineupEditor(
 
           final batting = working.batting;
           final designated = batting
-              .where((id) => !positions.containsKey(id))
+              .where((id) => !working.positions.containsKey(id))
               .toList();
           return AlertDialog(
             title: Text('Elegir mi alineación · $teamName'),
