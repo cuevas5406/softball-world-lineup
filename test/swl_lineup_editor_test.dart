@@ -55,28 +55,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
 
-    final firstPitcher = find.widgetWithText(ChoiceChip, 'P').first;
-    await tester.ensureVisible(firstPitcher);
-    await tester.tap(firstPitcher);
+    // The compact roster page no longer exposes defensive ChoiceChips.
+    // Defense is assigned on the second page, only for selected players.
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byType(CheckboxListTile), findsWidgets);
+    await tester.tap(find.text('CONTINUAR · 9 SELECCIONADOS'));
     await tester.pumpAndSettle();
+    expect(find.byType(ReorderableListView), findsOneWidget);
+    expect(find.textContaining('Asigna un pitcher titular'), findsOneWidget);
     expect(draft.pitcherId, isNull);
-    expect(find.text('LF / 1B · SWL-1'), findsOneWidget);
-    await tester.drag(find.byType(ListView), const Offset(0, 1000));
-    await tester.pumpAndSettle();
-    expect(find.text('Pitcher titular: Jugador 1'), findsOneWidget);
-
-    await tester.tap(find.text('ORDEN AL BATE · 9'));
-    await tester.pumpAndSettle();
-    final save = find.text('GUARDAR ALINEACIÓN');
-    await tester.ensureVisible(save);
-    await tester.tap(save);
-    await tester.pumpAndSettle();
-    expect(confirmed, isNull);
-    expect(find.textContaining('9 y 10 posiciones'), findsWidgets);
-    expect(draft.batting, roster.keys.toList());
-    expect(draft.pitcherId, isNull);
+    expect(find.text('GUARDAR ALINEACIÓN'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'GUARDAR ALINEACIÓN')).onPressed, isNull);
 
     await tester.pageBack();
+    await tester.pumpAndSettle();
+    final lastPlayer = find.byKey(const ValueKey('roster-9'));
+    await tester.ensureVisible(lastPlayer);
+    await tester.tap(lastPlayer);
     await tester.pumpAndSettle();
     await tester.tap(find.text('CANCELAR'));
     await tester.pumpAndSettle();
@@ -133,7 +128,7 @@ void main() {
     );
     await tester.tap(find.text('ABRIR'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('ORDEN AL BATE · 9'));
+    await tester.tap(find.text('CONTINUAR · 9 SELECCIONADOS'));
     await tester.pumpAndSettle();
     final handles = find.byType(ReorderableDelayedDragStartListener);
     final first = tester.getCenter(handles.at(0));
