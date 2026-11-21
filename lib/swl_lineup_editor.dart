@@ -21,7 +21,7 @@ Future<bool?> showSwlLineupEditor(
   );
   final selected = working.selected;
   final original = jsonEncode(draft.toLocalJson());
-  final positions = working.positions;
+  String search = "";
   return showDialog<bool>(
     context: context,
     barrierDismissible: false,
@@ -95,82 +95,49 @@ Future<bool?> showSwlLineupEditor(
                       onChanged: (id) =>
                           update(() => working.designatedId = id),
                     ),
-                  ExpansionTile(
-                    title: const Text('Jugadores y defensa'),
-                    initiallyExpanded: true,
-                    children: [
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          for (final position in swlDefensivePositions)
-                            Chip(
-                              label: Text(
-                                '$position · ${roster[positions.entries.where((entry) => entry.value == position).firstOrNull?.key]?.name ?? "Libre"}',
-                              ),
-                            ),
-                        ],
-                      ),
-                      for (final player in roster.values) ...[
-                        CheckboxListTile(
-                          key: ValueKey('roster-${player.playerId}'),
-                          contentPadding: EdgeInsets.zero,
-                          value: selected.contains(player.playerId),
-                          title: Text(
-                            '${player.name} · #${player.number} · Batea',
-                          ),
-                          subtitle: Text(
-                            '${player.positionLabel} · ${player.universalId}',
-                          ),
-                          onChanged:
-                              (!working.pitcherBats &&
-                                  working.pitcherId == player.playerId &&
-                                  !selected.contains(player.playerId))
-                              ? null
-                              : !selected.contains(player.playerId) &&
-                                    working.batting.length >= 13
-                              ? null
-                              : (checked) => update(() {
-                                  working.setBatting(
-                                    player.playerId,
-                                    checked == true,
-                                  );
-                                  if (checked != true &&
-                                      working.designatedId == player.playerId) {
-                                    working.designatedId = null;
-                                  }
-                                }),
-                        ),
-                        // Any active player may defend, even when not batting.
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 4,
-                          children: [
-                            for (final position in swlDefensivePositions)
-                              ChoiceChip(
-                                label: Text(position),
-                                selected:
-                                    positions[player.playerId] == position,
-                                // An occupied position can be selected:
-                                // the draft swaps the two fielders safely.
-                                onSelected: (on) => update(
-                                  () => working.assign(
-                                    player.playerId,
-                                    on ? position : null,
-                                  ),
-                                ),
-                              ),
-                            ActionChip(
-                              label: const Text('Sin posición'),
-                              onPressed: () => update(
-                                () => working.assign(player.playerId, null),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
+                  const SizedBox(height: 12),
+                  TextField(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'Buscar jugador por nombre, número o ID',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    onChanged: (value) => setDialogState(() => search = value),
                   ),
+                  const SizedBox(height: 8),
+                  Text('${batting.length}/13 bateadores seleccionados'),
+                  const SizedBox(height: 6),
+                  for (final player in roster.values.where((player) {
+                    final query = search.trim().toLowerCase();
+                    return query.isEmpty ||
+                        player.name.toLowerCase().contains(query) ||
+                        player.number.toString().toLowerCase().contains(query) ||
+                        player.universalId.toLowerCase().contains(query);
+                  }))
+                    CheckboxListTile(
+                      key: ValueKey('roster-${player.playerId}'),
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      contentPadding: EdgeInsets.zero,
+                      value: selected.contains(player.playerId),
+                      title: Text('${player.name} · #${player.number}'),
+                      subtitle: Text(player.positionLabel),
+                      onChanged: (!working.pitcherBats &&
+                                  working.pitcherId == player.playerId &&
+                                  !selected.contains(player.playerId)) ||
+                              (!selected.contains(player.playerId) &&
+                                  working.batting.length >= 13)
+                          ? null
+                          : (checked) => update(() {
+                              working.setBatting(player.playerId, checked == true);
+                              if (checked != true &&
+                                  working.designatedId == player.playerId) {
+                                working.designatedId = null;
+                              }
+                            }),
+                    ),
+
                 ],
               ),
             ),
@@ -236,7 +203,7 @@ Future<bool?> showSwlLineupEditor(
                   draft.designatedId = working.designatedId;
                   Navigator.pop(dialog, true);
                 },
-                child: Text('ORDEN AL BATE · ${batting.length}'),
+                child: Text('CONTINUAR · ${batting.length} SELECCIONADOS'),
               ),
             ],
           );
@@ -263,15 +230,25 @@ class _SwlBattingOrderPage extends StatefulWidget {
 
 class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
   void _reorder(int from, int to) {
-    final wholeOrder = widget.draft.selected;
     final batting = widget.draft.batting;
-    if (to == from) return;
-    final player = batting.removeAt(from);
-    batting.insert(to, player);
+    if (to > from) to -= 1; // Flutter's destination includes the removed row.
+    if (to == from || to < 0 || to >= batting.length) return;
+    final moved = batting.removeAt(from);
+    batting.insert(to, moved);
     setState(() {
-      wholeOrder
+      final nonBatters = widget.draft.selected
+          .where((id) => !batting.contains(id)).toList();
+      widget.draft.selected
         ..clear()
-        ..addAll(batting);
+        ..addAll(batting)
+        ..addAll(nonBatters);
+    });
+    widget.onChanged?.call(widget.draft);
+  }
+
+  void _assignPosition(String id, String? position) {
+    setState(() {
+      widget.draft.assign(id, position);
     });
     widget.onChanged?.call(widget.draft);
   }
@@ -282,14 +259,14 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
     final error = widget.draft.validate();
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
-      appBar: AppBar(title: const Text('Orden al bate')),
+      appBar: AppBar(title: const Text('Orden al bate · desliza para ordenar')),
       body: SafeArea(
         child: Column(
           children: [
             Expanded(
               child: ReorderableListView.builder(
                 itemCount: batting.length,
-                onReorderItem: _reorder,
+                onReorder: _reorder,
                 buildDefaultDragHandles: false,
                 itemBuilder: (context, index) {
                   final id = batting[index];
@@ -297,27 +274,26 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
                     key: ValueKey(id),
                     leading: CircleAvatar(child: Text('${index + 1}')),
                     title: Text(widget.roster[id]!.name),
-                    subtitle: Text(
-                      widget.draft.designatedId == id
-                          ? 'DH'
-                          : widget.draft.positions[id] ?? 'Solo bateo',
-                    ),
+                    subtitle: Text('Habitual: ${widget.roster[id]!.positionLabel}'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
-                          tooltip: 'Subir en el orden',
-                          onPressed: index > 0
-                              ? () => _reorder(index, index - 1)
-                              : null,
-                          icon: const Icon(Icons.keyboard_arrow_up),
-                        ),
-                        IconButton(
-                          tooltip: 'Bajar en el orden',
-                          onPressed: index + 1 < batting.length
-                              ? () => _reorder(index, index + 1)
-                              : null,
-                          icon: const Icon(Icons.keyboard_arrow_down),
+                        SizedBox(
+                          width: 116,
+                          child: DropdownButton<String>(
+                            isExpanded: true,
+                            value: widget.draft.positions[id] ?? '',
+                            items: [
+                              const DropdownMenuItem(
+                                value: '', child: Text('Sin posición', style: TextStyle(fontSize: 11)),
+                              ),
+                              for (final pos in swlDefensivePositions)
+                                DropdownMenuItem(value: pos, child: Text(pos)),
+                            ],
+                            onChanged: (value) => _assignPosition(
+                              id, value == '' ? null : value,
+                            ),
+                          ),
                         ),
                         ReorderableDelayedDragStartListener(
                           index: index,
