@@ -1,0 +1,50 @@
+name: SWL V5.7 - APK de pruebas
+
+on:
+  push:
+    branches:
+      - pruebas-de-V5.7
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    name: Compilar APK de prueba
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Preparar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalar Flutter estable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Mostrar versiones
+        run: |
+          flutter --version
+          java -version
+
+      - name: Resolver dependencias
+        run: flutter pub get
+
+      - name: Compilar APK debug instalable
+        run: flutter build apk --debug
+
+      - name: Publicar APK de prueba
+        uses: actions/upload-artifact@v4
+        with:
+          name: SWL-V5.7-APK-pruebas
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
