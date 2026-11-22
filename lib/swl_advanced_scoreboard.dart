@@ -483,12 +483,21 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           'ERROR' => ('E', 'Error registrado'),
           _ => ('JUGADA', 'Evento del partido'),
         };
+        // V5.7 guarda outs_added y destinos sin prefijo p_ en el evento.
+        // Conservar compatibilidad con el historial de versiones anteriores.
+        final outsAdded = int.tryParse('${data['outs_added'] ?? data['outs']}') ?? 0;
+        final runnerDestinations = [
+          data['first_to'] ?? data['p_first_to'],
+          data['second_to'] ?? data['p_second_to'],
+          data['third_to'] ?? data['p_third_to'],
+        ];
+        final outAtHome = runnerDestinations.any((value) =>
+            int.tryParse('$value') == -4);
         return SwlScorePlayRecord(
           inning: (event['inning'] as num?)?.toInt() ?? live.inning,
           isTopInning: event['is_top'] == true,
-          description: (int.tryParse('${data['outs']}') ?? 0) > 0 &&
-              (action == 'HIT' || action == 'ERROR')
-              ? '$description · ${data['outs']} out(s)${[data['p_first_to'], data['p_second_to'], data['p_third_to']].contains(-4) ? ' · out en home' : ''}'
+          description: outsAdded > 0 && (action == 'HIT' || action == 'ERROR')
+              ? '$description · $outsAdded out(s)${outAtHome ? ' · out en home' : ''}'
               : description,
           notation: notation,
           batterName: name.isEmpty ? 'Partido' : name,
