@@ -2693,6 +2693,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       try {
         await _refreshLiveScore();
         await _refreshLiveHistory();
+        // No afirmar que el marcador está al día si la lectura no avanzó
+        // hasta la versión que la RPC acaba de confirmar.
+        if (mounted && _currentLiveSnapshot?.gameId == snapshot.gameId &&
+            (_currentLiveSnapshot?.version ?? -1) <= snapshot.version) {
+          setState(() => _liveActionError =
+              'Jugada enviada, pero el marcador aún no confirma la actualización. Revisa el historial antes de continuar.');
+        }
         // El lector de historial gestiona internamente sus errores; comprobar
         // su estado para no anunciar una actualización completa si falló.
         if (mounted && _historyReadError != null) {
