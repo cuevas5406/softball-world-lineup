@@ -865,7 +865,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           SwlLiveScoreboardSnapshot.fromGame(_game!).version > expectedVersion) {
         throw StateError('Ya no tienes permiso vigente para anotar esta jugada.');
       }
-      sent = true;
       final params = {
         'p_game_id': gameId,
         'p_expected_version': expectedVersion,
@@ -884,6 +883,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         'p_batter_id': plateBatterId,
         'p_data': hitParams!,
       } : params;
+      sent = true;
       try {
         await _client.rpc(action == 'FOUL' ? 'swl_v56_record_foul' : special ? (extendedBall
               ? 'swl_v57_batted_ball' : 'swl_v56_special_play') : isHit ? 'swl_v56_apply_hit' :
@@ -897,6 +897,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             'swl_v53_record_plate_action', params: params)
             .timeout(const Duration(seconds: 12));
       }
+      // La RPC respondió; un fallo posterior de refresco no es un envío incierto.
+      sent = false;
       await _refreshGame(afterCurrent: true);
       await _loadRecentEvents();
       await _loadBattingStats();
