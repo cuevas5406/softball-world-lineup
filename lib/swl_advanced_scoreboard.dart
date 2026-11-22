@@ -473,6 +473,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           'BALL' => ('BB', 'Base por bolas'),
           'STRIKE' => ('K', 'Ponche'),
           'OUT' => ('O', 'Out'),
+          'UNDO_OUT' => ('ANULADO', 'OUT anulado · corrección registrada'),
           'SUBSTITUTION' => ('SUST', 'Sustitución'),
           'GHOST_RUNNER' => ('CF', 'Corredor fantasma en segunda'),
           'RUNNER_MOVE' => ('AV', 'Movimiento de corredor'),
@@ -2889,7 +2890,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         ]),
         if (allowed && snapshot.outs < 2 &&
             (snapshot.firstOccupied || snapshot.secondOccupied || snapshot.thirdOccupied))
-          TextButton(onPressed: _liveOutMenu, child: const Text('Doble play y jugadas especiales')),
+          TextButton(onPressed: _liveOutMenu, child: const Text('Outs y jugadas especiales')),
         if (allowed)
           const Text('Error defensivo: pendiente de habilitar en LAB', style: TextStyle(color: Colors.amber, fontSize: 11)),
         if (allowed)
