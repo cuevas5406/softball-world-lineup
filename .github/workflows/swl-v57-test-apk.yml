@@ -38,22 +38,12 @@ jobs:
       - name: Resolver dependencias
         run: flutter pub get
 
-      - name: Validar configuracion de Supabase LAB
-        env:
-          LAB_ANON_KEY: ${{ secrets.SWL_LAB_ANON_KEY }}
-        run: |
-          if [ -z "$LAB_ANON_KEY" ]; then
-            echo "::error::Falta el secreto SWL_LAB_ANON_KEY. Se detiene la compilacion para no generar una APK inutilizable."
-            exit 1
-          fi
-
+      # La clave publishable es publica por diseno; nunca usar service_role.
       - name: Compilar APK debug instalable con LAB
-        env:
-          LAB_ANON_KEY: ${{ secrets.SWL_LAB_ANON_KEY }}
         run: |
           flutter build apk --debug \\
             --dart-define=SUPABASE_URL=https://wgeziptdoabyicufnrfk.supabase.co \\
-            --dart-define=SUPABASE_ANON_KEY="$LAB_ANON_KEY"
+            --dart-define=SUPABASE_ANON_KEY=sb_publishable_abewrhe85_YSfd8ZCl_Ktg_6mrwD4DA
 
       - name: Publicar APK de prueba
         uses: actions/upload-artifact@v4
