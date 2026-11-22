@@ -1385,6 +1385,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       await SwlPushNotifications.instance.requestPermission();
+      await SwlPushNotifications.instance.registerCurrentDevice();
       final initial = await SwlPushNotifications.instance.initialMessage();
       if (mounted && initial != null &&
           (initial.data['type'] == 'challenge' || initial.data['screen'] == 'agenda')) {
