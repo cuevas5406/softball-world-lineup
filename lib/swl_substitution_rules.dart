@@ -63,8 +63,12 @@ class SwlSubstitutionRequest {
 bool swlIsExplicitSubstitutionRejection(String? code) {
   final value = code?.trim().toUpperCase() ?? '';
   if (value.isEmpty) return false;
-  final http = int.tryParse(value);
-  if (http != null) return http >= 400 && http < 500;
+  // Los codigos HTTP tienen exactamente tres digitos. SQLSTATE 23505
+  // representa un rechazo explicito, no un codigo HTTP.
+  if (RegExp(r'^[0-9]{3}$').hasMatch(value)) {
+    final http = int.parse(value);
+    return http >= 400 && http < 500;
+  }
   if (value.startsWith('PGRST')) return true;
   if (RegExp(r'^[0-9A-Z]{5}$').hasMatch(value)) {
     return !value.startsWith('08') && !value.startsWith('58') &&
