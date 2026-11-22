@@ -2693,6 +2693,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       try {
         await _refreshLiveScore();
         await _refreshLiveHistory();
+        // El lector de historial gestiona internamente sus errores; comprobar
+        // su estado para no anunciar una actualización completa si falló.
+        if (mounted && _historyReadError != null) {
+          setState(() => _liveActionError =
+              'Jugada enviada, pero no se pudo actualizar el historial. Revisa la pizarra antes de continuar.');
+        }
       } catch (_) {
         if (mounted) setState(() => _liveActionError =
             'Jugada enviada. No se pudo actualizar la pizarra; revisa el historial antes de continuar.');
