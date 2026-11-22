@@ -9,11 +9,13 @@ class SwlTeamSettings extends StatefulWidget {
     required this.teamId,
     required this.name,
     required this.province,
+    this.onCreateTeam,
   });
 
   final String teamId;
   final String name;
   final String province;
+  final Future<void> Function()? onCreateTeam;
 
   @override
   State<SwlTeamSettings> createState() => _SwlTeamSettingsState();
@@ -143,6 +145,12 @@ class _SwlTeamSettingsState extends State<SwlTeamSettings> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (widget.onCreateTeam != null)
+                OutlinedButton.icon(
+                  onPressed: () async { await widget.onCreateTeam!(); },
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('Crear otro equipo'),
+                ),
               SwlTeamLogoEditor(teamId: widget.teamId),
               const SizedBox(height: 16),
               for (final entry in _fields.entries)

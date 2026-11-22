@@ -1,4 +1,6 @@
 -- Propuesta V5.7 sin ejecutar. Actualiza el evaluador y sus dos adaptadores.
+-- Adaptadores ajustados a RETURNS jsonb según las firmas observadas en LAB.
+-- AÚN NO INSTALAR: faltan dependencias y validaciones de integración.
 -- Conserva los adaptadores de 09 y conecta la anotación al cierre en la misma
 -- transacción. Verificar estas firmas, permisos y dependencias antes de aplicar.
 -- No recalcula resultados históricos ni escribe firmas.
@@ -20,13 +22,18 @@ begin
   if prior.is_top is null or latest.is_top is null or prior.inning is null or latest.inning is null then
     raise exception 'No se pudo identificar la media entrada.';
   end if;
+  -- El cambio de media entrada solo es válido cuando la jugada cerró tres outs.
   half_ended := latest.is_top <> prior.is_top;
   if latest.inning <> prior.inning + (case when half_ended and not prior.is_top then 1 else 0 end) then
     raise exception 'Transición de media entrada incompatible con el marcador.';
   end if;
   lead := latest.home_runs - latest.away_runs;
-  threshold := case prior.inning when 3 then latest.swl_super_margin when 4 then latest.swl_knockout_margin end;
-  if threshold > 0 and
+  -- Supernocaut en la tercera; nocaut desde la cuarta en adelante.
+  threshold := case
+    when prior.inning = 3 then latest.swl_super_margin
+    when prior.inning >= 4 then latest.swl_knockout_margin
+    else null end;
+  if coalesce(threshold,0) > 0 and
       (case when prior.is_top then half_ended and lead >= threshold
          else lead >= threshold or (half_ended and lead <= -threshold) end) then
     reason := case when prior.inning = 3 then 'Súper knockout' else 'Knockout' end;
@@ -57,39 +64,43 @@ revoke all on function public.swl_v56_close_after_play(public.swl_live_games) fr
 
 create or replace function public.swl_v56_record_plate_action(
   p_game_id uuid, p_expected_version bigint, p_action text, p_batter_id uuid
-) returns void language plpgsql security definer set search_path = '' as $$
+) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   g public.swl_live_games%rowtype;
   pitcher uuid;
+  result jsonb;
 begin
   g := public.swl_v56_lock_batting_turn(p_game_id, p_expected_version);
   if p_action is null or p_action not in ('BALL','STRIKE','OUT') then raise exception 'Jugada inválida.'; end if;
   select pitcher_id into pitcher from public.swl_game_lineups where game_id = p_game_id
     and team_id = (case when g.is_top then g.home_team_id else g.away_team_id end);
-  perform public.swl_v53_record_plate_action(p_game_id => p_game_id, p_expected_version => p_expected_version,
+  result := public.swl_v53_record_plate_action(p_game_id => p_game_id, p_expected_version => p_expected_version,
       p_action => p_action, p_batter_id => p_batter_id);
   perform public.swl_v56_track_base_players(g,p_action,p_batter_id,null,null,null,null);
   perform public.swl_v56_accumulate_pitching(g, pitcher, p_action);
   perform public.swl_v56_close_after_play(g);
+  return result;
 end;
 $$;
 create or replace function public.swl_v56_apply_hit(
   p_game_id uuid, p_expected_version bigint, p_batter_id uuid, p_batter_base integer,
   p_first_to integer, p_second_to integer, p_third_to integer
-) returns void language plpgsql security definer set search_path = '' as $$
+) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   g public.swl_live_games%rowtype;
   pitcher uuid;
+  result jsonb;
 begin
   g := public.swl_v56_lock_batting_turn(p_game_id, p_expected_version);
   select pitcher_id into pitcher from public.swl_game_lineups where game_id = p_game_id
     and team_id = (case when g.is_top then g.home_team_id else g.away_team_id end);
-  perform public.swl_v53_apply_hit_for_player(p_game_id => p_game_id, p_expected_version => p_expected_version,
+  result := public.swl_v53_apply_hit_for_player(p_game_id => p_game_id, p_expected_version => p_expected_version,
     p_batter_id => p_batter_id, p_batter_base => p_batter_base,
     p_first_to => p_first_to, p_second_to => p_second_to, p_third_to => p_third_to);
   perform public.swl_v56_track_base_players(g,'HIT',p_batter_id,p_batter_base,p_first_to,p_second_to,p_third_to);
   perform public.swl_v56_accumulate_pitching(g, pitcher, 'HIT');
   perform public.swl_v56_close_after_play(g);
+  return result;
 end;
 $$;
 

@@ -121,6 +121,18 @@ class SwlPlayState {
         throw StateError('Destino de corredor inválido');
       }
     }
+    // Un corredor no puede rebasar al corredor que va delante.
+    var previousDestination = 4;
+    for (final base in [3, 2, 1]) {
+      final destination = moves[base];
+      if (destination == null) continue;
+      final effectiveDestination = destination == 0 ? 4 : destination;
+      if (effectiveDestination > previousDestination ||
+          (effectiveDestination == previousDestination && effectiveDestination != 4)) {
+        throw StateError('Los corredores no pueden rebasarse ni ocupar la misma base');
+      }
+      previousDestination = effectiveDestination;
+    }
     final occupied = moves.values.where((v) => v != 0).toList();
     if (occupied.toSet().length != occupied.length) {
       throw StateError('Dos corredores no pueden ocupar la misma base');
@@ -139,6 +151,11 @@ class SwlPlayState {
   SwlPlayState sacrificeFly({int? firstTo, int? secondTo, int? thirdTo}) {
     _validateGameState();
     if (outs < 0 || outs > 2) throw StateError('Outs inválidos');
+    // Mismo contrato que swl_v56_special_play: sacrificio con corredor
+    // anotando desde tercera y menos de dos outs.
+    if (outs >= 2 || !third || thirdTo != 0) {
+      throw StateError('El sacrificio requiere corredor en tercera, carrera y menos de dos outs');
+    }
     if (first != (firstTo != null) || second != (secondTo != null) ||
         third != (thirdTo != null)) {
       throw StateError('Debe indicarse destino para cada corredor presente');
@@ -153,18 +170,23 @@ class SwlPlayState {
         throw StateError('Destino inválido');
       }
     }
+    // Comprobar también el orden físico de los corredores, como hace el RPC.
+    // Dos corredores pueden anotar, pero uno de atrás no puede adelantar
+    // a otro que permanece en base (p. ej., 1B -> home y 2B -> 2B).
+    var previousDestination = 4;
+    for (final base in [3, 2, 1]) {
+      final destination = moves[base];
+      if (destination == null) continue;
+      final effectiveDestination = destination == 0 ? 4 : destination;
+      if (effectiveDestination > previousDestination ||
+          (effectiveDestination == previousDestination && effectiveDestination != 4)) {
+        throw StateError('Los corredores no pueden rebasarse ni ocupar la misma base');
+      }
+      previousDestination = effectiveDestination;
+    }
     final occupied = moves.values.where((d) => d != 0).toList();
     if (occupied.toSet().length != occupied.length) {
       throw StateError('Dos corredores en una base');
-    }
-    if (outs == 2) {
-      // El tercer out por el bateador impide carreras en esta jugada.
-      if (moves.values.contains(0)) {
-        throw StateError('Carrera inválida en tercer out del bateador');
-      }
-      return copy(balls: 0, strikes: 0, outs: 0,
-        inning: isTop ? inning : inning + 1, isTop: !isTop,
-        first: false, second: false, third: false);
     }
     final runs = moves.values.where((d) => d == 0).length;
     return copy(balls: 0, strikes: 0, outs: outs + 1,

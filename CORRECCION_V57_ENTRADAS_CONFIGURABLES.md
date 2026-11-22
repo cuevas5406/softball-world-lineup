@@ -1,0 +1,1 @@
+Corrección: la previsualización del corredor fantasma ahora recibe las entradas reglamentarias del snapshot del partido. Se agregaron pruebas para reglamentos de 5, 6 y 7 entradas y configuración inválida. No se ejecutó Flutter SDK ni se modificó Supabase.

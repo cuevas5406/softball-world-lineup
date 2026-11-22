@@ -156,9 +156,20 @@ declare
   plate boolean;
   batting_order jsonb;
   turn_order integer;
-  lineup_revision integer;
+  lineup_revision bigint;
   details jsonb;
 begin
+  if p_data is null or jsonb_typeof(p_data) <> 'object' then
+    raise exception 'Los datos de la jugada deben ser un objeto JSON.';
+  end if;
+  -- Evitar operaciones con bateador ausente o avances ambiguos.
+  if p_action in ('DOUBLE_PLAY','SACRIFICE_FLY') and p_batter_id is null then
+    raise exception 'La jugada requiere un bateador identificado.';
+  end if;
+  if p_action in ('RUNNER_MOVE','RUNNER_OUT','DOUBLE_PLAY','RUNNER_REPLACE')
+      and (p_data ->> 'source') is null then
+    raise exception 'La jugada requiere base de origen.';
+  end if;
   g := public.swl_v56_lock_batting_turn(p_game_id, p_expected_version);
   team := case when g.is_top then g.away_team_id else g.home_team_id end;
   if p_action is null or p_action not in ('RUNNER_MOVE','RUNNER_OUT','RUNNER_REPLACE','GHOST_RUNNER','DOUBLE_PLAY','SACRIFICE_FLY') then
@@ -201,7 +212,7 @@ begin
     select (slot ->> 'order')::integer into turn_order from jsonb_array_elements(batting_order) slot
       where slot ->> 'player_id' = players[source]::text;
     if turn_order is null then raise exception 'El corredor no pertenece al turno activo.'; end if;
-    perform public.swl_v56_substitute_batter(g.id,team,turn_order,players[source],runner,lineup_revision,g.version);
+    perform public.swl_v53_substitute_batter(g.id,team,turn_order,players[source],runner,lineup_revision,g.version);
     return;
   end if;
   if p_action in ('RUNNER_MOVE','RUNNER_OUT','DOUBLE_PLAY') then
@@ -210,14 +221,29 @@ begin
     end if;
     runner := players[source];
     if p_action = 'RUNNER_MOVE' then
-      if dest is null or dest not between 0 and 3 or source = dest then raise exception 'Destino inválido.'; end if;
+      if dest is null or dest not between 0 and 3 or source = dest or (dest <> 0 and dest < source) then raise exception 'Destino inválido: no se permite retroceder de base.'; end if;
       next_dest := case when dest = 0 then 4 else dest end;
       for i in least(source,next_dest)..least(3,greatest(source,next_dest)) loop
         if i <> source and occupied[i] then raise exception 'Hay un corredor en el trayecto.'; end if;
       end loop;
-      if dest = 0 then runs := 1;
-      else resulting[dest] := true; players[dest] := runner; end if;
+      if dest = 0 then
+        runs := 1;
+      else
+        if resulting[dest] then
+          raise exception 'La base de destino ya está ocupada.';
+        end if;
+        resulting[dest] := true;
+        players[dest] := runner;
+      end if;
     else
+      -- RUNNER_OUT: destination=0 identifica out en home, nunca carrera.
+      -- Para otros outs, destination identifica la base donde ocurrió.
+      if p_action = 'RUNNER_OUT' and (dest is null or dest not between 0 and 3
+          or (dest > 0 and dest < source)) then
+        raise exception 'Indique la base del out (0 = home); no se permite retroceder.';
+      end if;
+      -- DOUBLE_PLAY registra el out del bateador y el de un corredor existente.
+      -- No se suman carreras por esta acción.
       made := case when p_action = 'DOUBLE_PLAY' then 2 else 1 end;
     end if;
     resulting[source] := false;
@@ -227,26 +253,38 @@ begin
       raise exception 'El sacrificio requiere carrera desde tercera y menos de dos outs.';
     end if;
     resulting := array[false,false,false];
-    for i in 1..3 loop
+    -- Procesar desde tercera hacia primera. El corredor adelantado debe
+    -- terminar por delante del que viene detras; home se representa como 4.
+    previous_dest := 4;
+    for i in reverse 3..1 loop
       dest := destinations[i];
-      if occupied[i] is distinct from (dest is not null) or dest < 0 or dest > 3 or (dest <> 0 and dest < i) then
-        raise exception 'Avance inválido.';
+      if occupied[i] is distinct from (dest is not null)
+          or (dest is not null and (dest < 0 or dest > 3 or (dest > 0 and dest < i))) then
+        raise exception 'Avance invalido.';
       end if;
       if occupied[i] then
         next_dest := case when dest = 0 then 4 else dest end;
-        if next_dest < previous_dest then raise exception 'Un corredor no puede rebasar a otro.'; end if;
+        if next_dest > previous_dest or (next_dest = previous_dest and next_dest <> 4) then
+          raise exception 'Los corredores no pueden rebasarse ni ocupar la misma base.';
+        end if;
         previous_dest := next_dest;
         if dest = 0 then runs := runs+1;
-        elsif resulting[dest] then raise exception 'Dos corredores en una base.';
-        else resulting[dest] := true; moved[dest] := players[i]; end if;
+        else
+          resulting[dest] := true;
+          moved[dest] := players[i];
+        end if;
       end if;
     end loop;
     players := moved;
     made := 1;
-  else
-    if g.inning < 6 or occupied[2] then raise exception 'Segunda debe estar libre, desde la sexta.'; end if;
+  elsif p_action = 'GHOST_RUNNER' then
+    if g.inning <= g.swl_regulation_innings or g.home_runs <> g.away_runs
+       or occupied[1] or occupied[2] or occupied[3]
+       or g.outs <> 0 or g.balls <> 0 or g.strikes <> 0 then
+      raise exception 'El corredor fantasma requiere entradas extras, marcador empatado y segunda libre.';
+    end if;
     if exists (select 1 from public.swl_game_events where game_id = g.id and inning = g.inning
-      and is_top = g.is_top and event_type::text = 'GHOST_RUNNER') then
+      and is_top = g.is_top) then
       raise exception 'Ya se colocó un corredor fantasma en esta media entrada.';
     end if;
     if p_data ->> 'player_id' = 'LAST_OUT' then
@@ -272,6 +310,20 @@ begin
     resulting[2] := true;
     players[2] := runner;
     ghost := runner;
+  else
+    raise exception 'Acción especial sin rama de procesamiento: %', p_action;
+  end if;
+  -- No permitir un doble play que intente producir un cuarto out.
+  if p_action = 'DOUBLE_PLAY' and g.outs > 1 then
+    raise exception 'No se puede registrar doble play con dos outs.';
+  end if;
+  if p_action = 'DOUBLE_PLAY' and runner is null then
+    raise exception 'Se requiere identificar al corredor retirado en la doble matanza.';
+  end if;
+  -- En una doble matanza el bateador y el corredor son dos outs distintos.
+  -- No permitir que el mismo pelotero figure en ambos roles.
+  if p_action = 'DOUBLE_PLAY' and runner = p_batter_id then
+    raise exception 'El bateador y el corredor retirado deben ser distintos.';
   end if;
   if g.outs+made > 3 then raise exception 'La jugada supera los tres outs.'; end if;
   terminal := g.outs+made = 3;
@@ -314,46 +366,50 @@ revoke all on function public.swl_v56_special_play(uuid,bigint,text,uuid,jsonb) 
 grant execute on function public.swl_v56_special_play(uuid,bigint,text,uuid,jsonb) to authenticated;
 create or replace function public.swl_v56_record_plate_action(
   p_game_id uuid, p_expected_version bigint, p_action text, p_batter_id uuid
-) returns void language plpgsql security definer set search_path = '' as $$
+) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   g public.swl_live_games%rowtype;
   pitcher uuid;
+  result jsonb;
 begin
   g := public.swl_v56_lock_batting_turn(p_game_id, p_expected_version);
   if p_action is null or p_action not in ('BALL','STRIKE','OUT') then raise exception 'Jugada inválida.'; end if;
   select pitcher_id into pitcher from public.swl_game_lineups where game_id = p_game_id
     and team_id = (case when g.is_top then g.home_team_id else g.away_team_id end);
-  perform public.swl_v53_record_plate_action(p_game_id => p_game_id, p_expected_version => p_expected_version,
+  result := public.swl_v53_record_plate_action(p_game_id => p_game_id, p_expected_version => p_expected_version,
       p_action => p_action, p_batter_id => p_batter_id);
   perform public.swl_v56_track_base_players(g,p_action,p_batter_id,null,null,null,null);
   perform public.swl_v56_accumulate_pitching(g, pitcher, p_action);
   perform public.swl_v56_close_after_play(g);
+  return result;
 end;
 $$;
 
 create or replace function public.swl_v56_apply_hit(
   p_game_id uuid, p_expected_version bigint, p_batter_id uuid, p_batter_base integer,
   p_first_to integer, p_second_to integer, p_third_to integer
-) returns void language plpgsql security definer set search_path = '' as $$
+) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   g public.swl_live_games%rowtype;
   pitcher uuid;
+  result jsonb;
 begin
   g := public.swl_v56_lock_batting_turn(p_game_id, p_expected_version);
   select pitcher_id into pitcher from public.swl_game_lineups where game_id = p_game_id
     and team_id = (case when g.is_top then g.home_team_id else g.away_team_id end);
-  perform public.swl_v53_apply_hit_for_player(p_game_id => p_game_id, p_expected_version => p_expected_version,
+  result := public.swl_v53_apply_hit_for_player(p_game_id => p_game_id, p_expected_version => p_expected_version,
     p_batter_id => p_batter_id, p_batter_base => p_batter_base,
     p_first_to => p_first_to, p_second_to => p_second_to, p_third_to => p_third_to);
   perform public.swl_v56_track_base_players(g,'HIT',p_batter_id,p_batter_base,p_first_to,p_second_to,p_third_to);
   perform public.swl_v56_accumulate_pitching(g, pitcher, 'HIT');
   perform public.swl_v56_close_after_play(g);
+  return result;
 end;
 $$;
 
 create or replace function public.swl_v56_substitute_batter(
   p_game_id uuid, p_team_id uuid, p_batting_order integer,
-  p_outgoing_id uuid, p_incoming_id uuid, p_expected_revision integer, p_expected_game_version bigint
+  p_outgoing_id uuid, p_incoming_id uuid, p_expected_revision bigint, p_expected_game_version bigint
 ) returns void
 language plpgsql security definer set search_path = '' as $$
 declare

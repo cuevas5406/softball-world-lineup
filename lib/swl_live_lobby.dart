@@ -86,6 +86,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   int _battingStatsGeneration = 0;
   String? _battingStatsError;
   bool _eventsLoading = false;
+  bool _eventsRefreshQueued = false;
+  int _historyPollTicks = 0;
   bool _eventsQueried = false;
   String? _eventsRequestGameId;
   int _eventsRequestGeneration = 0;
@@ -164,23 +166,39 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _pin.text = digits;
     final pin = 'SWL-$digits';
     await _run(() async {
+      // El PIN identifica un único partido. No aceptar una respuesta RPC
+      // perteneciente a otro encuentro ni ejecutar una segunda unión.
       final game = await _client.from('swl_live_games')
           .select().eq('game_pin', pin).maybeSingle()
           .timeout(const Duration(seconds: 12));
       final userId = _client.auth.currentUser?.id;
-      final teams = widget.authorizedTeams;
-      if (!widget.readOnly && userId != null && teams.isNotEmpty) {
-        final canJoin = game == null ||
-            (game['home_manager_id'] != userId &&
-             game['away_manager_id'] == null &&
-             game['status'] != 'FINAL' && game['status'] != 'OFFICIAL' &&
-             teams.any((team) => team['id'] == game['away_team_id']));
-        if (canJoin) {
-          return _client.rpc('swl_v5_join_game', params: {'p_game_pin': pin});
-        }
+      final authorizedIds = widget.authorizedTeams
+          .map((team) => team['id']?.toString())
+          .whereType<String>().toSet();
+      final awayId = game?['away_team_id']?.toString();
+      final homeManager = game?['home_manager_id']?.toString();
+      final awayManager = game?['away_manager_id']?.toString();
+      final status = game?['status']?.toString().toUpperCase();
+      final eligibleAway = game != null && awayId != null &&
+          authorizedIds.contains(awayId) && homeManager != userId &&
+          (awayManager == null || awayManager.isEmpty) &&
+          status != 'FINAL' && status != 'OFFICIAL';
+      final mayAttemptJoin = !widget.readOnly && userId != null &&
+          authorizedIds.isNotEmpty && (game == null || eligibleAway);
+      final dynamic result = mayAttemptJoin
+          ? await _client.rpc('swl_v5_join_game', params: {'p_game_pin': pin})
+          : game;
+      if (result == null) {
+        throw StateError('Partido no disponible para este PIN.');
       }
-      if (game == null) throw StateError('Partido no disponible para este PIN.');
-      return game;
+      if (result is! Map) {
+        throw StateError('El servidor devolvió un formato de partido inesperado.');
+      }
+      final linked = Map<String, dynamic>.from(result);
+      if (linked['game_pin']?.toString().trim().toUpperCase() != pin) {
+        throw StateError('La respuesta no corresponde al PIN solicitado.');
+      }
+      return linked;
     });
   }
 
@@ -418,7 +436,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   // Historial de solo lectura. No crea ni modifica eventos.
   Future<void> _loadRecentEvents() async {
     final id = _game?['id']?.toString();
-    if (!mounted || id == null || (_eventsLoading && _eventsRequestGameId == id)) return;
+    if (!mounted || id == null) return;
+    if (_eventsLoading && _eventsRequestGameId == id) {
+      _eventsRefreshQueued = true;
+      return;
+    }
     _eventsRequestGameId = id;
     final requestGeneration = ++_eventsRequestGeneration;
     setState(() {
@@ -468,6 +490,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     } finally {
       if (mounted && requestGeneration == _eventsRequestGeneration && _eventsRequestGameId == id) {
         setState(() => _eventsLoading = false);
+        if (_eventsRefreshQueued && mounted && _game?['id']?.toString() == id) {
+          _eventsRefreshQueued = false;
+          // Ejecutar la lectura más reciente después de finalizar la anterior.
+          _loadRecentEvents();
+        }
       }
     }
   }
@@ -843,14 +870,24 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         'p_game_id': gameId,
         'p_expected_version': expectedVersion,
         if (!isHit) 'p_action': action,
-        if (!isHit) 'p_batter_id': plateBatterId,
+        if (!isHit && !extendedBall) 'p_batter_id': plateBatterId,
+        if (extendedBall) 'p_batter_id': plateBatterId,
         if (isHit) ...hitParams,
+        // Las RPC de jugadas especiales reciben SOLO p_data; los campos
+        // p_batter_base/p_first_to/etc no son argumentos de la función.
         if (special) 'p_data': hitParams ?? <String, dynamic>{},
       };
+      final rpcParams = extendedBall ? <String, dynamic>{
+        'p_game_id': gameId,
+        'p_expected_version': expectedVersion,
+        'p_action': action,
+        'p_batter_id': plateBatterId,
+        'p_data': hitParams!,
+      } : params;
       try {
         await _client.rpc(action == 'FOUL' ? 'swl_v56_record_foul' : special ? (extendedBall
               ? 'swl_v57_batted_ball' : 'swl_v56_special_play') : isHit ? 'swl_v56_apply_hit' :
-            'swl_v56_record_plate_action', params: params)
+            'swl_v56_record_plate_action', params: rpcParams)
             .timeout(const Duration(seconds: 12));
       } on PostgrestException catch (error) {
         // PGRST202 indica que PostgREST no pudo invocar la función nueva.
@@ -868,9 +905,14 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (error is PostgrestException) {
         final status = int.tryParse(error.code ?? '');
         if (status == null || status < 500) {
+          // Un rechazo puede coincidir con una jugada registrada por el otro
+          // teléfono. Refrescar también historial y estadísticas evita dejar
+          // la pizarra y el relato en versiones distintas.
           await _refreshGame(afterCurrent: true);
+          await _loadRecentEvents();
+          await _loadBattingStats();
           throw StateError(error.code == 'PGRST202' || error.code == '42883'
-              ? (special ? 'La jugada especial requiere habilitar su RPC en LAB.' : 'La anotación V5.6 requiere habilitar las funciones de LAB.')
+              ? (special ? 'Esta jugada todavía no está habilitada en el servidor. No se registró; contacta al administrador.' : 'Esta anotación todavía no está habilitada en el servidor. No se registró; contacta al administrador.')
               : error.message);
         }
       }
@@ -923,17 +965,33 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           _refreshGame(afterCurrent: true);
           if (_teamConfirmed && !_lineupsLoading) _loadSavedLineups();
         },
+      )..onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'swl_game_events',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq, column: 'game_id', value: id),
+        callback: (payload) {
+          if (!mounted || _game?['id']?.toString() != id) return;
+          // El historial se lee desde la base de datos, nunca del payload.
+          _loadRecentEvents();
+        },
       ).subscribe();
     _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       // La recepción de un evento Realtime no garantiza que la conexión
       // continúe activa. La consulta periódica permite detectar cortes.
       _refreshGame();
       if (_teamConfirmed && !_lineupsLoading) _loadSavedLineups();
+      // Respaldo si Realtime pierde eventos o se desconecta.
+      if (++_historyPollTicks % 4 == 0) _loadRecentEvents();
     });
   }
 
   void _stopWatching() {
     _watchGeneration++;
+    _eventsRequestGeneration++;
+    _eventsRefreshQueued = false;
+    _historyPollTicks = 0;
     _lineupsGeneration++;
     _lineupsLoading = false;
     _battingStatsGeneration++;
@@ -1382,7 +1440,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         // Un rechazo explicito de PostgREST confirma que la operacion fallo.
         // Solo una perdida de respuesta (red/timeout) deja resultado incierto.
         final serverRejected = e is PostgrestException &&
-            (int.tryParse(e.code ?? '') ?? 0) < 500;
+            swlIsExplicitSubstitutionRejection(e.code);
         if (rpcStarted && !serverRejected && mounted &&
             _game?['id']?.toString() == gameId) {
           setState(() => _uncertainSubstitutionVersion = version);
@@ -1401,8 +1459,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     } catch (e) {
       if (!mounted || _game?['id']?.toString() != gameId) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('No se confirmó la sustitución. '
-            'Actualiza el partido antes de reintentar: $e')));
+        content: Text('No se pudo verificar la sustitución. '
+            'Actualiza el partido y revisa la alineación antes de reintentar: $e')));
     } finally {
       if (mounted && _game?['id']?.toString() == gameId) {
         setState(() => _substitutionPending = false);

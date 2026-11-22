@@ -1356,17 +1356,30 @@ class MainAppMasterHub extends StatefulWidget {
 class _MainAppMasterHubState extends State<MainAppMasterHub> {
   int _currentIndex = 0;
   Map<String, dynamic>? _activeTeam;
+  late List<Map<String, dynamic>> _authorizedTeams;
   String? _chosenRole;
 
   @override
   void initState() {
     super.initState();
-    if (widget.authorizedTeams.isNotEmpty) _activeTeam = widget.authorizedTeams.first;
+    _authorizedTeams = List<Map<String, dynamic>>.from(widget.authorizedTeams);
+    if (_authorizedTeams.isNotEmpty) _activeTeam = _authorizedTeams.first;
   }
 
   void _changeActiveTeam(Map<String, dynamic> team) {
-    if (!widget.authorizedTeams.any((t) => t['id']?.toString() == team['id']?.toString())) return;
+    if (!_authorizedTeams.any((t) => t['id']?.toString() == team['id']?.toString())) return;
     setState(() => _activeTeam = team);
+  }
+
+  void _applyAuthorizedTeams(List<Map<String, dynamic>> teams) {
+    if (!mounted) return;
+    final previousId = _activeTeam?['id']?.toString();
+    final valid = teams.where((team) => team['id']?.toString() == previousId);
+    setState(() {
+      _authorizedTeams = List<Map<String, dynamic>>.from(teams);
+      _activeTeam = valid.isNotEmpty ? valid.first :
+          (teams.length == 1 ? teams.first : null);
+    });
   }
 
   Future<void> _editMyRole() async {
@@ -1409,7 +1422,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
   void _openGameLobby({String? pin, String? opponent, String? opponentId, String? homeId}) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => SwlLiveLobby(
-        authorizedTeams: widget.authorizedTeams,
+        authorizedTeams: _authorizedTeams,
         initialOpponent: opponent,
         initialOpponentId: opponentId,
         initialJoinPin: pin,
@@ -1443,7 +1456,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       ),
       MasterScoreboardTab(
         teamId: _activeTeam?['id']?.toString(),
-        authorizedTeams: widget.authorizedTeams,
+        authorizedTeams: _authorizedTeams,
       ),
       MasterScheduleTab(
         myTeamName: activeName,
@@ -1456,13 +1469,14 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
         userName: widget.userName,
         teamName: activeName,
         teamProvince: activeProvince,
-        authorizedTeams: widget.authorizedTeams,
+        authorizedTeams: _authorizedTeams,
         activeTeam: _activeTeam,
         onTeamChanged: _changeActiveTeam,
+        onAuthorizedTeamsChanged: _applyAuthorizedTeams,
       ),
     ];
 
-    String visibleRole = widget.authorizedTeams.isNotEmpty ? "manager" : (_chosenRole ?? widget.userRole);
+    String visibleRole = _authorizedTeams.isNotEmpty ? "manager" : (_chosenRole ?? widget.userRole);
     String badge = visibleRole == "manager" ? "MÁNAGER" : (visibleRole == "player" ? "PELOTERO" : "FANÁTICO");
 
     return Scaffold(
@@ -1478,18 +1492,18 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
               child: Text(badge, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 9)),
             ),
             const SizedBox(width: 8),
-            Expanded(child: widget.authorizedTeams.length > 1
+            Expanded(child: _authorizedTeams.length > 1
               ? DropdownButtonHideUnderline(child: DropdownButton<String>(
                   value: _activeTeam?['id']?.toString(),
                   isExpanded: true,
                   dropdownColor: const Color(0xFF16202C),
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                  items: widget.authorizedTeams.map((team) => DropdownMenuItem<String>(
+                  items: _authorizedTeams.map((team) => DropdownMenuItem<String>(
                     value: team['id']?.toString(),
                     child: Text('${team['name']} · ${team['province'] ?? ''}', overflow: TextOverflow.ellipsis),
                   )).toList(),
                   onChanged: (id) {
-                    for (final team in widget.authorizedTeams) {
+                    for (final team in _authorizedTeams) {
                       if (team['id']?.toString() == id) { _changeActiveTeam(team); break; }
                     }
                   },
@@ -1885,6 +1899,7 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
   List<Map<String, dynamic>> _inbox = [];
   Map<String, Map<String, dynamic>> _agendaTeams = {};
   bool _loadingAgenda = false;
+  bool _agendaRefreshPending = false;
   bool _changingChallenge = false;
   bool _agendaAvailable = true;
   Set<String>? _observedIncoming;
@@ -1897,7 +1912,7 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
     super.initState();
     _refreshAgenda();
     _agendaTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (_agendaAvailable) _refreshAgenda();
+      _refreshAgenda(); // Reintentar también cuando LAB se habilite posteriormente.
     });
   }
 
@@ -1905,10 +1920,16 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
   void didUpdateWidget(covariant MasterScheduleTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.teamId != widget.teamId) {
+      // Los borradores pertenecen al equipo que los creó: no mostrarlos al cambiar.
+      matches.clear();
       _loadingAgenda = false;
+      _agendaRefreshPending = false;
       _inbox = [];
       _agendaTeams = {};
       _observedIncoming = null;
+      _agendaAvailable = true;
+      _agendaError = null;
+      _agendaRequest++; // Invalidar respuestas del equipo anterior.
       _refreshAgenda();
     }
   }
@@ -1921,7 +1942,11 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
 
   Future<void> _refreshAgenda() async {
     final team = widget.teamId;
-    if (team == null || _loadingAgenda) return;
+    if (team == null) return;
+    if (_loadingAgenda) {
+      _agendaRefreshPending = true;
+      return;
+    }
     final request = ++_agendaRequest;
     setState(() { _loadingAgenda = true; _agendaError = null; });
     try {
@@ -1967,12 +1992,19 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
         setState(() => _agendaError = 'No se pudo leer la Agenda compartida.');
       }
     } finally {
-      if (mounted && request == _agendaRequest) setState(() => _loadingAgenda = false);
+      if (mounted && request == _agendaRequest) {
+        setState(() => _loadingAgenda = false);
+        if (_agendaRefreshPending) {
+          _agendaRefreshPending = false;
+          await _refreshAgenda();
+        }
+      }
     }
   }
 
   Future<void> _sendChallenge(Map<String, String> draft) async {
     if (_changingChallenge || widget.teamId != draft['homeId']) return;
+    final teamAtStart = widget.teamId;
     setState(() => _changingChallenge = true);
     try {
       await _client.rpc('swl_v56_send_challenge', params: {
@@ -1982,11 +2014,11 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
         'p_scheduled_at': draft['scheduledAt'],
         'p_stadium': draft['play'],
       }).timeout(const Duration(seconds: 12));
-      if (!mounted) return;
+      if (!mounted || widget.teamId != teamAtStart) return;
       setState(() => matches.remove(draft));
       await _refreshAgenda();
     } catch (error) {
-      _showAgendaActionError(error);
+      if (mounted && widget.teamId == teamAtStart) _showAgendaActionError(error);
     } finally {
       if (mounted) setState(() => _changingChallenge = false);
     }
@@ -2004,22 +2036,47 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
     if (_changingChallenge) return;
     setState(() => _changingChallenge = true);
     final team = widget.teamId;
+    // A successful PREPARE creates the game server-side. If fetching its PIN
+    // fails, never resend PREPARE automatically: refresh the challenge instead.
+    var preparedOnServer = false;
     try {
       final result = action == 'OPEN' ? challenge :
           await _client.rpc('swl_v56_act_challenge', params: {
             'p_id': challenge['id'], 'p_action': action,
           }).timeout(const Duration(seconds: 12));
-      final row = result is List ? result.single : result;
+      if (!mounted || widget.teamId != team) return;
+      final row = result is List ? (result.length == 1 ? result.first : null) : result;
       if (row is! Map) throw StateError('Respuesta de Agenda incompleta.');
-      if (row['game_id'] != null && (action == 'OPEN' || action == 'PREPARE')) {
+      final gameId = row['game_id']?.toString();
+      preparedOnServer = action == 'PREPARE' && gameId != null && gameId.isNotEmpty;
+      if (action == 'OPEN' || action == 'PREPARE') {
+        if (gameId == null || gameId.isEmpty) {
+          throw StateError('El reto aún no tiene un partido vinculado.');
+        }
         final game = await _client.from('swl_live_games').select('game_pin')
-            .eq('id', row['game_id']).single().timeout(const Duration(seconds: 12));
-        final pin = game['game_pin']?.toString();
-        if (mounted && widget.teamId == team && pin != null) widget.onOpenLinkedGame(pin);
+            .eq('id', gameId).single().timeout(const Duration(seconds: 12));
+        if (!mounted || widget.teamId != team) return;
+        final pin = game['game_pin']?.toString().trim();
+        if (pin == null || pin.isEmpty) {
+          throw StateError('El partido vinculado todavía no tiene un PIN disponible.');
+        }
+        widget.onOpenLinkedGame(pin);
       }
-      if (mounted) await _refreshAgenda();
+      if (mounted && widget.teamId == team) await _refreshAgenda();
     } catch (error) {
-      _showAgendaActionError(error);
+      if (mounted && widget.teamId == team) {
+        if (preparedOnServer) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(
+            'El partido se preparó, pero no se pudo abrir. Actualiza la Agenda y usa ABRIR PARTIDO; no lo prepares otra vez.',
+          )));
+          await _refreshAgenda();
+        } else {
+          _showAgendaActionError(error);
+          // A timed-out RPC may have committed. Reload server state before
+          // allowing a manager to decide whether to repeat the action.
+          await _refreshAgenda();
+        }
+      }
     } finally {
       if (mounted) setState(() => _changingChallenge = false);
     }
@@ -2109,7 +2166,15 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
             FilledButton(
-              onPressed: rival.isEmpty ? null : () => Navigator.pop(ctx, {
+              onPressed: rival.trim().isEmpty ? null : () {
+                final selectedAt = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                if (!selectedAt.isAfter(DateTime.now())) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(
+                    content: Text('Selecciona una fecha y hora futuras para el reto.'),
+                  ));
+                  return;
+                }
+                Navigator.pop(ctx, {
                 'scheduledAt': DateTime(date.year, date.month, date.day,
                   time.hour, time.minute).toUtc().toIso8601String(),
                 'date': '${localization.formatMediumDate(date)} · ${localization.formatTimeOfDay(time)}',
@@ -2119,7 +2184,8 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
                 'home': widget.myTeamName,
                 'homeId': homeId,
                 'play': stadium,
-              }),
+                });
+              },
               child: const Text('GUARDAR BORRADOR'),
             ),
           ],
@@ -2165,7 +2231,7 @@ class _MasterScheduleTabState extends State<MasterScheduleTab> {
         children: [
           if (_loadingAgenda) const LinearProgressIndicator(),
           if (_agendaError != null) ListTile(title: Text(_agendaError!)),
-          if (teamMatches.isEmpty && _inbox.isEmpty && !_loadingAgenda)
+          if (_agendaError == null && teamMatches.isEmpty && _inbox.isEmpty && !_loadingAgenda)
             const ListTile(title: Text('Tu equipo aún no tiene encuentros en la Agenda.')),
           for (final challenge in _inbox) _challengeCard(challenge),
           for (final m in teamMatches)
@@ -2226,10 +2292,12 @@ class MasterTeamTab extends StatefulWidget {
   final List<Map<String, dynamic>>? authorizedTeams;
   final Map<String, dynamic>? activeTeam;
   final ValueChanged<Map<String, dynamic>>? onTeamChanged;
+  final ValueChanged<List<Map<String, dynamic>>>? onAuthorizedTeamsChanged;
 
   const MasterTeamTab({super.key, required this.userRole, required this.userName,
     required this.teamName, required this.teamProvince,
-    this.authorizedTeams, this.activeTeam, this.onTeamChanged});
+    this.authorizedTeams, this.activeTeam, this.onTeamChanged,
+    this.onAuthorizedTeamsChanged});
 
   @override
   State<MasterTeamTab> createState() => _MasterTeamTabState();
@@ -2243,6 +2311,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
   String? _selectedProvince;
   Future<bool>? _canRemovePlayer;
   bool _removalInProgress = false;
+  int _teamRequestVersion = 0;
 
   @override
   void initState() {
@@ -2260,15 +2329,63 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
   void didUpdateWidget(covariant MasterTeamTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     final nextId = widget.activeTeam?['id']?.toString();
-    if (nextId != null && nextId != _selectedTeamId) {
+    if (nextId != null && nextId != _selectedTeamId &&
+        (widget.authorizedTeams?.any((t) => t['id']?.toString() == nextId) ?? true)) {
       _selectTeam(widget.activeTeam!);
+    } else if (oldWidget.authorizedTeams != widget.authorizedTeams && widget.authorizedTeams != null) {
+      final teams = widget.authorizedTeams!;
+      _teamRequestVersion++;
+      setState(() {
+        _teams = Future.value(teams);
+        if (_selectedTeamId != null &&
+            !teams.any((team) => team['id']?.toString() == _selectedTeamId)) {
+          _selectedTeamId = null;
+          _selectedTeamName = null;
+          _selectedProvince = null;
+          _roster = null;
+          _canRemovePlayer = null;
+        }
+      });
+      _autoSelectTeam();
+    }
+  }
+
+  // Al refrescar permisos, un equipo revocado no debe conservar controles
+  // de registro, fichaje o edición de roster habilitados en la pantalla.
+  Future<void> _reloadAuthorizedTeams() async {
+    final requestVersion = ++_teamRequestVersion;
+    final pending = swlAuthorizedTeams();
+    setState(() => _teams = pending);
+    try {
+      final teams = await pending;
+      if (!mounted || requestVersion != _teamRequestVersion ||
+          !identical(_teams, pending)) return;
+      final stillAuthorized = teams.any(
+        (team) => team['id']?.toString() == _selectedTeamId);
+      if (!stillAuthorized && _selectedTeamId != null) {
+        setState(() {
+          _selectedTeamId = null;
+          _selectedTeamName = null;
+          _selectedProvince = null;
+          _roster = null;
+          _canRemovePlayer = null;
+        });
+      }
+      // Sincronizar el Hub: Agenda, Pizarra y lobby usan estos mismos permisos.
+      widget.onAuthorizedTeamsChanged?.call(teams);
+    } catch (_) {
+      // El error se muestra en FutureBuilder; no se inventan permisos.
     }
   }
 
   Future<void> _autoSelectTeam() async {
+    final requestVersion = _teamRequestVersion;
+    final pendingTeams = _teams;
     try {
-      final teams = await _teams;
-      if (mounted && teams.length == 1) _selectTeam(teams.first);
+      final teams = await pendingTeams;
+      if (mounted && requestVersion == _teamRequestVersion &&
+          identical(pendingTeams, _teams) && _selectedTeamId == null &&
+          teams.length == 1) _selectTeam(teams.first);
     } catch (_) { /* FutureBuilder muestra el error de permisos. */ }
   }
 
@@ -2289,6 +2406,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
   void _selectTeam(Map<String, dynamic> team) {
     final id = team['id']?.toString();
     if (id == null || id.isEmpty) return;
+    _teamRequestVersion++;
     setState(() {
       _selectedTeamId = id;
       _selectedTeamName = team['name']?.toString();
@@ -2533,7 +2651,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     // Una creación puede cambiar los equipos autorizados. Se vuelven a
     // consultar los permisos del servidor, nunca se conceden desde Flutter.
     if (!mounted) return;
-    setState(() { _teams = swlAuthorizedTeams(); });
+    await _reloadAuthorizedTeams();
   }
 
   Future<void> _openPlayerAction(bool registerMode) async {
@@ -2557,7 +2675,8 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     final result = await Navigator.of(context).push<Map<String, String>>(MaterialPageRoute(
       builder: (_) => SwlTeamSettings(teamId: id,
         name: _selectedTeamName ?? widget.teamName,
-        province: _selectedProvince ?? widget.teamProvince),
+        province: _selectedProvince ?? widget.teamProvince,
+        onCreateTeam: _openCreateTeam),
     ));
     if (!mounted || _selectedTeamId != id || result == null) return;
     final updated = {...?widget.activeTeam, 'id': id,
@@ -2565,9 +2684,9 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     setState(() {
       _selectedTeamName = result['name'];
       _selectedProvince = result['province'];
-      _teams = swlAuthorizedTeams();
     });
     widget.onTeamChanged?.call(updated);
+    await _reloadAuthorizedTeams();
   }
 
   @override
@@ -2592,7 +2711,9 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             decoration: BoxDecoration(color: const Color(0xFF121B27),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: Colors.amber)),
-            child: Row(children: [
+            child: InkWell(
+              onTap: _selectedTeamId == null ? null : _openTeamSettings,
+              child: Row(children: [
               const CircleAvatar(backgroundColor: Colors.amber,
                 child: Icon(Icons.shield, color: Colors.black)),
               const SizedBox(width: 12),
@@ -2607,7 +2728,7 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
                   Text(_selectedProvince ?? widget.teamProvince,
                     style: const TextStyle(color: Colors.white54, fontSize: 11)),
                 ])),
-            ]),
+            ])),
           ),
           const SizedBox(height: 12),
           FutureBuilder<List<Map<String, dynamic>>>(
@@ -2637,8 +2758,9 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
               );
             },
           ),
-          const SizedBox(height: 10),
-          const Text('GESTIÓN DEL EQUIPO', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          const Text('GESTIÓN DEL EQUIPO', style: TextStyle(
+            color: Colors.amber, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _openCreateTeam,

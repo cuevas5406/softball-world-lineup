@@ -10,6 +10,22 @@ void main() {
     expect(() => request.validate(activeOrder: {1: 'a', 2: 'b'},
       rosterIds: roster, previouslyRemovedPlayerIds: {}), returnsNormally);
   });
+  test('rejects whitespace-only player identifiers', () {
+    const invalid = SwlSubstitutionRequest(gameId: 'game', teamId: 'team',
+      outgoingPlayerId: 'a', incomingPlayerId: '   ',
+      battingOrder: 1, expectedLineupRevision: 2);
+    expect(() => invalid.validate(activeOrder: {1: 'a', 2: 'b'},
+      rosterIds: {...roster, '   '}, previouslyRemovedPlayerIds: {}),
+      throwsA(isA<StateError>()));
+  });
+  test('rejects whitespace-only game identifier', () {
+    const invalid = SwlSubstitutionRequest(gameId: '  ', teamId: 'team',
+      outgoingPlayerId: 'a', incomingPlayerId: 'c',
+      battingOrder: 1, expectedLineupRevision: 2);
+    expect(() => invalid.validate(activeOrder: {1: 'a', 2: 'b'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {}),
+      throwsA(isA<StateError>()));
+  });
   test('rejects stale outgoing slot', () {
     expect(() => request.validate(activeOrder: {1: 'b', 2: 'a'},
       rosterIds: roster, previouslyRemovedPlayerIds: {}),
@@ -41,6 +57,27 @@ void main() {
       rosterIds: roster, previouslyRemovedPlayerIds: {}),
       throwsA(isA<StateError>()));
   });
+  test('rejects same player with padded identifier', () {
+    const invalid = SwlSubstitutionRequest(gameId: 'game', teamId: 'team',
+      outgoingPlayerId: ' a ', incomingPlayerId: 'a',
+      battingOrder: 1, expectedLineupRevision: 2);
+    expect(() => invalid.validate(activeOrder: {1: 'a'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {}), throwsStateError);
+  });
+  test('rejects already active player with padded identifier', () {
+    const invalid = SwlSubstitutionRequest(gameId: 'game', teamId: 'team',
+      outgoingPlayerId: 'a', incomingPlayerId: ' b ',
+      battingOrder: 1, expectedLineupRevision: 2);
+    expect(() => invalid.validate(activeOrder: {1: 'a', 2: 'b'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {}), throwsStateError);
+  });
+  test('rejects reentry with padded identifier', () {
+    const invalid = SwlSubstitutionRequest(gameId: 'game', teamId: 'team',
+      outgoingPlayerId: 'a', incomingPlayerId: ' c ',
+      battingOrder: 1, expectedLineupRevision: 2);
+    expect(() => invalid.validate(activeOrder: {1: 'a'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {'c'}), throwsStateError);
+  });
   test('rejects missing revision', () {
     const invalid = SwlSubstitutionRequest(gameId: 'game', teamId: 'team',
       outgoingPlayerId: 'a', incomingPlayerId: 'c',
@@ -54,4 +91,20 @@ void main() {
       rosterIds: roster, previouslyRemovedPlayerIds: {'c'}),
       throwsA(isA<StateError>()));
   });
+  test('accepts matching current lineup revision', () {
+    expect(() => request.validate(activeOrder: {1: 'a', 2: 'b'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {},
+      currentLineupRevision: 2), returnsNormally);
+  });
+  test('rejects outdated lineup revision before substitution', () {
+    expect(() => request.validate(activeOrder: {1: 'a', 2: 'b'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {},
+      currentLineupRevision: 3), throwsStateError);
+  });
+  test('rejects future lineup revision before substitution', () {
+    expect(() => request.validate(activeOrder: {1: 'a', 2: 'b'},
+      rosterIds: roster, previouslyRemovedPlayerIds: {},
+      currentLineupRevision: 1), throwsStateError);
+  });
+
 }

@@ -33,7 +33,7 @@ jobs:
         run: |
           flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings lib test
           flutter test --no-pub
-          python3 -m unittest discover -s test -p 'test_v*_proposal_contracts.py'
+          python3 -m unittest discover -s test -p 'test_*.py' -q
 
       - name: Compilar APK Oficial
         env:

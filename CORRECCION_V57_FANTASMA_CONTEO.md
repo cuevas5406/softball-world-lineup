@@ -1,0 +1,1 @@
+V5.7: se impide ofrecer o previsualizar corredor fantasma si balls o strikes son distintos de cero, en concordancia con la RPC SQL propuesta. Pruebas añadidas para ambos conteos. No se ha ejecutado flutter test ni instalado SQL.

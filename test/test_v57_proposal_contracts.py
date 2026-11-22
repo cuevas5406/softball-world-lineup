@@ -40,7 +40,8 @@ class V57ProposalTests(unittest.TestCase):
         self.assertIn("latest.status::text is distinct from 'IN_PROGRESS'", close)
         self.assertIn("prior.is_top and half_ended and lead > 0", close)
         self.assertIn("inning = prior.inning, is_top = prior.is_top", close)
-        self.assertIn("when 3 then latest.swl_super_margin when 4 then latest.swl_knockout_margin", close)
+        self.assertIn("when prior.inning = 3 then latest.swl_super_margin", close)
+        self.assertIn("when prior.inning >= 4 then latest.swl_knockout_margin", close)
         self.assertNotIn("swl_home_signed", close)
         self.assertNotIn("swl_away_signed", close)
 

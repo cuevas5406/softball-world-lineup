@@ -194,9 +194,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   Timer? _liveRefreshTimer;
   SwlLiveScoreboardSnapshot? _currentLiveSnapshot;
   bool _refreshInFlight = false;
+  bool _scoreQueued = false;
+  Completer<void>? _scoreIdleCompleter;
   bool _liveActionInFlight = false;
   bool _lineupsLoading = false;
   bool _lineupsQueued = false;
+  Completer<void>? _lineupsIdleCompleter;
   bool _pitchingConfirmed = false;
   bool _awayBatterConfirmed = false;
   bool _homeBatterConfirmed = false;
@@ -209,8 +212,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     if (!mounted || live == null || live.gameId.isEmpty) return;
     if (_lineupsLoading) {
       _lineupsQueued = true;
+      await _lineupsIdleCompleter?.future;
       return;
     }
+    _lineupsIdleCompleter ??= Completer<void>();
     _lineupsLoading = true;
     try {
       final client = Supabase.instance.client;
@@ -367,9 +372,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           'No se pudo actualizar la alineación real');
     } finally {
       _lineupsLoading = false;
-      if (_lineupsQueued) {
+      if (_lineupsQueued && mounted) {
         _lineupsQueued = false;
-        if (mounted) unawaited(_loadLiveLineups());
+        // Esperar la lectura acumulada antes de dar por actualizado el marcador.
+        await _loadLiveLineups();
+      } else {
+        _lineupsQueued = false;
+        final idle = _lineupsIdleCompleter;
+        _lineupsIdleCompleter = null;
+        if (idle != null && !idle.isCompleted) idle.complete();
       }
     }
   }
@@ -378,6 +389,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   final _historyPlayers = <String, Map<String, dynamic>>{};
   bool _historyLoading = false;
   bool _historyQueued = false;
+  Completer<void>? _historyIdleCompleter;
   String? _historyReadError;
 
   Future<void> _refreshLiveHistory() async {
@@ -385,8 +397,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     if (!mounted || live == null || live.gameId.isEmpty) return;
     if (_historyLoading) {
       _historyQueued = true;
+      // Esperar también la consulta en curso y la recarga en cola.
+      await _historyIdleCompleter?.future;
       return;
     }
+    _historyIdleCompleter ??= Completer<void>();
     _historyLoading = true;
     try {
       final client = Supabase.instance.client;
@@ -407,8 +422,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       events.removeWhere((event) => event['id'] != null && !seen.add(event['id'].toString()));
       final ids = <String>{
         for (final event in events)
-          if (event['event_data'] case final Map data)
-            if ((data['batter_id'] ?? data['runner_id']) case final Object id) id.toString(),
+          if (event['event_data'] case final Map data) ...{
+            for (final key in ['batter_id', 'runner_id', 'last_out_player_id'])
+              if (data[key] case final Object id) id.toString(),
+          },
       };
       final players = Map<String, Map<String, dynamic>>.from(_historyPlayers);
       final playerIds = ids.where((id) => !players.containsKey(id)).toList();
@@ -430,9 +447,20 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       final history = events.map((event) {
         final raw = event['event_data'];
         final data = raw is Map ? raw : const {};
-        final player = players[(data['batter_id'] ?? data['runner_id'])?.toString()];
-        final name = '${player?['first_name'] ?? ''} ${player?['last_name'] ?? ''}'.trim();
+        // En un out de corredor, priorizar al retirado sobre el bateador.
         final action = event['event_type']?.toString().trim().toUpperCase();
+        final playerId = (action == 'RUNNER_OUT' || action == 'DOUBLE_PLAY')
+            ? (data['last_out_player_id'] ?? data['runner_id'] ?? data['batter_id'])
+            : (data['batter_id'] ?? data['runner_id'] ?? data['last_out_player_id']);
+        final player = players[playerId?.toString()];
+        final name = '${player?['first_name'] ?? ''} ${player?['last_name'] ?? ''}'.trim();
+        // La doble matanza involucra a dos peloteros distintos: el corredor
+        // retirado y el bateador. Mostrar ambos sin atribuir el out a uno solo.
+        final dpBatter = players[data['batter_id']?.toString()];
+        final dpBatterName = '${dpBatter?['first_name'] ?? ''} ${dpBatter?['last_name'] ?? ''}'.trim();
+        final dpDescription = action == 'DOUBLE_PLAY' && dpBatterName.isNotEmpty
+            ? 'Doble play · bateador: $dpBatterName'
+            : 'Doble play';
         final hitBase = int.tryParse('${data['batter_base']}');
         final (notation, description) = switch (action) {
           'HIT' => switch (hitBase) {
@@ -449,7 +477,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           'GHOST_RUNNER' => ('CF', 'Corredor fantasma en segunda'),
           'RUNNER_MOVE' => ('AV', 'Movimiento de corredor'),
           'RUNNER_OUT' => ('O', 'Out del corredor'),
-          'DOUBLE_PLAY' => ('DP', 'Doble play'),
+          'DOUBLE_PLAY' => ('DP', dpDescription),
           'SACRIFICE_FLY' => ('SF', 'Fly de sacrificio'),
           'RUN' => ('CARRERA', 'Carrera registrada'),
           'ERROR' => ('E', 'Error registrado'),
@@ -489,18 +517,31 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       }
     } finally {
       _historyLoading = false;
-      if (_historyQueued) {
+      if (_historyQueued && mounted) {
         _historyQueued = false;
-        if (mounted) unawaited(_refreshLiveHistory());
+        // La consulta solicitada durante la carga debe terminar antes
+        // de que el mánager pueda iniciar otra jugada.
+        await _refreshLiveHistory();
+      } else {
+        _historyQueued = false;
+        final idle = _historyIdleCompleter;
+        _historyIdleCompleter = null;
+        if (idle != null && !idle.isCompleted) idle.complete();
       }
     }
   }
 
   String? _liveActionError;
 
-  Future<void> _refreshLiveScore() async {
+  Future<void> _refreshLiveScore({bool forceLineups = false}) async {
     final snapshot = _currentLiveSnapshot;
-    if (!mounted || snapshot == null || snapshot.gameId.isEmpty || _refreshInFlight) return;
+    if (!mounted || snapshot == null || snapshot.gameId.isEmpty) return;
+    if (_refreshInFlight) {
+      _scoreQueued = true;
+      await _scoreIdleCompleter?.future;
+      return;
+    }
+    _scoreIdleCompleter ??= Completer<void>();
     _refreshInFlight = true;
     try {
       final row = await Supabase.instance.client.from('swl_live_games')
@@ -528,7 +569,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       // Una alineación puede cambiar sin incrementar la versión del marcador.
       // Revalidarla periódicamente evita mostrar un orden al bate obsoleto.
       _livePollCount++;
-      if (versionChanged || _lastLineupRefreshVersion != latest.version ||
+      if (forceLineups || versionChanged || _lastLineupRefreshVersion != latest.version ||
           _livePollCount % 3 == 0) {
         await _loadLiveLineups();
       }
@@ -536,6 +577,16 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       // La pizarra conserva el último estado conocido sin conexión.
     } finally {
       _refreshInFlight = false;
+      if (_scoreQueued && mounted) {
+        _scoreQueued = false;
+        // Una jugada confirmada durante el sondeo requiere otra lectura.
+        await _refreshLiveScore();
+      } else {
+        _scoreQueued = false;
+        final idle = _scoreIdleCompleter;
+        _scoreIdleCompleter = null;
+        if (idle != null && !idle.isCompleted) idle.complete();
+      }
     }
   }
 
@@ -826,8 +877,19 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   // V5.3: sustitución local de bateador, sin alterar turnos ya registrados.
   Future<void> _substituteBatter(bool visitor) async {
+    // La sustitución local requiere un turno existente. En vivo se usa
+    // exclusivamente la operación persistente proporcionada por el padre.
+    if (widget.liveSnapshot != null) return;
     final lineup = visitor ? visitorLineup : homeLineup;
+    if (lineup.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Primero configura la alineación de este equipo.')));
+      }
+      return;
+    }
     int selected = visitor ? visitorLineupIndex : homeLineupIndex;
+    if (selected < 0 || selected >= lineup.length) selected = 0;
     final name = TextEditingController();
     final number = TextEditingController();
     try {
@@ -1775,10 +1837,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         actions: [
           if (widget.liveSnapshot != null)
             IconButton(tooltip: 'Actualizar pizarra', icon: const Icon(Icons.refresh, size: 20),
-              onPressed: () {
-                unawaited(_refreshLiveScore());
-                unawaited(_loadLiveLineups());
-                unawaited(_refreshLiveHistory());
+              onPressed: () async {
+                // Primero actualizar la versión del partido. Esa lectura ya
+                // coordina la alineación; luego recuperar el historial.
+                await _refreshLiveScore(forceLineups: true);
+                if (!mounted) return;
+                await _refreshLiveHistory();
               }),
           if (widget.onLiveSubstitute != null || widget.onLivePitcher != null)
             PopupMenuButton<String>(
@@ -2189,10 +2253,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     try {
       swlPreviewSpecial(game.playState, action, source: data['source'] as int?,
         destination: data['destination'] as int?, firstTo: data['first_to'] as int?,
-        secondTo: data['second_to'] as int?, thirdTo: data['third_to'] as int?);
+        secondTo: data['second_to'] as int?, thirdTo: data['third_to'] as int?,
+        regulationInnings: game.regulationInnings);
       await widget.onLiveAction!(game.version, action, data);
-      unawaited(_refreshLiveHistory());
+      // El marcador se actualiza primero; después esperamos el historial
+      // para que la jugada confirmada aparezca antes de habilitar otra.
       await _refreshLiveScore();
+      await _refreshLiveHistory();
     } catch (error) {
       if (mounted) setState(() => _liveActionError = error.toString());
     } finally {
@@ -2205,7 +2272,14 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     if (game == null || _liveActionInFlight || widget.onLiveAction == null ||
         !game.canScore(Supabase.instance.client.auth.currentUser?.id)) return;
     if (!swlBaseOccupied(game.playState, base)) {
-      if (base == 2 && game.inning >= 6) await _chooseGhost(game);
+      if (base == 2 &&
+          game.inning > game.regulationInnings &&
+          game.outs == 0 && game.playState.balls == 0 &&
+          game.playState.strikes == 0 &&
+          !game.firstOccupied && !game.secondOccupied && !game.thirdOccupied &&
+          game.homeRuns == game.awayRuns) {
+        await _chooseGhost(game);
+      }
       return;
     }
     bool legal(int destination) {
@@ -2228,8 +2302,21 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       await _chooseRunnerReplacement(game, base);
       return;
     }
-    await _sendSpecial(choice == -1 ? 'RUNNER_OUT' : 'RUNNER_MOVE',
-      {'source': base, if (choice >= 0) 'destination': choice});
+    if (choice == -1) {
+      final outAt = await showModalBottomSheet<int>(context: context,
+        builder: (sheet) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const ListTile(title: Text('¿Dónde fue retirado el corredor?')),
+          for (final target in [base, ...[1, 2, 3].where((b) => b > base), 0])
+            ListTile(
+              title: Text(target == 0 ? 'Out en home' : 'Out en ${target}B'),
+              onTap: () => Navigator.pop(sheet, target),
+            ),
+        ])));
+      if (!mounted || outAt == null || _currentLiveSnapshot?.version != game.version) return;
+      await _sendSpecial('RUNNER_OUT', {'source': base, 'destination': outAt});
+      return;
+    }
+    await _sendSpecial('RUNNER_MOVE', {'source': base, 'destination': choice});
   }
 
   Future<void> _chooseRunnerReplacement(SwlLiveScoreboardSnapshot game, int base) async {
@@ -2304,6 +2391,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   }
 
   Future<void> _chooseSacrifice(SwlLiveScoreboardSnapshot game) async {
+    // El servidor exige corredor identificado en tercera y menos de dos outs.
+    // Evitar abrir un formulario que no puede registrar una jugada válida.
+    if (!game.thirdOccupied || game.outs >= 2) {
+      if (mounted) setState(() => _liveActionError =
+          'El fly de sacrificio requiere corredor en tercera y menos de dos outs.');
+      return;
+    }
     final moves = <String, dynamic>{'third_to': 0,
       if (game.firstOccupied) 'first_to': 1, if (game.secondOccupied) 'second_to': 2};
     final selected = await showDialog<bool>(context: context, builder: (dialog) =>
@@ -2324,6 +2418,18 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             FilledButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Registrar'))]);
       }));
     if (!mounted || selected != true || _currentLiveSnapshot?.version != game.version) return;
+    // Validate the complete advancement before invoking the remote transaction.
+    // This prevents a selected runner from overtaking another or sharing a base.
+    try {
+      swlPreviewSpecial(game.playState, 'SACRIFICE_FLY',
+        firstTo: moves['first_to'] as int?,
+        secondTo: moves['second_to'] as int?,
+        thirdTo: moves['third_to'] as int?,
+        regulationInnings: game.regulationInnings);
+    } on StateError catch (error) {
+      if (mounted) setState(() => _liveActionError = error.message);
+      return;
+    }
     await _sendSpecial('SACRIFICE_FLY', moves);
   }
 
@@ -2436,6 +2542,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     final third = bases['third'] == true;
     int batterBase = 1;
     bool countRunsOnThirdOut = false;
+    int? lastOutSource;
+
     // Avance sugerido según el tipo de batazo; editable por el mánager.
     // El valor 0 indica que el corredor anotó.
     int destination(int initialBase, int hitBases) {
@@ -2470,6 +2578,14 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           final destinations = [firstTo, secondTo, thirdTo];
           final outCount = destinations.whereType<int>().where((d) => d < 0).length;
           final retired = destinations.indexWhere((d) => d != null && d < 0);
+          final outSources = <int>[
+            for (var i = 0; i < destinations.length; i++)
+              if (destinations[i] != null && destinations[i]! < 0) i + 1,
+          ];
+          if (outCount > 1 && !outSources.contains(lastOutSource)) {
+            lastOutSource = null;
+          }
+
           final forced = firstTo == -2 || (first && secondTo == -3) ||
               (first && second && thirdTo == -4);
           final timePlay = live.outs + outCount == 3 && outCount == 1 && !forced &&
@@ -2503,6 +2619,22 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     (n) => secondTo = n),
                 if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [3, 0, -4],
                     (n) => thirdTo = n),
+                if (outCount > 1)
+                  DropdownButtonFormField<int>(
+                    key: ValueKey('last-out-$lastOutSource-${outSources.join("-")}'),
+                    initialValue: lastOutSource,
+                    decoration: const InputDecoration(
+                      labelText: '¿Cuál corredor fue el último out?',
+                    ),
+                    items: [
+                      for (final source in outSources)
+                        DropdownMenuItem<int>(
+                          value: source,
+                          child: Text('Corredor de ${source == 1 ? "primera" : source == 2 ? "segunda" : "tercera"}'),
+                        ),
+                    ],
+                    onChanged: (source) => update(() => lastOutSource = source),
+                  ),
                 if (timePlay)
                   CheckboxListTile(
                     title: const Text('Las carreras seleccionadas cruzaron antes del tercer out y este no fue forzado'),
@@ -2517,7 +2649,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('CANCELAR')),
-              FilledButton(onPressed: runs == null ? null : () =>
+              FilledButton(onPressed: runs == null ||
+                  (outCount > 1 && lastOutSource == null) ? null : () =>
                   Navigator.pop(dialogContext, {
                     'p_batter_id': batterId,
                     'p_batter_base': batterBase,
@@ -2525,6 +2658,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     'p_second_to': secondTo,
                     'p_third_to': thirdTo,
                     if (outCount > 0) 'count_runs_on_third_out': timePlay && countRunsOnThirdOut,
+                    if (outCount > 1) 'p_last_out_source': lastOutSource,
                   }), child: const Text('CONFIRMAR BATAZO')),
             ],
           );
@@ -2543,11 +2677,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       final battedBall = action == 'HIT' || action == 'ERROR';
       final hitParams = battedBall ? await _chooseLiveHit(defensiveError: action == 'ERROR') : null;
       if (battedBall && hitParams == null) return;
-      final combined = hitParams?.containsKey('count_runs_on_third_out') ?? false;
       await widget.onLiveAction!(snapshot!.version,
-        action == 'HIT' && combined ? 'HIT_WITH_OUT' : action, hitParams);
-      unawaited(_refreshLiveHistory());
+        action == 'HIT' ? 'HIT_WITH_OUT' : action, hitParams);
+      // El marcador se actualiza primero; después esperamos el historial
+      // para que la jugada confirmada aparezca antes de habilitar otra.
       await _refreshLiveScore();
+      await _refreshLiveHistory();
     } catch (error) {
       if (mounted) setState(() => _liveActionError =
           'No se pudo registrar la jugada: $error');

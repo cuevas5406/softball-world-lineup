@@ -1,0 +1,1 @@
+Se agregaron tres pruebas de regresión para tercer out de corredor en home, doble play con cero outs y rechazo de doble play con dos outs. Estas pruebas no se ejecutaron: Flutter SDK no está instalado. SQL de LAB aún no desplegado.

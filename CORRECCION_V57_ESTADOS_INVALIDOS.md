@@ -1,0 +1,1 @@
+Validación compartida de estado (bolas, strikes, outs, entrada y carreras) en la previsualización de jugadas especiales. Cuatro casos de regresión añadidos. No se han ejecutado flutter test ni migraciones SQL.

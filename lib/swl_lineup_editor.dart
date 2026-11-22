@@ -35,9 +35,6 @@ Future<bool?> showSwlLineupEditor(
           }
 
           final batting = working.batting;
-          final designated = batting
-              .where((id) => !working.positions.containsKey(id))
-              .toList();
           return AlertDialog(
             title: Text('Elegir mi alineación · $teamName'),
             content: SizedBox(
@@ -45,56 +42,9 @@ Future<bool?> showSwlLineupEditor(
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  Text(
-                    'Pitcher titular: ${roster[working.pitcherId]?.name ?? "Sin asignar"}',
-                  ),
-                  if (working.pitcherId != null)
-                    SwitchListTile(
-                      title: const Text('El pitcher batea'),
-                      value: working.pitcherBats,
-                      subtitle: !working.pitcherBats && batting.length == 13
-                          ? const Text(
-                              'Libera un turno para que batee el pitcher.',
-                            )
-                          : null,
-                      onChanged: !working.pitcherBats && batting.length == 13
-                          ? null
-                          : (value) => update(() {
-                              final pitcher = working.pitcherId;
-
-                              working.pitcherBats = value;
-                              if (!value && pitcher != null) {
-                                working.setBatting(pitcher, false);
-                              } else if (value && pitcher != null) {
-                                working.setBatting(pitcher, true);
-                              }
-                              working.designatedId = null;
-                            }),
-                    ),
-                  if (!working.pitcherBats)
-                    DropdownButtonFormField<String>(
-                      key: ValueKey(
-                        designated.contains(working.designatedId)
-                            ? working.designatedId
-                            : null,
-                      ),
-                      initialValue: designated.contains(working.designatedId)
-                          ? working.designatedId
-                          : null,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Bateador designado',
-                      ),
-                      items: [
-                        for (final id in designated)
-                          DropdownMenuItem(
-                            value: id,
-                            child: Text(roster[id]!.name),
-                          ),
-                      ],
-                      onChanged: (id) =>
-                          update(() => working.designatedId = id),
-                    ),
+                  const Text('Selecciona los jugadores. El pitcher que batea y el DH se configuran en la siguiente pantalla.'),
+                  const SizedBox(height: 8),
+                  Text('Pitcher titular: ${roster[working.pitcherId]?.name ?? "Sin asignar"}'),
                   const SizedBox(height: 12),
                   TextField(
                     decoration: const InputDecoration(
@@ -248,7 +198,16 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
 
   void _assignPosition(String id, String? position) {
     setState(() {
-      widget.draft.assign(id, position);
+      if (position == 'DH') {
+        widget.draft.assign(id, null);
+        widget.draft.pitcherBats = false;
+        final pitcher = widget.draft.pitcherId;
+        if (pitcher != null) widget.draft.selected.remove(pitcher);
+        widget.draft.designatedId = id;
+      } else {
+        widget.draft.assign(id, position);
+        if (widget.draft.designatedId == id) widget.draft.designatedId = null;
+      }
     });
     widget.onChanged?.call(widget.draft);
   }
@@ -257,12 +216,35 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
   Widget build(BuildContext context) {
     final batting = widget.draft.batting;
     final error = widget.draft.validate();
+    final pitcher = widget.draft.pitcherId;
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(title: const Text('Orden al bate · desliza para ordenar')),
       body: SafeArea(
         child: Column(
           children: [
+            if (pitcher != null)
+              SwitchListTile(
+                title: const Text('El pitcher batea'),
+                subtitle: Text(widget.roster[pitcher]?.name ?? 'Pitcher titular'),
+                value: widget.draft.pitcherBats,
+                onChanged: (value) {
+                  setState(() {
+                    if (value && !widget.draft.selected.contains(pitcher)) {
+                      if (widget.draft.selected.length >= 13) return;
+                      widget.draft.selected.add(pitcher);
+                    }
+                    if (!value) widget.draft.selected.remove(pitcher);
+                    widget.draft.pitcherBats = value;
+                    if (value) widget.draft.designatedId = null;
+                  });
+                  widget.onChanged?.call(widget.draft);
+                },
+              ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Text('Elige DH en el selector de posición. Mantén presionado el icono para deslizar el orden.'),
+            ),
             Expanded(
               child: ReorderableListView.builder(
                 itemCount: batting.length,
@@ -282,11 +264,14 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
                           width: 116,
                           child: DropdownButton<String>(
                             isExpanded: true,
-                            value: widget.draft.positions[id] ?? '',
+                            value: widget.draft.designatedId == id
+                                ? 'DH' : (widget.draft.positions[id] ?? ''),
                             items: [
                               const DropdownMenuItem(
                                 value: '', child: Text('Sin posición', style: TextStyle(fontSize: 11)),
                               ),
+                              if (!widget.draft.pitcherBats && id != pitcher)
+                                const DropdownMenuItem(value: 'DH', child: Text('DH')),
                               for (final pos in swlDefensivePositions)
                                 DropdownMenuItem(value: pos, child: Text(pos)),
                             ],

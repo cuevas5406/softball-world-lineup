@@ -10,6 +10,13 @@ create table public.swl_v56_challenges (
   status text not null check (status in ('SENT','ACCEPTED','REJECTED','CANCELLED','EXTERNAL')),
   game_id uuid unique references public.swl_live_games(id),
   check (home_team_id is distinct from away_team_id),
+  constraint swl_v56_external_name_not_blank check (
+    external_team_name is null or (
+      length(btrim(external_team_name)) between 1 and 100
+      and external_team_name = btrim(external_team_name)
+    )
+  ),
+  constraint swl_v56_stadium_length check (length(stadium) <= 150),
   check ((away_team_id is null) <> (external_team_name is null))
 );
 
@@ -39,7 +46,7 @@ begin
   if auth.uid() is null or public.swl_can_manage_roster(p_home_team_id) is not true then
     raise exception using errcode = '42501', message = 'Selecciona un equipo autorizado.';
   end if;
-  if p_scheduled_at is null or p_scheduled_at <= now() or length(coalesce(p_stadium,'')) > 150
+  if p_home_team_id is null or p_scheduled_at is null or p_scheduled_at <= now() or length(coalesce(p_stadium,'')) > 150
       or (p_away_team_id is null and (nullif(btrim(p_external_team_name), '') is null
           or length(p_external_team_name) > 100))
       or (p_away_team_id is not null and (p_home_team_id = p_away_team_id

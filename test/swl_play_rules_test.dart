@@ -98,9 +98,31 @@ void main() {
     expect(() => state(first:true,second:true)
         .advanceRunners(firstTo:2), throwsStateError);
   });
+  test('Avance no permite rebasar al corredor adelantado', () {
+    expect(() => state(first:true, second:true)
+        .advanceRunners(firstTo:0, secondTo:2), throwsStateError);
+  });
+  test('Avance permite que dos corredores anoten', () {
+    final s = state(first:true, second:true)
+        .advanceRunners(firstTo:0, secondTo:0);
+    expect(s.awayRuns, 2);
+    expect(s.first, false);
+    expect(s.second, false);
+  });
   test('Rechaza retroceso de tercera a segunda', () {
     expect(() => state(third:true)
         .advanceRunners(thirdTo:2), throwsStateError);
+  });
+
+  test('Sacrificio no permite que corredor de primera rebase al de segunda', () {
+    expect(() => state(first:true, second:true, third:true)
+      .sacrificeFly(firstTo:0, secondTo:2, thirdTo:0), throwsStateError);
+  });
+  test('Sacrificio permite anotar a dos corredores sin rebasarse', () {
+    final s = state(first:true, second:true, third:true)
+      .sacrificeFly(firstTo:2, secondTo:0, thirdTo:0);
+    expect(s.awayRuns, 2);
+    expect(s.second, true);
   });
 
   test('Elevado de sacrificio anota corredor de tercera', () {
@@ -115,10 +137,9 @@ void main() {
     expect(s.first, true); expect(s.third, false);
     expect(s.awayRuns, 1);
   });
-  test('Tercer out en elevado cambia la mitad', () {
-    final s=state(outs:2,third:true).sacrificeFly(thirdTo:3);
-    expect(s.isTop, false); expect(s.outs, 0);
-    expect(s.third, false);
+  test('Elevado con dos outs no es sacrificio válido', () {
+    expect(() => state(outs:2,third:true).sacrificeFly(thirdTo:3),
+      throwsStateError);
   });
   test('No acredita carrera en tercer out del bateador', () {
     expect(() => state(outs:2,third:true)
@@ -193,6 +214,51 @@ void main() {
       throwsStateError);
   });
 
+  test('Out en home no suma carrera y conserva bateador en primera', () {
+    final s = state(third:true).hit(batterBase:1, thirdTo:-4);
+    expect(s.awayRuns, 0);
+    expect(s.outs, 1);
+    expect(s.first, true);
+    expect(s.third, false);
+  });
+  test('Tercer out en home limpia bases y no acredita carrera', () {
+    final s = state(outs:2,third:true).hit(batterBase:1, thirdTo:-4);
+    expect(s.awayRuns, 0);
+    expect(s.outs, 0);
+    expect(s.isTop, false);
+    expect(s.first, false);
+  });
+  test('Tercer out de tiempo sin confirmación no suma carrera', () {
+    final s = state(outs:2,first:true,third:true).hit(
+      batterBase:1, firstTo:-4, thirdTo:0);
+    expect(s.awayRuns, 0);
+  });
+  test('Tercer out de tiempo confirmado permite carrera adelantada', () {
+    final s = state(outs:2,first:true,third:true).hit(
+      batterBase:1, firstTo:-4, thirdTo:0,
+      countRunsOnThirdOut:true);
+    expect(s.awayRuns, 1);
+    expect(s.isTop, false);
+  });
+  test('Jonrón solitario suma una carrera sin ocupar bases', () {
+    final result = state().hit(batterBase: 4);
+    expect(result.awayRuns, 1);
+    expect(result.first || result.second || result.third, false);
+    expect(result.outs, 0);
+  });
+
+  test('Jonrón con corredores en primera y tercera suma tres carreras', () {
+    final result = state(first: true, third: true)
+        .hit(batterBase: 4, firstTo: 0, thirdTo: 0);
+    expect(result.awayRuns, 3);
+    expect(result.first || result.second || result.third, false);
+  });
+
+  test('Jonrón no permite retirar a un corredor', () {
+    expect(() => state(first: true).hit(batterBase: 4, firstTo: -4),
+        throwsStateError);
+  });
+
   test('Jonrón con corredor en primera exige que anote', () {
     expect(() => state(first:true).hit(batterBase:4,firstTo:2),
       throwsStateError);
@@ -256,6 +322,29 @@ void main() {
     expect(timed.awayRuns, 1);
     final precedingOut = play.hit(batterBase: 1, firstTo: 0, thirdTo: -4, countRunsOnThirdOut: true);
     expect(precedingOut.awayRuns, 0);
+  });
+  test('tercer out de tiempo: solo cuentan corredores delante del retirado', () {
+    final play = state(outs: 2, first: true, second: true, third: true);
+    final confirmed = play.hit(
+      batterBase: 1, firstTo: 0, secondTo: -4, thirdTo: 0,
+      countRunsOnThirdOut: true,
+    );
+    expect(confirmed.awayRuns, 1); // Tercera anotó; primera iba detrás.
+    expect(confirmed.outs, 0);
+    expect(confirmed.isTop, false);
+
+    final notConfirmed = play.hit(
+      batterBase: 1, firstTo: 0, secondTo: -4, thirdTo: 0,
+    );
+    expect(notConfirmed.awayRuns, 0);
+  });
+  test('tercer out forzado: no anota aunque se confirme el tiempo', () {
+    final play = state(outs: 2, first: true, second: true, third: true);
+    final forced = play.hit(
+      batterBase: 1, firstTo: 0, secondTo: -3, thirdTo: 0,
+      countRunsOnThirdOut: true,
+    );
+    expect(forced.awayRuns, 0);
   });
   test('no acepta un out en una base anterior ni cuatro outs', () {
     expect(() => state(third: true).hit(batterBase: 1, thirdTo: -3), throwsStateError);

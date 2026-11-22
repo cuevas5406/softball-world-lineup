@@ -16,21 +16,42 @@ declare
   occupied boolean[];
   resulting boolean[] := array[false,false,false];
   runners uuid[] := array[null,null,null]::uuid[];
-  drives integer[] := array[(p_data->>'p_first_to')::integer,
-    (p_data->>'p_second_to')::integer,(p_data->>'p_third_to')::integer];
-  batter_base integer := (p_data->>'p_batter_base')::integer;
+  drives integer[];
+  batter_base integer;
   dest integer;
   previous_dest integer;
   runs integer := 0;
   made integer := 0;
   last_out uuid;
   last_out_source integer;
+  chosen_last_out_source integer;
   terminal boolean;
   hit_count integer;
   details jsonb;
 begin
+  -- Autenticar y validar los datos externos antes de convertir JSON a enteros.
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED' using errcode = '42501';
+  end if;
+  if p_data is null or jsonb_typeof(p_data) <> 'object' then
+    raise exception 'Los datos del batazo deben ser un objeto JSON.';
+  end if;
+  if exists (
+    select 1 from jsonb_each(p_data) as field(key,value)
+    where field.key = any(array['p_first_to','p_second_to','p_third_to','p_batter_base'])
+      and field.value <> 'null'::jsonb
+      and (jsonb_typeof(field.value) <> 'number'
+        or field.value::text !~ '^(-[1-4]|[0-4])$'
+        or (field.key = 'p_batter_base' and field.value::text !~ '^[1-4]$'))
+  ) then
+    raise exception 'Las bases del batazo deben ser enteros válidos.';
+  end if;
+  drives := array[(p_data->>'p_first_to')::integer,
+    (p_data->>'p_second_to')::integer,(p_data->>'p_third_to')::integer];
+  batter_base := (p_data->>'p_batter_base')::integer;
   if p_action is null or p_action not in ('HIT_WITH_OUT','ERROR')
-    or batter_base is null or batter_base not between 1 and 3 then
+    or batter_base is null or batter_base not between 1 and 4
+    or (p_action = 'ERROR' and batter_base = 4) then
     raise exception 'Tipo de batazo inválido.';
   end if;
   g := public.swl_v56_lock_batting_turn(p_game_id,p_expected_version);
@@ -43,19 +64,27 @@ begin
   turn_index := coalesce(turn_index,1);
   if p_batter_id is null or p_batter_id = any(g.swl_base_players) or not exists (
     select 1 from jsonb_array_elements(batting) slot
-    where (slot->>'order')::integer = turn_index and slot->>'player_id' = p_batter_id::text
+    where coalesce(slot->>'order',slot->>'batting_order') = turn_index::text
+      and slot->>'player_id' = p_batter_id::text
   ) then raise exception 'El bateador cambió.'; end if;
   occupied := public.swl_v56_base_occupancy(g.bases_state);
   perform public.swl_v56_validate_base_players(occupied,g.swl_base_players);
   previous_dest := batter_base;
-  resulting[batter_base] := true;
-  runners[batter_base] := p_batter_id;
+  if batter_base < 4 then
+    resulting[batter_base] := true;
+    runners[batter_base] := p_batter_id;
+  else
+    runs := 1; -- El bateador anota en jonrón.
+  end if;
   for i in 1..3 loop
     dest := drives[i];
     if occupied[i] is distinct from (dest is not null) then
       raise exception 'Indica el destino de cada corredor.';
     end if;
     if dest is null then continue; end if;
+    if batter_base = 4 and dest <> 0 then
+      raise exception 'En un jonrón todos los corredores deben anotar.';
+    end if;
     if dest < 0 then
       if -dest <= i or -dest > 4 then raise exception 'Base del out inválida.'; end if;
       made := made + 1;
@@ -75,17 +104,43 @@ begin
       runners[dest] := g.swl_base_players[i];
     end if;
   end loop;
-  if g.outs + made > 3 or (p_action = 'HIT_WITH_OUT' and made = 0) then
+  -- Si hay varios outs, el mánager indica cuál ocurrió al final.
+  -- El orden de iteración de las bases no representa la cronología real.
+  if made > 1 then
+    if jsonb_typeof(p_data->'p_last_out_source') is distinct from 'number'
+      or (p_data->>'p_last_out_source') !~ '^[1-3]$' then
+      raise exception 'Indica cuál corredor fue el último out de la jugada.';
+    end if;
+    chosen_last_out_source := (p_data->>'p_last_out_source')::integer;
+    if drives[chosen_last_out_source] is null or drives[chosen_last_out_source] >= 0 then
+      raise exception 'El último out debe ser uno de los corredores retirados.';
+    end if;
+    last_out_source := chosen_last_out_source;
+    last_out := g.swl_base_players[chosen_last_out_source];
+  end if;
+  if g.outs + made > 3 then
     raise exception 'Cantidad de outs incompatible con la jugada.';
   end if;
   terminal := g.outs + made = 3;
   if terminal then
-    runs := 0;
-    if made = 1 and p_data->'count_runs_on_third_out' = 'true'::jsonb
-        and not (drives[last_out_source] = -(last_out_source + 1)
-          and (last_out_source = 1 or (occupied[1] and (last_out_source = 2 or occupied[2])))) then
+    -- Nunca contar carreras si el tercer out es forzado. En los demás
+    -- casos, el anotador debe confirmar que la carrera llegó ANTES del out.
+    -- No inferir cronología a partir de la base de origen del corredor.
+    if made <> 1 or last_out_source is null then
+      runs := 0;
+    elsif drives[last_out_source] = -(last_out_source + 1)
+        and (last_out_source = 1 or (occupied[1] and (last_out_source = 2 or occupied[2]))) then
+      runs := 0;
+    elsif p_data->'count_runs_on_third_out' is distinct from 'true'::jsonb then
+      runs := 0;
+    else
+      -- En una jugada de tiempo solo pueden anotar corredores que iban
+      -- por delante del corredor retirado; coincide con la vista previa Dart.
+      runs := 0;
       for i in (last_out_source + 1)..3 loop
-        if drives[i] = 0 then runs := runs + 1; end if;
+        if drives[i] = 0 then
+          runs := runs + 1;
+        end if;
       end loop;
     end if;
   end if;
@@ -117,7 +172,7 @@ begin
     'plate_appearance_completed',true,'ab',1,'hits',hit_count,'runs',runs,'outs',made,
     'rbi',case when hit_count = 1 then runs else 0 end,
     'charged_team_id',case when hit_count = 0 then defense end,
-    'last_out_player_id',case when made = 1 then last_out end);
+    'last_out_player_id',case when made >= 1 then last_out end);
   if hit_count = 1 then
     insert into public.swl_game_events(game_id,actor_id,batting_team_id,inning,is_top,event_type,event_data,version)
       values(g.id,auth.uid(),team,g.inning,g.is_top,'HIT',details,g.version + 1);

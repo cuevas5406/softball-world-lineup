@@ -1,0 +1,1 @@
+Se agregó un preflight SQL **solo lectura** para inspeccionar las firmas reales de las funciones auxiliares, columnas y permisos de la nueva RPC. No se instaló la RPC ni se ejecutaron pruebas de escritura. Se requiere validar el resultado en LAB antes de instalar.
