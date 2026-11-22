@@ -2609,7 +2609,40 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             runs = live.isTop ? preview.awayRuns - live.awayRuns :
                 preview.homeRuns - live.homeRuns;
           } on StateError {
-            // El botón permanece desactivado hasta que los destinos sean válidos.
+            // El motor local de vista previa puede rechazar destinos negativos
+            // aunque LAB admita un único corredor retirado durante un hit.
+            // Solo habilitar ese caso si la ocupación y el orden son coherentes.
+            if (!defensiveError && outCount == 1 && live.outs < 2 &&
+                batterBase >= 1 && batterBase <= 3) {
+              final origins = <int>[if (first) 1, if (second) 2, if (third) 3];
+              final moves = <int?>[firstTo, secondTo, thirdTo];
+              final occupiedTargets = <int>{batterBase};
+              var lastTarget = batterBase;
+              var valid = true;
+              var candidateRuns = 0;
+              for (final origin in origins) {
+                final dest = moves[origin - 1];
+                if (dest == null) { valid = false; break; }
+                final allowed = switch (origin) {
+                  1 => const [0, 2, 3, -2, -3, -4],
+                  2 => const [0, 3, -3, -4],
+                  _ => const [0, -4],
+                };
+                if (!allowed.contains(dest)) { valid = false; break; }
+                if (dest < 0) continue;
+                final target = dest == 0 ? 4 : dest;
+                if (target < lastTarget || (target == lastTarget && target != 4)) {
+                  valid = false; break;
+                }
+                lastTarget = target;
+                if (dest == 0) {
+                  candidateRuns++;
+                } else if (!occupiedTargets.add(dest)) {
+                  valid = false; break;
+                }
+              }
+              if (valid) runs = candidateRuns;
+            }
           }
           return AlertDialog(
             title: Text(defensiveError ? 'Error defensivo' : 'Batazo'),
