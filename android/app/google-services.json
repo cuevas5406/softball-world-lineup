@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1036921215004",
+    "project_id": "softball-world-lineup",
+    "storage_bucket": "softball-world-lineup.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1036921215004:android:d9586204a152e9da1627d9",
+        "android_client_info": {
+          "package_name": "com.softballworld.lineup.softball_world_lineup"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB4jfT3_WhIbdyLo9FrDn3vwg-BpRzJ3_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,3 +1,4 @@
+import 'swl_push_notifications.dart';
 import 'swl_player_positions.dart';
 import 'swl_roster_repository.dart';
 import 'swl_team_settings.dart';
@@ -42,6 +43,7 @@ Future<void> main() async {
       url: kSupabaseUrl,
       publishableKey: kSupabaseAnonKey,
     );
+    await SwlPushNotifications.instance.initialize();
     runApp(const SoftballWorldApp());
   } catch (e) {
     runApp(const MaterialApp(home: Scaffold(body: Center(child: Text('No se pudo iniciar la conexión con LAB.')))));
@@ -1354,6 +1356,7 @@ class MainAppMasterHub extends StatefulWidget {
 }
 
 class _MainAppMasterHubState extends State<MainAppMasterHub> {
+  StreamSubscription<dynamic>? _pushSubscription;
   int _currentIndex = 0;
   Map<String, dynamic>? _activeTeam;
   late List<Map<String, dynamic>> _authorizedTeams;
@@ -1364,6 +1367,36 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     super.initState();
     _authorizedTeams = List<Map<String, dynamic>>.from(widget.authorizedTeams);
     if (_authorizedTeams.isNotEmpty) _activeTeam = _authorizedTeams.first;
+    _pushSubscription = SwlPushNotifications.instance.messages.listen((message) {
+      if (!mounted) return;
+      final title = message.notification?.title ?? 'Nueva notificación';
+      final body = message.notification?.body ?? 'Consulta tu Agenda.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$title: $body'),
+        action: SnackBarAction(label: 'AGENDA', onPressed: () {
+          if (mounted) setState(() => _currentIndex = 2);
+        }),
+      ));
+      // Al tocar una notificación de reto, ir a Agenda.
+      if (message.data['type'] == 'challenge' || message.data['screen'] == 'agenda') {
+        setState(() => _currentIndex = 2);
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await SwlPushNotifications.instance.requestPermission();
+      final initial = await SwlPushNotifications.instance.initialMessage();
+      if (mounted && initial != null &&
+          (initial.data['type'] == 'challenge' || initial.data['screen'] == 'agenda')) {
+        setState(() => _currentIndex = 2);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _pushSubscription?.cancel();
+    super.dispose();
   }
 
   void _changeActiveTeam(Map<String, dynamic> team) {

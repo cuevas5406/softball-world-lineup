@@ -27,7 +27,7 @@ jobs:
           cache: true
 
       - name: Instalar dependencias
-        run: flutter pub get --enforce-lockfile
+        run: flutter pub get  # Actualizar pubspec.lock al incorporar Firebase; confirmar el lock en el siguiente commit.
 
       - name: Analizar y probar
         run: |
