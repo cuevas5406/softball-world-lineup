@@ -2676,6 +2676,50 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     );
   }
 
+  // Reversión segura: solo el último OUT simple y con confirmación.
+  // El servidor valida la versión, los permisos y el turno antes de modificar datos.
+  Future<void> _undoLastLiveOut() async {
+    final snapshot = _currentLiveSnapshot;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (_liveActionInFlight || snapshot == null || !snapshot.canScore(uid)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Deshacer último out'),
+        content: const Text(
+          'Solo se puede revertir el último OUT sencillo. '
+          'Se restaurarán el turno al bate y las estadísticas del lanzador. '
+          'La corrección quedará registrada en el historial.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false),
+              child: const Text('CANCELAR')),
+          FilledButton(onPressed: () => Navigator.pop(dialog, true),
+              child: const Text('DESHACER OUT')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (_currentLiveSnapshot?.version != snapshot.version) {
+      setState(() => _liveActionError =
+          'El marcador cambió. Actualiza antes de deshacer.');
+      return;
+    }
+    setState(() { _liveActionInFlight = true; _liveActionError = null; });
+    try {
+      await Supabase.instance.client.rpc('swl_v57_undo_last_out', params: {
+        'p_game_id': snapshot.gameId,
+        'p_expected_version': snapshot.version,
+      });
+      await _refreshLiveScore();
+      await _refreshLiveHistory();
+    } catch (error) {
+      if (mounted) setState(() => _liveActionError =
+          'No se pudo deshacer el último out: $error');
+    } finally {
+      if (mounted) setState(() => _liveActionInFlight = false);
+    }
+  }
+
   Future<void> _submitLiveAction(String action) async {
     final snapshot = _currentLiveSnapshot;
     final userId = Supabase.instance.client.auth.currentUser?.id;
@@ -2806,6 +2850,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           TextButton(onPressed: _liveOutMenu, child: const Text('Doble play y jugadas especiales')),
         if (allowed)
           TextButton(onPressed: () => _submitLiveAction('ERROR'), child: const Text('Error defensivo')),
+        if (allowed)
+          TextButton(onPressed: _undoLastLiveOut, child: const Text('Deshacer último OUT')),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
       ]),
     );
