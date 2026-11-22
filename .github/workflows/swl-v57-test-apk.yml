@@ -41,8 +41,8 @@ jobs:
       # La clave publishable es publica por diseno; nunca usar service_role.
       - name: Compilar APK debug instalable con LAB
         run: |
-          flutter build apk --debug \\
-            --dart-define=SUPABASE_URL=https://wgeziptdoabyicufnrfk.supabase.co \\
+          flutter build apk --debug \
+            --dart-define=SUPABASE_URL=https://wgeziptdoabyicufnrfk.supabase.co \
             --dart-define=SUPABASE_ANON_KEY=sb_publishable_abewrhe85_YSfd8ZCl_Ktg_6mrwD4DA
 
       - name: Publicar APK de prueba
