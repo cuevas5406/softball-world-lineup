@@ -910,9 +910,15 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           // Un rechazo puede coincidir con una jugada registrada por el otro
           // teléfono. Refrescar también historial y estadísticas evita dejar
           // la pizarra y el relato en versiones distintas.
-          await _refreshGame(afterCurrent: true);
-          await _loadRecentEvents();
-          await _loadBattingStats();
+          // El error de la RPC es el diagnóstico principal. Un fallo de red
+          // durante el refresco no debe ocultarlo con otro mensaje.
+          try {
+            await _refreshGame(afterCurrent: true);
+            await _loadRecentEvents();
+            await _loadBattingStats();
+          } catch (_) {
+            // Mantener visible el rechazo original del servidor.
+          }
           throw StateError(error.code == 'PGRST202' || error.code == '42883'
               ? (special ? 'Esta jugada todavía no está habilitada en el servidor. No se registró; contacta al administrador.' : 'Esta anotación todavía no está habilitada en el servidor. No se registró; contacta al administrador.')
               : error.message);
