@@ -2688,10 +2688,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       if (battedBall && hitParams == null) return;
       await widget.onLiveAction!(snapshot!.version,
         action == 'HIT' ? 'HIT_WITH_OUT' : action, hitParams);
-      // El marcador se actualiza primero; después esperamos el historial
-      // para que la jugada confirmada aparezca antes de habilitar otra.
-      await _refreshLiveScore();
-      await _refreshLiveHistory();
+      // La RPC ya terminó correctamente. Un fallo posterior al actualizar
+      // la vista no significa que la jugada haya sido rechazada.
+      try {
+        await _refreshLiveScore();
+        await _refreshLiveHistory();
+      } catch (_) {
+        if (mounted) setState(() => _liveActionError =
+            'Jugada enviada. No se pudo actualizar la pizarra; revisa el historial antes de continuar.');
+      }
     } catch (error) {
       if (mounted) setState(() => _liveActionError =
           'No se pudo registrar la jugada: $error');
