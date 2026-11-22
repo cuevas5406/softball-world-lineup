@@ -2650,6 +2650,14 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     value: countRunsOnThirdOut,
                     onChanged: (value) => update(() => countRunsOnThirdOut = value == true),
                   ),
+                if (outCount > 0 && (outCount != 1 || live.outs >= 2))
+                  const Text(
+                    'Los outs múltiples y el tercer out con corredores todavía '
+                    'no están habilitados. Esta jugada no se enviará.',
+                    style: TextStyle(color: Colors.amber, fontSize: 12)),
+                if (defensiveError)
+                  const Text('El error defensivo todavía no está habilitado en el servidor.',
+                    style: TextStyle(color: Colors.amber, fontSize: 12)),
                 if (runs != null) Text('Carreras de la jugada: $runs'),
                 if (runs == null) const Text('Revisa el orden y los destinos de los corredores',
                     style: TextStyle(color: Colors.redAccent)),
@@ -2658,8 +2666,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('CANCELAR')),
-              FilledButton(onPressed: runs == null ||
-                  (outCount > 1 && lastOutSource == null) ? null : () =>
+              FilledButton(onPressed: defensiveError || runs == null ||
+                  (outCount > 1 && lastOutSource == null) ||
+                  (outCount > 0 && (outCount != 1 || live.outs >= 2)) ? null : () =>
                   Navigator.pop(dialogContext, {
                     'p_batter_id': batterId,
                     'p_batter_base': batterBase,
@@ -2849,7 +2858,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             (snapshot.firstOccupied || snapshot.secondOccupied || snapshot.thirdOccupied))
           TextButton(onPressed: _liveOutMenu, child: const Text('Doble play y jugadas especiales')),
         if (allowed)
-          TextButton(onPressed: () => _submitLiveAction('ERROR'), child: const Text('Error defensivo')),
+          const Text('Error defensivo: pendiente de habilitar en LAB', style: TextStyle(color: Colors.amber, fontSize: 11)),
         if (allowed)
           TextButton(onPressed: _undoLastLiveOut, child: const Text('Deshacer último OUT')),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
