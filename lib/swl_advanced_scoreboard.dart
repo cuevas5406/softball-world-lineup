@@ -2410,6 +2410,31 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     } else if (result == 4) {
       await _chooseSacrifice(game);
     } else {
+      // La doble matanza retira dos jugadores: confirmar antes de modificar
+      // el marcador y comprobar que la versión siga siendo la misma.
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: const Text('Confirmar doble matanza'),
+          content: Text(
+            'Se registrarán DOS outs: el bateador y el corredor '
+            'que está en ${result == 1 ? 'primera' : result == 2 ? 'segunda' : 'tercera'}. '
+            'Esta jugada no cuenta como hit. ¿Confirmar?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: const Text('CANCELAR'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialog, true),
+              child: const Text('REGISTRAR DOBLE PLAY'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true ||
+          _currentLiveSnapshot?.version != game.version) return;
       await _sendSpecial('DOUBLE_PLAY', {'source': result});
     }
   }
