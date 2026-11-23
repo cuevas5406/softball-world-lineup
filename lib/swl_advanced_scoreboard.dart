@@ -2302,17 +2302,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         destination: data['destination'] as int?, firstTo: data['first_to'] as int?,
         secondTo: data['second_to'] as int?, thirdTo: data['third_to'] as int?,
         regulationInnings: game.regulationInnings);
-      if (action == 'DOUBLE_PLAY') {
-        // RPC dedicada en LAB: registra dos outs y las identidades de ambos
-        // retirados en una sola transacción.
-        await Supabase.instance.client.rpc('swl_v57_double_play', params: {
-          'p_game_id': game.gameId,
-          'p_expected_version': game.version,
-          'p_source': data['source'],
-        });
-      } else {
-        await widget.onLiveAction!(game.version, action, data);
-      }
+      // Todas las jugadas pasan por el controlador del partido, que
+      // reconcilia respuestas inciertas y comprueba permisos y versión.
+      await widget.onLiveAction!(game.version, action, data);
       // El marcador se actualiza primero; después esperamos el historial
       // para que la jugada confirmada aparezca antes de habilitar otra.
       await _refreshLiveScore();
