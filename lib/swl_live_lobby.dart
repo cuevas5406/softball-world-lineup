@@ -876,7 +876,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         // p_batter_base/p_first_to/etc no son argumentos de la función.
         if (special) 'p_data': hitParams ?? <String, dynamic>{},
       };
-      final rpcParams = extendedBall ? <String, dynamic>{
+      final rpcParams = action == 'DOUBLE_PLAY' ? <String, dynamic>{
+        'p_game_id': gameId,
+        'p_expected_version': expectedVersion,
+        'p_source': hitParams?['source'],
+      } : extendedBall ? <String, dynamic>{
         'p_game_id': gameId,
         'p_expected_version': expectedVersion,
         'p_action': action,
@@ -885,8 +889,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       } : params;
       sent = true;
       try {
-        await _client.rpc(action == 'FOUL' ? 'swl_v56_record_foul' : special ? (extendedBall
-              ? 'swl_v57_batted_ball' : 'swl_v56_special_play') : isHit ? 'swl_v56_apply_hit' :
+        await _client.rpc(action == 'DOUBLE_PLAY' ? 'swl_v57_double_play' :
+            action == 'FOUL' ? 'swl_v56_record_foul' : special ? (extendedBall
+              ? (action == 'ERROR' ? 'swl_v57_defensive_error' : 'swl_v57_batted_ball')
+              : 'swl_v56_special_play') : isHit ? 'swl_v56_apply_hit' :
             'swl_v56_record_plate_action', params: rpcParams)
             .timeout(const Duration(seconds: 12));
       } on PostgrestException catch (error) {
