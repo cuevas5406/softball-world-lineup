@@ -43,6 +43,11 @@ jobs:
       - name: Ejecutar pruebas Flutter antes de compilar
         run: flutter test --reporter expanded
 
+      # Validar contratos de integración y propuestas SQL contra el código.
+      # Estas pruebas son estáticas: NO ejecutan SQL ni modifican Supabase.
+      - name: Verificar contratos V5.7 (Python)
+        run: python3 -m unittest discover -s test -p 'test_*.py' -v
+
       # La clave publishable es publica por diseno; nunca usar service_role.
       - name: Compilar APK debug instalable con LAB
         run: |
