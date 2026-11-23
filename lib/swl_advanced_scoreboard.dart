@@ -2762,10 +2762,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     value: countRunsOnThirdOut,
                     onChanged: (value) => update(() => countRunsOnThirdOut = value == true),
                   ),
-                if (outCount > 0 && (outCount != 1 || live.outs >= 2))
+                if (outCount > 1 || (defensiveError && outCount > 0))
                   const Text(
-                    'Los outs múltiples y el tercer out con corredores todavía '
-                    'no están habilitados. Esta jugada no se enviará.',
+                    'Los outs múltiples y los corredores retirados por error defensivo '
+                    'todavía no están habilitados. Esta jugada no se enviará.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
                 if (defensiveError)
                   const Text('Se sumará 1 error al equipo a la defensa y 0 hits. '
@@ -2787,7 +2787,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   child: const Text('CANCELAR')),
               FilledButton(onPressed: runs == null ||
                   (outCount > 1 && lastOutSource == null) ||
-                  (outCount > 0 && (outCount != 1 || live.outs >= 2)) ? null : () =>
+                  (outCount > 1 || (defensiveError && outCount > 0)) ? null : () =>
                   Navigator.pop(dialogContext, {
                     'p_batter_id': batterId,
                     'p_batter_base': batterBase,
