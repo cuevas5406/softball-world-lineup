@@ -531,11 +531,20 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         final errorDetail = action == 'ERROR' && errorAdvances.isNotEmpty
             ? ' · ${errorAdvances.join(' · ')}'
             : '';
+        // Un hit con corredor retirado se guarda como un único evento HIT.
+        // Hacer explícitos el tercer out y las carreras válidas en el historial.
+        final thirdOutDetail = action == 'HIT' && data['third_out'] == true
+            ? ' · tercer out · cambio de media entrada'
+            : '';
+        final creditedRuns = int.tryParse('${data['runs']}') ?? 0;
+        final runsDetail = action == 'HIT' && outsAdded > 0 && creditedRuns > 0
+            ? ' · $creditedRuns ${creditedRuns == 1 ? 'carrera' : 'carreras'}'
+            : '';
         return SwlScorePlayRecord(
           inning: (event['inning'] as num?)?.toInt() ?? live.inning,
           isTopInning: event['is_top'] == true,
           description: outsAdded > 0 && (action == 'HIT' || action == 'ERROR')
-              ? '$description · $outsAdded out(s)$outDetail'
+              ? '$description · $outsAdded out(s)$outDetail$thirdOutDetail$runsDetail'
               : '$description$errorDetail',
           notation: notation,
           batterName: name.isEmpty ? 'Partido' : name,
