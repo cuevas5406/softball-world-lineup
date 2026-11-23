@@ -1,9 +1,8 @@
 name: SWL V5.7 - APK de pruebas
 
+# Compilacion manual: guardar codigo no genera una APK automaticamente.
+# Ejecutar desde GitHub Actions cuando la tanda de correcciones este lista.
 on:
-  push:
-    branches:
-      - pruebas-de-V5.7
   workflow_dispatch:
 
 permissions:
