@@ -903,7 +903,14 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         'p_expected_version': expectedVersion,
         'p_action': action,
         'p_batter_id': plateBatterId,
-        'p_data': hitParams!,
+        // La RPC verifica que el bateador dentro de p_data coincida
+        // exactamente con el bateador autorizado del turno. Construirlo
+        // aquí impide que un diálogo antiguo o una sustitución deje
+        // identificadores inconsistentes entre ambos argumentos.
+        'p_data': <String, dynamic>{
+          ...hitParams!,
+          'p_batter_id': plateBatterId,
+        },
       } : params;
       sent = true;
       try {
