@@ -2849,21 +2849,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       final battedBall = action == 'HIT' || action == 'ERROR';
       final hitParams = battedBall ? await _chooseLiveHit(defensiveError: action == 'ERROR') : null;
       if (battedBall && hitParams == null) return;
-      if (action == 'ERROR') {
-        // En LAB se valida el turno y los permisos dentro de la función.
-        // No pasar por la acción ERROR antigua: no conserva la identidad
-        // ni los destinos de los corredores.
-        await Supabase.instance.client.rpc('swl_v57_defensive_error', params: {
-          'p_game_id': snapshot!.gameId,
-          'p_expected_version': snapshot.version,
-          'p_action': 'ERROR',
-          'p_batter_id': hitParams!['p_batter_id'],
-          'p_data': hitParams,
-        });
-      } else {
-        await widget.onLiveAction!(snapshot!.version,
-          action == 'HIT' ? 'HIT_WITH_OUT' : action, hitParams);
-      }
+      // Enviar tanto hits como errores por el controlador transaccional
+      // del lobby. La RPC ERROR dedicada se elige allí, sin perder
+      // reconciliación de versiones ni validación del mánager.
+      await widget.onLiveAction!(snapshot!.version,
+        action == 'HIT' ? 'HIT_WITH_OUT' : action, hitParams);
       // La RPC ya terminó correctamente. Un fallo posterior al actualizar
       // la vista no significa que la jugada haya sido rechazada.
       try {
