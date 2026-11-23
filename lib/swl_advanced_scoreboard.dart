@@ -492,13 +492,24 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           data['second_to'] ?? data['p_second_to'],
           data['third_to'] ?? data['p_third_to'],
         ];
-        final outAtHome = runnerDestinations.any((value) =>
-            int.tryParse('$value') == -4);
+        final outLocations = <String>[
+          for (final destination in runnerDestinations)
+            if (int.tryParse('$destination') case final int base when base < 0)
+              switch (base) {
+                -2 => 'segunda',
+                -3 => 'tercera',
+                -4 => 'home',
+                _ => 'base desconocida',
+              },
+        ];
+        final outDetail = outLocations.isEmpty
+            ? ''
+            : ' · out en ${outLocations.join(' y ')}';
         return SwlScorePlayRecord(
           inning: (event['inning'] as num?)?.toInt() ?? live.inning,
           isTopInning: event['is_top'] == true,
           description: outsAdded > 0 && (action == 'HIT' || action == 'ERROR')
-              ? '$description · $outsAdded out(s)${outAtHome ? ' · out en home' : ''}'
+              ? '$description · $outsAdded out(s)$outDetail'
               : description,
           notation: notation,
           batterName: name.isEmpty ? 'Partido' : name,
