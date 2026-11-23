@@ -2682,7 +2682,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             // El motor local de vista previa puede rechazar destinos negativos
             // aunque LAB admita un único corredor retirado durante un hit.
             // Solo habilitar ese caso si la ocupación y el orden son coherentes.
-            if (!defensiveError && outCount == 1 && live.outs < 2 &&
+            if (!defensiveError && outCount == 1 &&
                 batterBase >= 1 && batterBase <= 3) {
               final origins = <int>[if (first) 1, if (second) 2, if (third) 3];
               final moves = <int?>[firstTo, secondTo, thirdTo];
@@ -2711,7 +2711,16 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   valid = false; break;
                 }
               }
-              if (valid) runs = candidateRuns;
+              if (valid) {
+                // Con dos outs, la carrera solo vale en jugada de tiempo
+                // confirmada y si el tercer out no fue forzado.
+                if (live.outs == 2) {
+                  candidateRuns = timePlay && countRunsOnThirdOut
+                      ? destinations.skip(retired + 1).where((d) => d == 0).length
+                      : 0;
+                }
+                runs = candidateRuns;
+              }
             }
           }
           return AlertDialog(
@@ -2753,7 +2762,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     value: countRunsOnThirdOut,
                     onChanged: (value) => update(() => countRunsOnThirdOut = value == true),
                   ),
-                if (outCount > 0 && (outCount != 1 || live.outs >= 2))
+                if (outCount > 1)
                   const Text(
                     'Los outs múltiples y el tercer out con corredores todavía '
                     'no están habilitados. Esta jugada no se enviará.',
@@ -2778,7 +2787,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   child: const Text('CANCELAR')),
               FilledButton(onPressed: runs == null ||
                   (outCount > 1 && lastOutSource == null) ||
-                  (outCount > 0 && (outCount != 1 || live.outs >= 2)) ? null : () =>
+                  (outCount > 1) ? null : () =>
                   Navigator.pop(dialogContext, {
                     'p_batter_id': batterId,
                     'p_batter_base': batterBase,
