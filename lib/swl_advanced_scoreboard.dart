@@ -2672,9 +2672,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 }, batter: true),
                 if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, -2, -3, -4],
                     (n) => firstTo = n),
-                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [2, 3, 0, -3, -4],
+                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [3, 0, -3, -4],
                     (n) => secondTo = n),
-                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [3, 0, -4],
+                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [0, -4],
                     (n) => thirdTo = n),
                 if (outCount > 1)
                   DropdownButtonFormField<int>(
@@ -2706,6 +2706,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 if (defensiveError)
                   const Text('El error defensivo todavía no está habilitado en el servidor.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
+                if (outCount == 1)
+                  Text(
+                    'Retirado: corredor de ${retired == 0 ? 'primera' : retired == 1 ? 'segunda' : 'tercera'} '
+                    '· out en ${destinations[retired] == -4 ? 'HOME' : destinations[retired] == -3 ? 'TERCERA' : 'SEGUNDA'}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
                 if (runs != null) Text('Carreras de la jugada: $runs'),
                 if (runs == null) const Text('Revisa el orden y los destinos de los corredores',
                     style: TextStyle(color: Colors.redAccent)),
