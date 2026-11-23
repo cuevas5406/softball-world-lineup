@@ -423,7 +423,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       final ids = <String>{
         for (final event in events)
           if (event['event_data'] case final Map data) ...{
-            for (final key in ['batter_id', 'runner_id', 'last_out_player_id'])
+            for (final key in ['batter_id', 'runner_id', 'last_out_player_id', 'out_runner_id'])
               if (data[key] case final Object id) id.toString(),
           },
       };
@@ -502,9 +502,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 _ => 'base desconocida',
               },
         ];
+        final outRunner = players[data['out_runner_id']?.toString()];
+        final outRunnerName =
+            '${outRunner?['first_name'] ?? ''} ${outRunner?['last_name'] ?? ''}'.trim();
         final outDetail = outLocations.isEmpty
             ? ''
-            : ' · out en ${outLocations.join(' y ')}';
+            : ' · ${outRunnerName.isEmpty ? 'out' : '$outRunnerName: out'} en ${outLocations.join(' y ')}';
         return SwlScorePlayRecord(
           inning: (event['inning'] as num?)?.toInt() ?? live.inning,
           isTopInning: event['is_top'] == true,
