@@ -38,6 +38,11 @@ jobs:
       - name: Resolver dependencias
         run: flutter pub get
 
+      # Evitar publicar APK si fallan las reglas locales del partido,
+      # alineaciones o las pruebas de regresion existentes.
+      - name: Ejecutar pruebas Flutter antes de compilar
+        run: flutter test --reporter expanded
+
       # La clave publishable es publica por diseno; nunca usar service_role.
       - name: Compilar APK debug instalable con LAB
         run: |
