@@ -2695,11 +2695,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   if (second) secondTo = destination(2, n);
                   if (third) thirdTo = destination(3, n);
                 }, batter: true),
-                if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, -2, -3, -4],
+                if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, if (!defensiveError) ...[-2, -3, -4]],
                     (n) => firstTo = n),
-                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [3, 0, -3, -4],
+                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [3, 0, if (!defensiveError) ...[-3, -4]],
                     (n) => secondTo = n),
-                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [0, -4],
+                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [0, if (!defensiveError) -4],
                     (n) => thirdTo = n),
                 if (outCount > 1)
                   DropdownButtonFormField<int>(
@@ -2729,7 +2729,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     'no están habilitados. Esta jugada no se enviará.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
                 if (defensiveError)
-                  const Text('El error defensivo todavía no está habilitado en el servidor.',
+                  const Text('Se sumará 1 error al equipo a la defensa y 0 hits. '
+                    'Los outs de corredores durante un error todavía no están habilitados.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
                 if (outCount == 1)
                   Text(
@@ -2745,7 +2746,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('CANCELAR')),
-              FilledButton(onPressed: defensiveError || runs == null ||
+              FilledButton(onPressed: runs == null ||
                   (outCount > 1 && lastOutSource == null) ||
                   (outCount > 0 && (outCount != 1 || live.outs >= 2)) ? null : () =>
                   Navigator.pop(dialogContext, {
@@ -2818,8 +2819,21 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       final battedBall = action == 'HIT' || action == 'ERROR';
       final hitParams = battedBall ? await _chooseLiveHit(defensiveError: action == 'ERROR') : null;
       if (battedBall && hitParams == null) return;
-      await widget.onLiveAction!(snapshot!.version,
-        action == 'HIT' ? 'HIT_WITH_OUT' : action, hitParams);
+      if (action == 'ERROR') {
+        // En LAB se valida el turno y los permisos dentro de la función.
+        // No pasar por la acción ERROR antigua: no conserva la identidad
+        // ni los destinos de los corredores.
+        await Supabase.instance.client.rpc('swl_v57_defensive_error', params: {
+          'p_game_id': snapshot!.gameId,
+          'p_expected_version': snapshot.version,
+          'p_action': 'ERROR',
+          'p_batter_id': hitParams!['p_batter_id'],
+          'p_data': hitParams,
+        });
+      } else {
+        await widget.onLiveAction!(snapshot!.version,
+          action == 'HIT' ? 'HIT_WITH_OUT' : action, hitParams);
+      }
       // La RPC ya terminó correctamente. Un fallo posterior al actualizar
       // la vista no significa que la jugada haya sido rechazada.
       try {
