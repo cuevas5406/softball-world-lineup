@@ -47,7 +47,8 @@ class BattedBallContract(unittest.TestCase):
         ui = (ROOT / 'lib/swl_advanced_scoreboard.dart').read_text()
         assert "action == 'HIT' ? 'HIT_WITH_OUT' : action" in ui
         lobby = (ROOT / 'lib/swl_live_lobby.dart').read_text()
-        assert "final rpcParams = extendedBall ? <String, dynamic>{" in lobby
+        assert "extendedBall ? <String, dynamic>{" in lobby
+        assert "action == 'DOUBLE_PLAY' ? <String, dynamic>{" in lobby
         assert "'p_data': hitParams!," in lobby
         assert "'swl_v56_record_plate_action', params: rpcParams" in lobby
 
@@ -109,7 +110,7 @@ class BattedBallContract(unittest.TestCase):
 
     def test_history_resolves_runner_out_identity(self):
         ui = (ROOT / 'lib/swl_advanced_scoreboard.dart').read_text()
-        self.assertIn("for (final key in ['batter_id', 'runner_id', 'last_out_player_id'])", ui)
+        self.assertIn("for (final key in ['batter_id', 'runner_id', 'last_out_player_id', 'out_runner_id'])", ui)
         self.assertIn("action == 'RUNNER_OUT' || action == 'DOUBLE_PLAY'", ui)
         self.assertIn("data['last_out_player_id'] ?? data['runner_id'] ?? data['batter_id']", ui)
 
