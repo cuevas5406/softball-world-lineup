@@ -2951,7 +2951,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             (snapshot.firstOccupied || snapshot.secondOccupied || snapshot.thirdOccupied))
           TextButton(onPressed: _liveOutMenu, child: const Text('Outs y jugadas especiales')),
         if (allowed)
-          const Text('Error defensivo: pendiente de habilitar en LAB', style: TextStyle(color: Colors.amber, fontSize: 11)),
+          TextButton.icon(
+            onPressed: _liveActionInFlight ? null : () => _submitLiveAction('ERROR'),
+            icon: const Icon(Icons.error_outline, size: 18),
+            label: const Text('ERROR DEFENSIVO (E)'),
+          ),
         if (allowed)
           TextButton(onPressed: _undoLastLiveOut, child: const Text('Deshacer último OUT')),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
