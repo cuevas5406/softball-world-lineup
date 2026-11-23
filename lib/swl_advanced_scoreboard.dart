@@ -2727,7 +2727,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             content: SingleChildScrollView(child: Column(
               mainAxisSize: MainAxisSize.min, children: [
                 Text('Turno $order · $batterName  #$batterJersey\n$batterCode'),
-                choice('Batazo del bateador', batterBase, [1, 2, 3, if (!defensiveError) 4], (n) {
+                choice(defensiveError ? 'Bateador llega por error' : 'Batazo del bateador', batterBase, [1, 2, 3, if (!defensiveError) 4], (n) {
                   batterBase = n;
                   if (first) firstTo = destination(1, n);
                   if (second) secondTo = destination(2, n);
@@ -2795,7 +2795,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     'p_third_to': thirdTo,
                     if (outCount > 0) 'count_runs_on_third_out': timePlay && countRunsOnThirdOut,
                     if (outCount > 1) 'p_last_out_source': lastOutSource,
-                  }), child: const Text('CONFIRMAR BATAZO')),
+                  }), child: Text(defensiveError ? 'REGISTRAR ERROR' : 'CONFIRMAR BATAZO')),
             ],
           );
         },
