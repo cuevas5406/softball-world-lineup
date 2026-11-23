@@ -2302,7 +2302,17 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         destination: data['destination'] as int?, firstTo: data['first_to'] as int?,
         secondTo: data['second_to'] as int?, thirdTo: data['third_to'] as int?,
         regulationInnings: game.regulationInnings);
-      await widget.onLiveAction!(game.version, action, data);
+      if (action == 'DOUBLE_PLAY') {
+        // RPC dedicada en LAB: registra dos outs y las identidades de ambos
+        // retirados en una sola transacción.
+        await Supabase.instance.client.rpc('swl_v57_double_play', params: {
+          'p_game_id': game.gameId,
+          'p_expected_version': game.version,
+          'p_source': data['source'],
+        });
+      } else {
+        await widget.onLiveAction!(game.version, action, data);
+      }
       // El marcador se actualiza primero; después esperamos el historial
       // para que la jugada confirmada aparezca antes de habilitar otra.
       await _refreshLiveScore();
@@ -2422,10 +2432,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         if (game.thirdOccupied)
           ListTile(title: const Text('Fly de sacrificio · anota tercera'),
             onTap: () => Navigator.pop(sheet, 4)),
-        for (final base in [1, 2, 3])
-          if (swlBaseOccupied(game.playState, base))
-            ListTile(title: Text('Doble play · bateador y corredor de ${base}B'),
-              onTap: () => Navigator.pop(sheet, base)),
+        // La primera versión transaccional admite exactamente un corredor.
+        // Con varios corredores se necesita definir sus avances antes de
+        // ofrecer esta jugada, para no borrarlos por accidente.
+        if ([game.firstOccupied, game.secondOccupied, game.thirdOccupied]
+            .where((occupied) => occupied).length == 1)
+          for (final base in [1, 2, 3])
+            if (swlBaseOccupied(game.playState, base))
+              ListTile(title: Text('Doble play · bateador y corredor de ${base}B'),
+                onTap: () => Navigator.pop(sheet, base)),
       ])));
     if (!mounted || result == null || _currentLiveSnapshot?.version != game.version) return;
     if (result == 0) {
