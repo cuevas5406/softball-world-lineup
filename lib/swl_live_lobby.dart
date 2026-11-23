@@ -793,13 +793,27 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     }
     if (isHit || extendedBall) {
       if (hitParams == null) throw StateError('Faltan los avances del batazo.');
-      snapshot.playState.hit(
-        batterBase: hitParams['p_batter_base'] as int,
-        firstTo: hitParams['p_first_to'] as int?,
-        secondTo: hitParams['p_second_to'] as int?,
-        thirdTo: hitParams['p_third_to'] as int?,
-        countRunsOnThirdOut: hitParams['count_runs_on_third_out'] == true,
-      );
+      // La vista previa local de hits no implementa todos los casos
+      // transaccionales de V5.7 (por ejemplo, corredor retirado).
+      // No rechazar aquí una jugada que la RPC valida con identidades,
+      // ocupación, versión y permisos. Para hits simples conservar preview.
+      if (isHit) {
+        snapshot.playState.hit(
+          batterBase: hitParams['p_batter_base'] as int,
+          firstTo: hitParams['p_first_to'] as int?,
+          secondTo: hitParams['p_second_to'] as int?,
+          thirdTo: hitParams['p_third_to'] as int?,
+          countRunsOnThirdOut: hitParams['count_runs_on_third_out'] == true,
+        );
+      } else {
+        final batterBase = hitParams['p_batter_base'];
+        if (batterBase is! int || batterBase < 1 || batterBase > 3) {
+          throw StateError('Destino del bateador inválido.');
+        }
+        if (hitParams['p_batter_id'] == null) {
+          throw StateError('Falta la identidad del bateador.');
+        }
+      }
     }
     if (action == 'BALL' && snapshot.balls == 3) {
       setState(() => _confirmingPlay = true);
