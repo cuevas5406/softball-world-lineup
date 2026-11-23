@@ -49,7 +49,9 @@ class BattedBallContract(unittest.TestCase):
         lobby = (ROOT / 'lib/swl_live_lobby.dart').read_text()
         assert "extendedBall ? <String, dynamic>{" in lobby
         assert "action == 'DOUBLE_PLAY' ? <String, dynamic>{" in lobby
-        assert "'p_data': hitParams!," in lobby
+        assert "'p_data': <String, dynamic>{" in lobby
+        assert "'p_batter_id': plateBatterId," in lobby
+        assert "...hitParams!," in lobby
         assert "'swl_v56_record_plate_action', params: rpcParams" in lobby
 
     def test_homerun_regression_cases_present(self):
