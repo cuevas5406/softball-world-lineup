@@ -807,7 +807,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         );
       } else {
         final batterBase = hitParams['p_batter_base'];
-        if (batterBase is! int || batterBase < 1 || batterBase > 3) {
+        // Un HIT_WITH_OUT también puede representar un jonrón (base 4)
+        // cuando los corredores anotan normalmente. ERROR no admite HR.
+        final maxBatterBase = action == 'ERROR' ? 3 : 4;
+        if (batterBase is! int || batterBase < 1 ||
+            batterBase > maxBatterBase) {
           throw StateError('Destino del bateador inválido.');
         }
         if (hitParams['p_batter_id'] == null) {
