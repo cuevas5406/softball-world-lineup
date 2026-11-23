@@ -508,12 +508,35 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         final outDetail = outLocations.isEmpty
             ? ''
             : ' · ${outRunnerName.isEmpty ? 'out' : '$outRunnerName: out'} en ${outLocations.join(' y ')}';
+        // En un error defensivo no hubo hit. Describir el destino del
+        // bateador y los avances reales, sin confundirlo con un sencillo.
+        final errorAdvances = <String>[];
+        if (action == 'ERROR') {
+          final batterDestination = int.tryParse('${data['batter_base']}');
+          if (batterDestination != null && batterDestination >= 1 &&
+              batterDestination <= 3) {
+            errorAdvances.add('bateador a ${batterDestination}B');
+          }
+          for (var base = 1; base <= 3; base++) {
+            final destination = int.tryParse(
+              '${runnerDestinations[base - 1]}');
+            if (destination == null) continue;
+            if (destination == 0) {
+              errorAdvances.add('corredor de ${base}B anota');
+            } else if (destination > 0) {
+              errorAdvances.add('corredor de ${base}B a ${destination}B');
+            }
+          }
+        }
+        final errorDetail = action == 'ERROR' && errorAdvances.isNotEmpty
+            ? ' · ${errorAdvances.join(' · ')}'
+            : '';
         return SwlScorePlayRecord(
           inning: (event['inning'] as num?)?.toInt() ?? live.inning,
           isTopInning: event['is_top'] == true,
           description: outsAdded > 0 && (action == 'HIT' || action == 'ERROR')
               ? '$description · $outsAdded out(s)$outDetail'
-              : description,
+              : '$description$errorDetail',
           notation: notation,
           batterName: name.isEmpty ? 'Partido' : name,
         );
