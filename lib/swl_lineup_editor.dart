@@ -223,6 +223,45 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
       body: SafeArea(
         child: Column(
           children: [
+            // El pitcher puede ser un jugador defensivo que no batea.
+            // Mostrar el roster completo, no solamente los bateadores.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: DropdownButtonFormField<String>(
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Pitcher titular (roster completo)',
+                  border: OutlineInputBorder(),
+                ),
+                value: pitcher != null && widget.roster.containsKey(pitcher)
+                    ? pitcher : null,
+                items: [
+                  for (final player in widget.roster.values)
+                    DropdownMenuItem(
+                      value: player.playerId,
+                      child: Text('${player.name} · #${player.number}',
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: (id) {
+                  if (id == null) return;
+                  setState(() {
+                    widget.draft.assign(id, 'P');
+                    if (widget.draft.pitcherBats &&
+                        !widget.draft.selected.contains(id)) {
+                      if (widget.draft.selected.length < 13) {
+                        widget.draft.selected.add(id);
+                      } else {
+                        // No quitar otro bateador automáticamente.
+                        widget.draft.pitcherBats = false;
+                        widget.draft.designatedId = null;
+                      }
+                    }
+                  });
+                  widget.onChanged?.call(widget.draft);
+                },
+              ),
+            ),
             if (pitcher != null)
               SwitchListTile(
                 title: const Text('El pitcher batea'),
