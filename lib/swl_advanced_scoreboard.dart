@@ -2999,9 +2999,6 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           liveButton('OUT', 'OUT', const Color(0xFFF59E0B)),
           liveButton('BATAZO / HIT', 'HIT', const Color(0xFF8B5CF6)),
         ]),
-        if (allowed && snapshot.outs < 2 &&
-            (snapshot.firstOccupied || snapshot.secondOccupied || snapshot.thirdOccupied))
-          TextButton(onPressed: _liveOutMenu, child: const Text('Outs y jugadas especiales')),
         if (allowed)
           TextButton.icon(
             onPressed: _liveActionInFlight ? null : () => _submitLiveAction('ERROR'),
