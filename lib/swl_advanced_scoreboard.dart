@@ -628,6 +628,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           _currentLiveSnapshot = latest;
           _syncLiveSnapshot();
         });
+        // Cuando el otro teléfono anota o cambia la media entrada,
+        // consultar el historial de esa versión sin esperar otro sondeo.
+        if (versionChanged) unawaited(_refreshLiveHistory());
       }
       // Una alineación puede cambiar sin incrementar la versión del marcador.
       // Revalidarla periódicamente evita mostrar un orden al bate obsoleto.
