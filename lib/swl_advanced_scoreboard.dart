@@ -550,6 +550,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           batterName: name.isEmpty ? 'Partido' : name,
         );
       }).toList();
+      // Si el marcador avanzó mientras llegaban los eventos, no mostrar
+      // una lista antigua: pedir otra lectura con la versión más reciente.
+      if (_currentLiveSnapshot?.gameId != live.gameId ||
+          _currentLiveSnapshot?.version != live.version) {
+        _historyQueued = true;
+        return;
+      }
       final followLatest = playsLog.isEmpty ||
           (_historyScroll.hasClients && _historyScroll.position.extentAfter < 32);
       final appended = history.length > playsLog.length;
