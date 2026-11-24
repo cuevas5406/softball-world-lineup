@@ -27,6 +27,10 @@ class ThirdOutHistoryContract(unittest.TestCase):
         self.assertIn("_historyQueued = true;\n        return;", SCOREBOARD)
         self.assertIn("await _refreshLiveHistory();", SCOREBOARD)
 
+    def test_remote_version_change_refreshes_history_immediately(self):
+        self.assertIn("if (versionChanged) unawaited(_refreshLiveHistory());", SCOREBOARD)
+        self.assertIn("if (versionChanged || accessChanged)", SCOREBOARD)
+
     def test_lobby_routes_through_server_rpc(self):
         self.assertIn("swl_v57_batted_ball", LOBBY)
         self.assertIn("'p_batter_id': plateBatterId", LOBBY)
