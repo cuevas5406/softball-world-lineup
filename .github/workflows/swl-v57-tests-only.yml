@@ -1,8 +1,12 @@
 name: SWL V5.7 - Solo pruebas (sin APK)
 
-# Ejecutar manualmente las pruebas sin compilar ni publicar instaladores.
+# Pruebas sin APK. Los cambios a este workflow ejecutan su validacion.
 on:
   workflow_dispatch:
+  push:
+    branches: [pruebas-de-V5.7]
+    paths:
+      - '.github/workflows/swl-v57-tests-only.yml'
 
 permissions:
   contents: read
