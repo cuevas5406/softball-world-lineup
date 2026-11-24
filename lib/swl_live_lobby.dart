@@ -1970,12 +1970,24 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         awayTeam: _name(game['away_team_id']?.toString() ?? ''),
         liveSnapshot: live ?? SwlLiveScoreboardSnapshot.fromGame(game),
         onLiveDetails: () => _showGameDetails(context),
-        onLiveSubstitute: _myTeamId(_game ?? game) != null && live?.status == 'IN_PROGRESS'
+        onLiveSubstitute: _myTeamId(_game ?? game) != null &&
+            live?.status == 'IN_PROGRESS' &&
+            !_recording && !_confirmingPlay && !_uncertainPlay &&
+            !_substitutionPending && _uncertainSubstitutionVersion == null
             ? () async {
               final team = _myTeamId(_game ?? game);
               if (team == null) return;
+              // Leer la versión y el turno actuales antes de sustituir:
+              // el rival puede haber anotado mientras se abría el menú.
+              await _refreshGame(afterCurrent: true);
+              if (!mounted || _game == null ||
+                  _game!['status'] != 'IN_PROGRESS' ||
+                  _myTeamId(_game!) != team ||
+                  _substitutionPending || _uncertainSubstitutionVersion != null) return;
               await _loadSavedLineups();
-              if (mounted) await _substituteBatter(team, _name(team), dialogHost: context);
+              if (mounted && context.mounted) {
+                await _substituteBatter(team, _name(team), dialogHost: context);
+              }
             } : null,
         onLivePitcher: _myTeamId(_game ?? game) != null &&
             live?.status == 'IN_PROGRESS' &&
