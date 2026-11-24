@@ -7,6 +7,10 @@ on:
     branches: [pruebas-de-V5.7]
     paths:
       - '.github/workflows/swl-v57-tests-only.yml'
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
 
 permissions:
   contents: read
