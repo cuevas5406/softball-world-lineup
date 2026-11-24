@@ -62,6 +62,13 @@ void main() {
     }
   });
 
+  test('El knockout de diez carreras sigue vigente después de la cuarta', () {
+    expect(end(5, 10, 0, top: true), SwlFinishReason.knockout);
+    expect(end(5, 0, 10, top: true), isNull);
+    expect(end(5, 0, 10, complete: false), isNull);
+    expect(end(5, 0, 10), SwlFinishReason.knockout);
+  });
+
   test('En extras el empate continúa y el visitante debe cerrar la baja', () {
     expect(end(7, 9, 9), isNull);
     expect(end(8, 9, 10, top: true), isNull);

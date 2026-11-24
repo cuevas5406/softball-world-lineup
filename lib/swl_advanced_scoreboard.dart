@@ -172,12 +172,14 @@ class SwlScoreGameSnapshot {
 }
 
 class SwlAdvancedScoreboard extends StatefulWidget {
-  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveSubstitute, this.onLivePitcher, this.onMatchDecision, this.homeLogo, this.awayLogo});
+  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveSubstitute, this.onLivePitcher, this.onLiveSwapFielders, this.onLiveRefresh, this.onMatchDecision, this.homeLogo, this.awayLogo});
   final String? homeLogo;
   final String? awayLogo;
   final VoidCallback? onLiveDetails;
   final VoidCallback? onLiveSubstitute;
   final VoidCallback? onLivePitcher;
+  final VoidCallback? onLiveSwapFielders;
+  final Future<void> Function()? onLiveRefresh;
   final SwlLiveScoreboardSnapshot? liveSnapshot;
   final Future<void> Function(int version, String action)? onMatchDecision;
   final Future<void> Function(int version, String action, Map<String, dynamic>? hitParams)? onLiveAction;
@@ -1909,18 +1911,31 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 await _refreshLiveScore(forceLineups: true);
                 if (!mounted) return;
                 await _refreshLiveHistory();
+                if (mounted) await widget.onLiveRefresh?.call();
               }),
-          if (widget.onLiveSubstitute != null || widget.onLivePitcher != null)
+          if (widget.onLiveSubstitute != null || widget.onLivePitcher != null ||
+              widget.onLiveSwapFielders != null)
             PopupMenuButton<String>(
               tooltip: 'Cambios de jugadores',
               icon: const Icon(Icons.swap_horiz, color: Colors.amber),
-              onSelected: (item) => item == 'batter'
-                  ? widget.onLiveSubstitute?.call() : widget.onLivePitcher?.call(),
+              onSelected: (item) {
+                if (_liveActionInFlight) return;
+                switch (item) {
+                  case 'batter':
+                    widget.onLiveSubstitute?.call();
+                  case 'pitcher':
+                    widget.onLivePitcher?.call();
+                  case 'fielders':
+                    widget.onLiveSwapFielders?.call();
+                }
+              },
               itemBuilder: (_) => [
                 if (widget.onLiveSubstitute != null)
                   const PopupMenuItem(value: 'batter', child: Text('Sustituir bateador')),
                 if (widget.onLivePitcher != null)
                   const PopupMenuItem(value: 'pitcher', child: Text('Cambiar pitcher')),
+                if (widget.onLiveSwapFielders != null)
+                  const PopupMenuItem(value: 'fielders', child: Text('Intercambiar posiciones defensivas')),
               ],
             ),
           if (widget.onLiveDetails != null)

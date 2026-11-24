@@ -30,6 +30,9 @@ jobs:
           cache: true
       - name: Resolver dependencias
         run: flutter pub get
+      - name: Analizar Flutter
+        run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings lib test
+
       - name: Pruebas Flutter
         run: flutter test --reporter expanded
       - name: Contratos V5.7 (sin SQL)

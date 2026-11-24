@@ -23,7 +23,7 @@ class SwlGameFinishRules {
     final lead = home - away;
     final margin = switch (inning) {
       3 => superMargin,
-      4 => knockoutMargin,
+      >= 4 => knockoutMargin,
       _ => null,
     };
     if (margin != null && margin > 0) {
