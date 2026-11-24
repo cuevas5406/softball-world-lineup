@@ -22,6 +22,11 @@ class ThirdOutHistoryContract(unittest.TestCase):
         self.assertNotIn("outCount != 1 || live.outs >= 2", SCOREBOARD)
         self.assertIn("'count_runs_on_third_out': timePlay && countRunsOnThirdOut", SCOREBOARD)
 
+    def test_stale_history_does_not_replace_newer_score(self):
+        self.assertIn("_currentLiveSnapshot?.version != live.version", SCOREBOARD)
+        self.assertIn("_historyQueued = true;\n        return;", SCOREBOARD)
+        self.assertIn("await _refreshLiveHistory();", SCOREBOARD)
+
     def test_lobby_routes_through_server_rpc(self):
         self.assertIn("swl_v57_batted_ball", LOBBY)
         self.assertIn("'p_batter_id': plateBatterId", LOBBY)
