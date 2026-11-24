@@ -244,18 +244,25 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
                     ),
                 ],
                 onChanged: (id) {
-                  if (id == null) return;
+                  if (id == null || id == pitcher) return;
+                  // No convertir silenciosamente el pitcher a "no batea":
+                  // eso dejaría el DH sin asignar y bloquearía el guardado.
+                  if (widget.draft.pitcherBats &&
+                      !widget.draft.selected.contains(id) &&
+                      widget.draft.selected.length >= 13) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text(
+                        'Ya hay 13 bateadores. Retira uno del orden antes de '
+                        'asignar un nuevo pitcher que batea.',
+                      )),
+                    );
+                    return;
+                  }
                   setState(() {
                     widget.draft.assign(id, 'P');
                     if (widget.draft.pitcherBats &&
                         !widget.draft.selected.contains(id)) {
-                      if (widget.draft.selected.length < 13) {
-                        widget.draft.selected.add(id);
-                      } else {
-                        // No quitar otro bateador automáticamente.
-                        widget.draft.pitcherBats = false;
-                        widget.draft.designatedId = null;
-                      }
+                      widget.draft.selected.add(id);
                     }
                   });
                   widget.onChanged?.call(widget.draft);
