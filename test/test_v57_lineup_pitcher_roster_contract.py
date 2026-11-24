@@ -11,7 +11,8 @@ class PitcherRosterContract(unittest.TestCase):
         self.assertIn("widget.draft.assign(id, 'P');", EDITOR)
 
     def test_pitcher_batting_and_full_order_are_guarded(self):
-        self.assertIn("widget.draft.selected.length < 13", EDITOR)
+        self.assertIn("widget.draft.selected.length >= 13", EDITOR)
+        self.assertIn("Retira uno del orden antes de", EDITOR)
         self.assertIn("widget.draft.pitcherBats = false;", EDITOR)
         self.assertIn("widget.draft.designatedId = null;", EDITOR)
 
