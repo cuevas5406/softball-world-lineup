@@ -1979,8 +1979,14 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             } : null,
         onLivePitcher: _myTeamId(_game ?? game) != null &&
             live?.status == 'IN_PROGRESS' &&
-            _myTeamId(_game ?? game) != live?.battingTeamId
-            ? () async { if (live != null) await _changePitcher(live); } : null,
+            _myTeamId(_game ?? game) != live?.battingTeamId &&
+            live?.balls == 0 && live?.strikes == 0 &&
+            !_substitutionPending && _uncertainSubstitutionVersion == null
+            ? () async {
+                if (live == null) return;
+                await _loadSavedLineups();
+                if (mounted) await _changePitcher(live);
+              } : null,
         onMatchDecision: _myTeamId(game) == null ? null : (version, action) async {
           try {
             await _client.rpc('swl_v56_match_decision', params: {
