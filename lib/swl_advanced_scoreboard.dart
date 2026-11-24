@@ -2974,7 +2974,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           style: ElevatedButton.styleFrom(backgroundColor: color,
             disabledBackgroundColor: const Color(0xFF26313C),
             padding: const EdgeInsets.symmetric(vertical: 15)),
-          onPressed: allowed ? () => _submitLiveAction(action) : null,
+          onPressed: allowed
+              ? () => action == 'OUT'
+                  ? _liveOutMenu()
+                  : _submitLiveAction(action)
+              : null,
           onLongPress: allowed && action == 'STRIKE' ? () => _submitLiveAction('FOUL') : null,
           child: Text(label, style: const TextStyle(fontSize: 12,
             fontWeight: FontWeight.w900, color: Colors.white)),
