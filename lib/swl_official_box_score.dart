@@ -117,6 +117,18 @@ Future<Map<String, dynamic>> swlReadSpectatorGame(String id) async {
 
 String _display(Object? value) => value?.toString() ?? '-';
 
+/// Promedio calculado solo con AB y H confirmados; nunca se infiere un cero.
+String swlBattingAverage(Map<String, dynamic> row) {
+  final ab = row['ab'];
+  final hits = row['h'];
+  if (ab is! num || hits is! num || ab < 0 || hits < 0 || hits > ab) {
+    return '-';
+  }
+  if (ab == 0) return '.000';
+  return (hits / ab).toStringAsFixed(3).replaceFirst('0.', '.');
+}
+
+
 class SwlOfficialBoxScore {
   SwlOfficialBoxScore(this.data) {
     if (data['status'] != 'OFFICIAL')
@@ -220,21 +232,17 @@ class SwlOfficialBoxScore {
               pw.Text('Estadísticas disponibles insuficientes.')
             else
               table([
-                ['Pelotero', 'AB', 'H', 'HR', 'BB', 'K', 'SF'],
+                ['Pelotero', 'AB', 'R', 'H', '2B', '3B', 'HR', 'RBI', 'BB', 'K', 'AVG'],
                 for (final row in batting.where(
                   (row) => row['team_id'] == side(key)['id'],
                 ))
                   [
                     for (final col in [
-                      'name',
-                      'ab',
-                      'h',
-                      'hr',
-                      'bb',
-                      'k',
-                      'sf',
+                      'name', 'ab', 'r', 'h', 'doubles', 'triples',
+                      'hr', 'rbi', 'bb', 'k',
                     ])
                       _display(row[col]),
+                    swlBattingAverage(row),
                   ],
               ]),
           ],
