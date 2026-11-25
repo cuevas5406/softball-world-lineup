@@ -259,8 +259,16 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         final action = event['event_type']?.toString().toUpperCase();
         final totals = batterStats.putIfAbsent(playerId,
             () => {'ab': 0, 'hits': 0, 'bb': 0, 'rbi': 0, 'sf': 0});
+        // Las impulsadas solo pertenecen a resultados de turno confirmados.
+        // Nunca contar RBI de RUNNER_MOVE, RUN, UNDO_OUT o eventos auxiliares.
+        const completedActions = {'HIT', 'OUT', 'DOUBLE_PLAY', 'ERROR', 'SACRIFICE_FLY'};
+        final completedPlateAppearance = completedActions.contains(action) ||
+            ((action == 'BALL' || action == 'STRIKE') &&
+                data['plate_appearance_completed'] == true);
         final rbi = data['rbi'] ?? data['rbis'];
-        if (rbi is num && rbi >= 0 && rbi <= 4) totals['rbi'] = totals['rbi']! + rbi.toInt();
+        if (completedPlateAppearance && rbi is int && rbi >= 0 && rbi <= 4) {
+          totals['rbi'] = totals['rbi']! + rbi;
+        }
         if (action == 'HIT') {
           totals['ab'] = totals['ab']! + 1;
           totals['hits'] = totals['hits']! + 1;
