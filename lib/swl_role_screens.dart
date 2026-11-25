@@ -157,8 +157,14 @@ class _SwlPlayerScreenState extends State<SwlPlayerScreen> {
       );
       if (!mounted || image == null || _client.auth.currentUser?.id != uid)
         return;
-      if (await image.length() > 2 * 1024 * 1024)
-        throw StateError('Imagen demasiado grande.');
+      if (await image.length() > 2 * 1024 * 1024) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Selecciona una foto JPEG de hasta 2 MB.')),
+          );
+        }
+        return;
+      }
       final bytes = await image.readAsBytes();
       if (bytes.length < 3 ||
           bytes[0] != 255 ||
@@ -181,7 +187,10 @@ class _SwlPlayerScreenState extends State<SwlPlayerScreen> {
             fileOptions: const FileOptions(contentType: 'image/jpeg'),
           )
           .timeout(const Duration(seconds: 25));
-      if (_client.auth.currentUser?.id != uid) return;
+      if (_client.auth.currentUser?.id != uid) {
+        // La sesión cambió durante la subida: nunca vincular la foto a otra cuenta.
+        return;
+      }
       await _client
           .rpc(
             'swl_v57_update_my_player',
