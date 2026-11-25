@@ -239,6 +239,11 @@ class SwlOfficialBoxScore {
               ]),
           ],
           pw.Header(level: 1, text: 'Pitcheo'),
+          pw.Text(
+            'Los registros de pitcheo se muestran sin atribución de equipo '
+            'cuando el origen no la proporciona.',
+            style: const pw.TextStyle(fontSize: 8),
+          ),
           if (pitching.isEmpty)
             pw.Text('Estadísticas disponibles insuficientes.')
           else
