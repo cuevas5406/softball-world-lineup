@@ -127,23 +127,40 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
       final suffix = Random.secure().nextInt(1 << 30).toRadixString(16);
       final path =
           '${widget.teamId}/${DateTime.now().microsecondsSinceEpoch}-$suffix.$type';
-      await _client.storage
-          .from(swlLogoBucket)
-          .uploadBinary(
-            path,
-            bytes,
-            fileOptions: FileOptions(contentType: 'image/$type'),
-          )
-          .timeout(const Duration(seconds: 25));
-      if (!mounted || _client.auth.currentUser?.id != userId) return;
-      final saved = await _client.rpc('swl_v57_set_team_logo', params: {
-        'p_team_id': widget.teamId, 'p_path': path,
-        'p_expected_url': _url, 'p_public_url': _publicUrl(path),
-      }).timeout(const Duration(seconds: 12));
+      try {
+        await _client.storage
+            .from(swlLogoBucket)
+            .uploadBinary(
+              path,
+              bytes,
+              fileOptions: FileOptions(contentType: 'image/$type'),
+            )
+            .timeout(const Duration(seconds: 25));
+      } catch (_) {
+        // A timeout may occur after Storage has accepted the object.
+        await _tryRemoveUnlinkedLogo(path);
+        rethrow;
+      }
+      if (!mounted || _client.auth.currentUser?.id != userId) {
+        await _tryRemoveUnlinkedLogo(path);
+        return;
+      }
+      Object? saved;
+      try {
+        saved = await _client.rpc('swl_v57_set_team_logo', params: {
+          'p_team_id': widget.teamId, 'p_path': path,
+          'p_expected_url': _url, 'p_public_url': _publicUrl(path),
+        }).timeout(const Duration(seconds: 12));
+      } catch (_) {
+        await _tryRemoveUnlinkedLogo(path);
+        rethrow;
+      }
+      final previousUrl = _url;
       if (mounted) setState(() {
         _url = saved as String?;
         _message = 'Logo actualizado.';
       });
+      if (previousUrl != saved) await _tryRemovePreviousLogo(previousUrl);
     } catch (error) {
       if (mounted)
         setState(
@@ -155,6 +172,34 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _tryRemoveUnlinkedLogo(String path) async {
+    try {
+      final rows = await _client
+          .from('teams')
+          .select('logo_url')
+          .eq('id', widget.teamId)
+          .limit(1)
+          .timeout(const Duration(seconds: 8));
+      if (rows.length != 1) return;
+      if (rows.first['logo_url'] == _publicUrl(path)) return;
+      await _client.storage
+          .from(swlLogoBucket)
+          .remove([path])
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      // Best-effort cleanup; Storage RLS must reject referenced objects.
+    }
+  }
+
+  Future<void> _tryRemovePreviousLogo(String? oldUrl) async {
+    if (oldUrl == null) return;
+    final prefix = _publicUrl('${widget.teamId}/');
+    if (!oldUrl.startsWith(prefix)) return;
+    final path = oldUrl.substring(_publicUrl('').length);
+    if (path.isEmpty || path.contains('?') || path.contains('#')) return;
+    await _tryRemoveUnlinkedLogo(path);
   }
 
   String _publicUrl(String path) =>
@@ -175,11 +220,13 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
         ),
       );
       if (!mounted || accepted != true) return;
+      final previousUrl = _url;
       await _client.rpc('swl_v57_set_team_logo', params: {
         'p_team_id': widget.teamId, 'p_path': null,
-        'p_expected_url': _url, 'p_public_url': null,
+        'p_expected_url': previousUrl, 'p_public_url': null,
       }).timeout(const Duration(seconds: 12));
       if (mounted) setState(() { _url = null; _message = 'Logo retirado.'; });
+      await _tryRemovePreviousLogo(previousUrl);
     } catch (error) {
       if (mounted) setState(() => _message = error is PostgrestException
           ? error.message : 'No se confirmó la eliminación. Sal y vuelve a consultar el equipo.');
