@@ -81,10 +81,10 @@ language sql stable set search_path = '' as $$
     count(*) filter(where event_type='HIT' and event_data->>'batter_base'='4'),
     coalesce(sum(case
       when jsonb_typeof(e.event_data->'rbi') = 'number'
-        and (e.event_data->>'rbi')::numeric between 0 and 4
+        and (e.event_data->>'rbi')::numeric in (0,1,2,3,4)
         then (e.event_data->>'rbi')::bigint
       when jsonb_typeof(e.event_data->'rbis') = 'number'
-        and (e.event_data->>'rbis')::numeric between 0 and 4
+        and (e.event_data->>'rbis')::numeric in (0,1,2,3,4)
         then (e.event_data->>'rbis')::bigint
       else 0 end),0)::bigint,
     count(*) filter(where event_type='BALL' and event_data->>'plate_appearance_completed'='true'),
