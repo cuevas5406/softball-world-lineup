@@ -233,7 +233,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       const pageSize = 250;
       for (var offset = 0; ; offset += pageSize) {
         final page = await client.from('swl_game_events')
-            .select('event_type,event_data,inning,is_top')
+            .select('version,event_type,event_data,inning,is_top')
             .eq('game_id', live.gameId).lte('version', live.version)
             .order('version').order('id').range(offset, offset + pageSize - 1)
             .timeout(const Duration(seconds: 12));
@@ -241,8 +241,18 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         if (page.length < pageSize) break;
         if (!mounted || _currentLiveSnapshot?.version != live.version) return;
       }
+      // Las correcciones UNDO_OUT no deben mantener el turno original
+      // en las estadísticas preliminares de la alineación.
+      final revertedVersions = <String>{
+        for (final event in rawEvents)
+          if (event['event_type']?.toString().toUpperCase() == 'UNDO_OUT')
+            if (event['event_data'] case final Map data)
+              if (data['reverts_version'] != null)
+                data['reverts_version'].toString(),
+      };
       final batterStats = <String, Map<String, int>>{};
       for (final event in rawEvents) {
+        if (revertedVersions.contains(event['version']?.toString())) continue;
         final data = event['event_data'];
         if (data is! Map || data['batter_id'] == null) continue;
         final playerId = data['batter_id'].toString();
