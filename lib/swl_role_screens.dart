@@ -207,11 +207,15 @@ class _SwlPlayerScreenState extends State<SwlPlayerScreen> {
       final outs = total('outs');
       return '${outs ~/ 3}.${outs % 3} IP · ${total('h')} H · ${total('bb')} BB · ${total('k')} K';
     }
+    String availableTotal(String field) =>
+        rows.every((row) => row[field] is num) ? total(field).toString() : '—';
     final atBats = total('ab');
     final average = atBats == 0
         ? '—'
         : (total('h') / atBats).toStringAsFixed(3);
-    return '$average AVG · $atBats AB · ${total('h')} H · ${total('hr')} HR · ${total('bb')} BB · ${total('k')} K';
+    return '$average AVG · $atBats AB · ${availableTotal('r')} R · '
+        '${total('h')} H · ${availableTotal('doubles')} 2B · ${availableTotal('triples')} 3B · '
+        '${total('hr')} HR · ${availableTotal('rbi')} RBI · ${total('bb')} BB · ${total('k')} K';
   }
 
   Widget _showProfile(Map<String, dynamic> profile) {

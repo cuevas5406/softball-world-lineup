@@ -16,6 +16,7 @@ DECLARE
  bbase integer; moves integer[]:=ARRAY[NULL,NULL,NULL]::integer[]; occ boolean[]; players uuid[];
  new_players uuid[]:=ARRAY[NULL,NULL,NULL]::uuid[]; new_occ boolean[]:=ARRAY[false,false,false];
  i integer; d integer; target integer; last_target integer; outs_made integer:=0; scored integer:=0;
+ scoring_players uuid[]:=ARRAY[]::uuid[];
  terminal boolean:=false; retired_source integer; forced_out boolean:=false; confirmed_timing boolean:=false;
  new_bases jsonb; new_innings jsonb; new_home integer; new_away integer; result jsonb;
 BEGIN
@@ -73,7 +74,9 @@ BEGIN
        IF target<last_target OR (target=last_target AND target<>4) THEN
          RAISE EXCEPTION 'RUNNER_ORDER_INVALID'; END IF;
        last_target:=target;
-       IF d=0 THEN scored:=scored+1;
+       IF d=0 THEN
+         scored:=scored+1;
+         scoring_players:=array_append(scoring_players,players[i]);
        ELSE
          IF new_occ[d] THEN RAISE EXCEPTION 'DUPLICATE_OCCUPIED_BASE'; END IF;
          new_occ[d]:=true;new_players[d]:=players[i];
@@ -87,9 +90,13 @@ BEGIN
    forced_out := moves[retired_source] = -(retired_source+1)
      AND (retired_source=1 OR (occ[1] AND (retired_source=2 OR occ[2])));
    scored:=0;
+   scoring_players:=ARRAY[]::uuid[];
    IF confirmed_timing AND NOT forced_out THEN
      FOR i IN (retired_source+1)..3 LOOP
-       IF moves[i]=0 THEN scored:=scored+1; END IF;
+       IF moves[i]=0 THEN
+         scored:=scored+1;
+         scoring_players:=array_append(scoring_players,players[i]);
+       END IF;
      END LOOP;
    END IF;
    new_occ:=ARRAY[false,false,false];
@@ -126,7 +133,7 @@ BEGIN
  VALUES(g.id,(SELECT auth.uid()),team,g.inning,g.is_top,'HIT',
  jsonb_build_object('scope','hit_with_runner_out','previous_version',g.version,'batter_id',p_batter_id,
  'batting_order',batting_order,'batter_base',bbase,'first_to',moves[1],'second_to',moves[2],
- 'third_to',moves[3],'outs_added',1,'runs',scored,
+ 'third_to',moves[3],'outs_added',1,'runs',scored,'scoring_player_ids',to_jsonb(scoring_players),'rbi',scored,
  'third_out',terminal,'out_at_base',-moves[retired_source],
  'out_runner_id',players[(SELECT x.i FROM unnest(moves) WITH ORDINALITY AS x(destination,i) WHERE x.destination<0 LIMIT 1)]::text),g.version+1);
  PERFORM public.swl_v56_accumulate_pitching(g,pitcher,'HIT');

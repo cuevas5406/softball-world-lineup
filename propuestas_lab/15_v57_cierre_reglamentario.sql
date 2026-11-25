@@ -62,6 +62,25 @@ end;
 $$;
 revoke all on function public.swl_v56_close_after_play(public.swl_live_games) from public, anon, authenticated;
 
+-- Adjunta las identidades al evento recién creado dentro de la misma transacción.
+create or replace function public.swl_v57_attach_scoring_players(
+  prior public.swl_live_games, action text, scoring_players uuid[]
+) returns void language sql set search_path = '' as $$
+  update public.swl_game_events e
+    set event_data = coalesce(e.event_data, '{}'::jsonb) || jsonb_build_object(
+      'scoring_player_ids', to_jsonb(scoring_players),
+      'rbi', cardinality(scoring_players))
+  from public.swl_live_games g
+  where g.id = prior.id and g.version = prior.version + 1
+    and e.game_id = g.id and e.version = g.version and e.event_type::text = action
+    and e.batting_team_id = case when prior.is_top then prior.away_team_id else prior.home_team_id end
+    and array_position(scoring_players,null) is null
+    and cardinality(scoring_players) = case when prior.is_top
+      then g.away_runs - prior.away_runs else g.home_runs - prior.home_runs end;
+$$;
+revoke all on function public.swl_v57_attach_scoring_players(public.swl_live_games,text,uuid[])
+  from public, anon, authenticated;
+
 create or replace function public.swl_v56_record_plate_action(
   p_game_id uuid, p_expected_version bigint, p_action text, p_batter_id uuid
 ) returns jsonb language plpgsql security definer set search_path = '' as $$
@@ -77,6 +96,11 @@ begin
   result := public.swl_v53_record_plate_action(p_game_id => p_game_id, p_expected_version => p_expected_version,
       p_action => p_action, p_batter_id => p_batter_id);
   perform public.swl_v56_track_base_players(g,p_action,p_batter_id,null,null,null,null);
+  if p_action = 'BALL' and g.balls = 3 then
+    perform public.swl_v57_attach_scoring_players(g, 'BALL',
+      case when public.swl_v56_base_occupancy(g.bases_state) = array[true,true,true]
+        then array[g.swl_base_players[3]] else array[]::uuid[] end);
+  end if;
   perform public.swl_v56_accumulate_pitching(g, pitcher, p_action);
   perform public.swl_v56_close_after_play(g);
   return result;
@@ -98,6 +122,14 @@ begin
     p_batter_id => p_batter_id, p_batter_base => p_batter_base,
     p_first_to => p_first_to, p_second_to => p_second_to, p_third_to => p_third_to);
   perform public.swl_v56_track_base_players(g,'HIT',p_batter_id,p_batter_base,p_first_to,p_second_to,p_third_to);
+  perform public.swl_v57_attach_scoring_players(g, 'HIT', array(
+    select scorer from (values
+      (p_batter_id, p_batter_base = 4),
+      (g.swl_base_players[1], p_first_to = 0),
+      (g.swl_base_players[2], p_second_to = 0),
+      (g.swl_base_players[3], p_third_to = 0)
+    ) as candidates(scorer, scored) where scored
+  ));
   perform public.swl_v56_accumulate_pitching(g, pitcher, 'HIT');
   perform public.swl_v56_close_after_play(g);
   return result;

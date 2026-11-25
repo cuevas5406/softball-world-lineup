@@ -27,7 +27,10 @@ class ThirdOutHitProposal(unittest.TestCase):
         self.assertIn('scored:=0;', SQL)
         self.assertIn('IF confirmed_timing AND NOT forced_out THEN', SQL)
         self.assertIn('FOR i IN (retired_source+1)..3 LOOP', SQL)
-        self.assertIn('IF moves[i]=0 THEN scored:=scored+1;', SQL)
+        self.assertRegex(SQL, r'IF moves\[i\]=0 THEN\s+scored:=scored\+1;'
+                             r'\s+scoring_players:=array_append\(scoring_players,players\[i\]\);')
+        self.assertIn('scored:=0;\n   scoring_players:=ARRAY[]::uuid[];', SQL)
+        self.assertIn("'scoring_player_ids',to_jsonb(scoring_players)", SQL)
         self.assertIn("jsonb_typeof(p_data->'count_runs_on_third_out') <> 'boolean'", SQL)
 
     def test_records_out_and_keeps_finish_rules(self):

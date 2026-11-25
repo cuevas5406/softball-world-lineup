@@ -20,6 +20,7 @@ declare
   dest int;
   destinations int[];
   runs int := 0;
+  scoring_players uuid[] := ARRAY[]::uuid[];
   made int := 0;
   previous_dest int := 0;
   next_dest int;
@@ -171,6 +172,7 @@ begin
       end loop;
       if dest = 0 then
         runs := 1;
+        scoring_players := array_append(scoring_players, runner);
       else
         if resulting[dest] then
           raise exception 'La base de destino ya está ocupada.';
@@ -212,7 +214,9 @@ begin
           raise exception 'Los corredores no pueden rebasarse ni ocupar la misma base.';
         end if;
         previous_dest := next_dest;
-        if dest = 0 then runs := runs+1;
+        if dest = 0 then
+          runs := runs + 1;
+          scoring_players := array_append(scoring_players, players[i]);
         else
           resulting[dest] := true;
           moved[dest] := players[i];
@@ -314,7 +318,7 @@ begin
       on conflict (game_id,team_id) do update set next_order = excluded.next_order;
   end if;
   details := p_data || jsonb_build_object('plate_appearance_completed',plate,'batter_id',p_batter_id,
-    'runner_id',runner, 'runs',runs, 'outs',made,'sf',case when p_action = 'SACRIFICE_FLY' then 1 else 0 end,
+    'runner_id',runner, 'runs',runs, 'scoring_player_ids',to_jsonb(scoring_players), 'outs',made,'sf',case when p_action = 'SACRIFICE_FLY' then 1 else 0 end,
     'ab',case when p_action = 'DOUBLE_PLAY' then 1 else 0 end,
     'rbi',case when p_action = 'SACRIFICE_FLY' then runs else 0 end,
     'last_out_player_id', case when p_action in ('RUNNER_OUT','DOUBLE_PLAY') then runner

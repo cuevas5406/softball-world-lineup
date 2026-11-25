@@ -1,3 +1,4 @@
+import 'swl_code_input.dart';
 import 'swl_role_screens.dart';
 import 'swl_push_notifications.dart';
 import 'swl_player_positions.dart';
@@ -686,7 +687,7 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
 
   Future<void> _findPlayerByCode() async {
     if (_busy || _searching) return;
-    final code = _searchCode.text.trim().toUpperCase();
+    final code = swlCode(_searchCode.text);
     setState(() { _selectedPlayer = null; _notice = null; });
     if (_teamId != null) _loadRoster();
     if (!RegExp(r'^SWL-[A-Z0-9]+$').hasMatch(code)) {
@@ -829,9 +830,15 @@ class _SwlPlayersLabPanelState extends State<SwlPlayersLabPanel> {
             _teamSelector(),
             TextField(
               controller: _searchCode,
-              textCapitalization: TextCapitalization.characters,
+              keyboardType: TextInputType.number,
+              inputFormatters: const [SwlCodeInputFormatter(allowLegacyLetters: true)],
               onChanged: (_) => setState(() { _selectedPlayer = null; _notice = null; }),
-              decoration: const InputDecoration(labelText: 'Código SWL del pelotero (ej. SWL-0002)'),
+              decoration: const InputDecoration(
+                labelText: 'Código SWL del pelotero',
+                floatingLabelBehavior: FloatingLabelBehavior.always,
+                prefixText: swlCodePrefix,
+                hintText: '0002',
+              ),
             ),
             OutlinedButton.icon(
               onPressed: (_busy || _searching) ? null : _findPlayerByCode,
@@ -1660,9 +1667,14 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
                     title: const Text("Ingresar PIN de Juego", style: TextStyle(color: Colors.amber, fontSize: 15)),
                     content: TextField(
                       controller: pinCtrl,
-                      textCapitalization: TextCapitalization.characters,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: const [SwlCodeInputFormatter(maxDigits: 6)],
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 2),
-                      decoration: const InputDecoration(hintText: "Ej: SWL-482"),
+                      decoration: const InputDecoration(
+                        labelText: 'PIN del partido (6 números)',
+                        floatingLabelBehavior: FloatingLabelBehavior.always,
+                        prefixText: swlCodePrefix,
+                      ),
                     ),
                     actions: [
                       TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text("CANCELAR")),
@@ -1671,7 +1683,7 @@ class _MasterHomeTabState extends State<MasterHomeTab> {
                         onPressed: () {
                           if (pinCtrl.text.isNotEmpty) {
                             Navigator.pop(dCtx);
-                            widget.onGameJoined(pinCtrl.text.trim().toUpperCase());
+                            widget.onGameJoined(swlCode(pinCtrl.text));
                           }
                         },
                         child: const Text("ENLAZAR", style: TextStyle(color: Colors.black)),

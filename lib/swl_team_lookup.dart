@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'swl_code_input.dart';
+
 const swlLogoBucket = 'swl-team-logos';
 
 String? swlTeamLogo(Map<String, dynamic>? team) {
@@ -32,15 +34,29 @@ Future<List<Map<String, dynamic>>> swlQueryTeams(
 Future<List<Map<String, dynamic>>> swlSearchTeams(
   SupabaseClient client, String term, {String? excludeId}
 ) async {
+  final trimmed = term.trim();
+  final suffix = swlCodeSuffix(trimmed);
+  final code = RegExp(r'^[0-9]+$').hasMatch(suffix) ? swlCode(suffix) : null;
   try {
     final rows = await client.rpc('swl_v57_search_teams', params: {
-      'p_term': term.trim(), 'p_exclude': excludeId,
+      'p_term': code ?? trimmed, 'p_exclude': excludeId,
     }).timeout(const Duration(seconds: 12));
     return List<Map<String, dynamic>>.from(rows as List);
   } on PostgrestException catch (error) {
     if (error.code != 'PGRST202' && error.code != '42883') rethrow;
   }
-  final safe = term.trim().replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
+  if (code != null) {
+    try {
+      final query = client.from('teams')
+          .select('id,name,province,team_code')
+          .eq('team_code', code);
+      return await (excludeId == null ? query : query.neq('id', excludeId))
+          .limit(20).timeout(const Duration(seconds: 12));
+    } on PostgrestException catch (error) {
+      if (error.code != '42703') rethrow;
+    }
+  }
+  final safe = trimmed.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
   final results = await Future.wait([
     for (final column in ['name', 'province'])
       swlQueryTeams((columns) async {
@@ -81,6 +97,47 @@ class SwlTeamBadge extends StatelessWidget {
   }
 }
 
+class SwlTeamSearchField extends StatelessWidget {
+  const SwlTeamSearchField({
+    super.key,
+    required this.controller,
+    required this.onChanged,
+    required this.decoration,
+    this.byCode = false,
+    this.onModeChanged,
+    this.style,
+    this.maxLength,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final InputDecoration decoration;
+  final bool byCode;
+  final ValueChanged<bool>? onModeChanged;
+  final TextStyle? style;
+  final int? maxLength;
+
+  @override
+  Widget build(BuildContext context) => TextField(
+    controller: controller,
+    onChanged: onChanged,
+    style: style,
+    maxLength: maxLength,
+    keyboardType: byCode ? TextInputType.number : TextInputType.text,
+    inputFormatters: byCode ? const [SwlCodeInputFormatter()] : null,
+    decoration: decoration.copyWith(
+      labelText: byCode ? 'Código SWL del equipo' : decoration.labelText,
+      prefixText: byCode ? swlCodePrefix : null,
+      floatingLabelBehavior: byCode ? FloatingLabelBehavior.always : null,
+      suffixIcon: onModeChanged == null ? null : IconButton(
+        tooltip: byCode ? 'Buscar por nombre o localidad' : 'Buscar por código SWL',
+        icon: Icon(byCode ? Icons.search : Icons.numbers),
+        onPressed: () => onModeChanged!(!byCode),
+      ),
+    ),
+  );
+}
+
 class SwlTeamLookup extends StatefulWidget {
   const SwlTeamLookup({
     super.key,
@@ -100,6 +157,7 @@ class _SwlTeamLookupState extends State<SwlTeamLookup> {
   int _request = 0;
   bool _loading = false;
   bool _external = false;
+  bool _byCode = false;
   String? _error;
   Map<String, dynamic>? _selected;
   List<Map<String, dynamic>> _matches = [];
@@ -149,11 +207,19 @@ class _SwlTeamLookupState extends State<SwlTeamLookup> {
         value: _external,
         onChanged: (value) {
           _external = value;
+          if (_byCode && value) _controller.clear();
+          _byCode = false;
           _changed(_controller.text);
         },
       ),
-      TextField(
+      SwlTeamSearchField(
         controller: _controller,
+        byCode: _byCode,
+        onModeChanged: _external ? null : (value) {
+          _byCode = value;
+          _controller.clear();
+          _changed('');
+        },
         onChanged: _changed,
         maxLength: 100,
         decoration: InputDecoration(
@@ -184,6 +250,7 @@ class _SwlTeamLookupState extends State<SwlTeamLookup> {
           onTap: () {
             _controller.text = team['name']?.toString() ?? '';
             setState(() {
+              _byCode = false;
               _selected = team;
               _matches = [];
             });

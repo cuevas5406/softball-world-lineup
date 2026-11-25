@@ -70,40 +70,99 @@ end;
 $$;
 
 create function swl_private.game_batting(p_game uuid,p_player uuid default null)
-returns table(player_id uuid,team_id uuid,ab bigint,h bigint,doubles bigint,triples bigint,hr bigint,rbi bigint,bb bigint,k bigint,sf bigint)
+returns table(player_id uuid,team_id uuid,ab bigint,h bigint,doubles bigint,triples bigint,hr bigint,rbi bigint,bb bigint,k bigint,sf bigint,r bigint)
 language sql stable set search_path = '' as $$
-  select p.id,e.batting_team_id,
-    count(*) filter(where event_type in ('HIT','ERROR','DOUBLE_PLAY','OUT')
-       or (event_type='STRIKE' and event_data->>'plate_appearance_completed'='true')),
-    count(*) filter(where event_type='HIT'),
-    count(*) filter(where event_type='HIT' and event_data->>'batter_base'='2'),
-    count(*) filter(where event_type='HIT' and event_data->>'batter_base'='3'),
-    count(*) filter(where event_type='HIT' and event_data->>'batter_base'='4'),
-    coalesce(sum(case
-      when jsonb_typeof(e.event_data->'rbi') = 'number'
-        and (e.event_data->>'rbi')::numeric in (0,1,2,3,4)
-        then (e.event_data->>'rbi')::bigint
-      when jsonb_typeof(e.event_data->'rbis') = 'number'
-        and (e.event_data->>'rbis')::numeric in (0,1,2,3,4)
-        then (e.event_data->>'rbis')::bigint
-      else 0 end),0)::bigint,
-    count(*) filter(where event_type='BALL' and event_data->>'plate_appearance_completed'='true'),
-    count(*) filter(where event_type='STRIKE' and event_data->>'plate_appearance_completed'='true'),
-    count(*) filter(where event_type='SACRIFICE_FLY')
-  from public.swl_game_events e
-  join public.swl_live_games g on g.id=e.game_id
-  join public.players p on p.id::text=e.event_data->>'batter_id'
-  where e.game_id=p_game and e.version <= g.version
-    and g.status='OFFICIAL' and (p_player is null or p.id=p_player)
-    and not exists (select 1 from public.swl_game_events correction
-      where correction.game_id=e.game_id and correction.event_type='UNDO_OUT'
-        and correction.version <= g.version
-        and correction.event_data->>'reverts_version'=e.version::text)
-    and (event_type in ('HIT','ERROR','DOUBLE_PLAY','OUT','SACRIFICE_FLY')
-      or (event_type in ('STRIKE','BALL') and event_data->>'plate_appearance_completed'='true'))
-  group by p.id,e.batting_team_id;
+  with official_game as (
+    select * from public.swl_live_games where id=p_game and status='OFFICIAL'
+  ), active_events as (
+    select e.* from public.swl_game_events e join official_game g on g.id=e.game_id
+    where e.version <= g.version
+      and e.batting_team_id in (g.home_team_id,g.away_team_id)
+      and not exists (select 1 from public.swl_game_events correction
+        where correction.game_id=e.game_id and correction.event_type='UNDO_OUT'
+          and correction.version <= g.version
+          and correction.event_data->>'reverts_version'=e.version::text)
+  ), batting as (
+    select p.id as player_id,e.batting_team_id as team_id,
+      count(*) filter(where event_type in ('HIT','ERROR','DOUBLE_PLAY','OUT')
+         or (event_type='STRIKE' and event_data->>'plate_appearance_completed'='true')) as ab,
+      count(*) filter(where event_type='HIT') as h,
+      count(*) filter(where event_type='HIT' and event_data->>'batter_base'='2') as doubles,
+      count(*) filter(where event_type='HIT' and event_data->>'batter_base'='3') as triples,
+      count(*) filter(where event_type='HIT' and event_data->>'batter_base'='4') as hr,
+      case when count(*) filter (where credit.rbi is null and event_type in
+          ('HIT','BALL','SACRIFICE_FLY')) = 0
+        then coalesce(sum(credit.rbi),0)::bigint end as rbi,
+      count(*) filter(where event_type='BALL' and event_data->>'plate_appearance_completed'='true') as bb,
+      count(*) filter(where event_type='STRIKE' and event_data->>'plate_appearance_completed'='true') as k,
+      count(*) filter(where event_type='SACRIFICE_FLY') as sf
+    from active_events e
+    join public.players p on p.id::text=e.event_data->>'batter_id'
+    cross join lateral (
+      select coalesce(
+        case when jsonb_typeof(e.event_data->'rbi')='number'
+          and e.event_data->>'rbi' ~ '^[0-4]$' then (e.event_data->>'rbi')::int end,
+        case when jsonb_typeof(e.event_data->'rbis')='number'
+          and e.event_data->>'rbis' ~ '^[0-4]$' then (e.event_data->>'rbis')::int end,
+        case when e.event_data->>'runs'='0' then 0 end
+      ) as rbi
+    ) credit
+    where (p_player is null or p.id=p_player)
+      and (event_type in ('HIT','ERROR','DOUBLE_PLAY','OUT','SACRIFICE_FLY')
+        or (event_type in ('STRIKE','BALL') and event_data->>'plate_appearance_completed'='true'))
+    group by p.id,e.batting_team_id
+  ), runs_by_player as (
+    select p.id as player_id,e.batting_team_id as team_id,count(*) as runs
+    from active_events e
+    cross join lateral (
+      select distinct value as player_id
+      from jsonb_array_elements_text(case
+        when jsonb_typeof(e.event_data->'scoring_player_ids')='array'
+          then e.event_data->'scoring_player_ids'
+        else '[]'::jsonb end)
+    ) scorer
+    join public.players p on p.id::text=scorer.player_id
+    where e.event_type in ('HIT','ERROR','BALL','RUNNER_MOVE','SACRIFICE_FLY')
+    group by p.id,e.batting_team_id
+  ), team_totals as (
+    select team_id,sum(runs) as attributed_runs from runs_by_player group by team_id
+  )
+  select coalesce(b.player_id,r.player_id),coalesce(b.team_id,r.team_id),
+    coalesce(b.ab,0),coalesce(b.h,0),coalesce(b.doubles,0),coalesce(b.triples,0),
+    coalesce(b.hr,0),case when b.player_id is null then 0 else b.rbi end,coalesce(b.bb,0),coalesce(b.k,0),coalesce(b.sf,0),
+    case when coalesce(t.attributed_runs,0) =
+      case when coalesce(b.team_id,r.team_id)=g.home_team_id then g.home_runs else g.away_runs end
+      then coalesce(r.runs,0) end
+  from batting b full join runs_by_player r using (player_id,team_id)
+  cross join official_game g
+  left join team_totals t on t.team_id=coalesce(b.team_id,r.team_id)
+  where p_player is null or coalesce(b.player_id,r.player_id)=p_player;
 $$;
 revoke all on function swl_private.game_batting(uuid,uuid) from public, authenticated, anon;
+
+-- El equipo que defendía se obtiene de la versión exacta de la jugada.
+-- Si falta el evento o hay equipos al bate contradictorios, queda sin asignar.
+create function swl_private.game_pitching(p_game uuid,p_player uuid default null)
+returns table(player_id uuid,team_id uuid,outs bigint,h bigint,bb bigint,k bigint)
+language sql stable set search_path = '' as $$
+  select stats.pitcher_id,defense.team_id,
+    sum(stats.outs),sum(stats.hits),sum(stats.walks),sum(stats.strikes_out)
+  from public.swl_live_games g
+  join public.swl_v56_pitching_events stats on stats.game_id=g.id
+  cross join lateral (
+    select case
+      when bool_and(e.batting_team_id=g.home_team_id) then g.away_team_id
+      when bool_and(e.batting_team_id=g.away_team_id) then g.home_team_id
+    end as team_id
+    from public.swl_game_events e
+    where e.game_id=g.id and e.version=stats.version
+      and e.batting_team_id in (g.home_team_id,g.away_team_id)
+  ) defense
+  where g.id=p_game and g.status='OFFICIAL' and stats.version<=g.version
+    and (p_player is null or stats.pitcher_id=p_player)
+  group by stats.pitcher_id,defense.team_id;
+$$;
+revoke all on function swl_private.game_pitching(uuid,uuid) from public, authenticated, anon;
 
 create function public.swl_v57_my_player() returns jsonb
 language sql stable security definer set search_path = '' as $$
@@ -115,7 +174,7 @@ language sql stable security definer set search_path = '' as $$
       order by r.is_refuerzo,t.name) from public.rosters r join public.teams t on t.id=r.team_id
       where r.player_id=p.id and r.removed_at is null),'[]'::jsonb),
     'games',coalesce((select jsonb_agg(to_jsonb(rows) order by rows.date desc,rows.code) from (
-      select g.created_at as date,g.game_pin as code,t.id as team_id,t.name as team_name,b.ab,b.h,b.hr,b.bb,b.k,b.sf
+      select g.created_at as date,g.game_pin as code,t.id as team_id,t.name as team_name,b.ab,b.h,b.doubles,b.triples,b.hr,b.bb,b.k,b.sf,b.r,b.rbi
       from public.swl_live_games g
       join lateral swl_private.game_batting(g.id,p.id) b on true
       join public.teams t on t.id=b.team_id
@@ -123,19 +182,11 @@ language sql stable security definer set search_path = '' as $$
     ) rows),'[]'::jsonb),
     'pitching',coalesce((select jsonb_agg(to_jsonb(rows) order by rows.date desc, rows.code) from (
       select g.created_at as date,g.game_pin as code,t.id as team_id,t.name as team_name,
-        sum(stats.outs) as outs,sum(stats.hits) as h,sum(stats.walks) as bb,sum(stats.strikes_out) as k
-      from public.swl_v56_pitching_events stats join public.swl_live_games g on g.id=stats.game_id
-      left join lateral (
-        select batting_team_id from public.swl_game_events e
-        where e.game_id=g.id and e.version=stats.version
-          and e.batting_team_id in (g.home_team_id,g.away_team_id)
-        order by e.id desc limit 1
-      ) event on true
-      left join public.teams t on t.id=case when event.batting_team_id=g.home_team_id then g.away_team_id
-        when event.batting_team_id=g.away_team_id then g.home_team_id end
-      where stats.pitcher_id=p.id and g.status='OFFICIAL'
-        and stats.version <= g.version
-      group by g.id,g.created_at,g.game_pin,t.id,t.name
+        stats.outs,stats.h,stats.bb,stats.k
+      from public.swl_live_games g
+      join lateral swl_private.game_pitching(g.id,p.id) stats on true
+      left join public.teams t on t.id=stats.team_id
+      where g.status='OFFICIAL'
     ) rows),'[]'::jsonb))
   from swl_private.player_identity i join public.players p on p.id=i.player_id
   where i.account_id=auth.uid();
@@ -163,11 +214,12 @@ language sql stable security definer set search_path = '' as $$
         order by b.team_id,p.last_name,p.first_name)
       from swl_private.game_batting(g.id) b join public.players p on p.id=b.player_id),'[]'::jsonb) end,
     'pitching',case when g.status='OFFICIAL' then coalesce((
-      select jsonb_agg(to_jsonb(summary) order by summary.name) from (
+      select jsonb_agg(to_jsonb(summary) order by summary.team_name nulls last,summary.name,summary.id) from (
         select p.id,concat_ws(' ',p.first_name,p.last_name) as name,
-          sum(e.outs) as outs,sum(e.hits) as h,sum(e.walks) as bb,sum(e.strikes_out) as k
-        from public.swl_v56_pitching_events e join public.players p on p.id=e.pitcher_id
-        where e.game_id=g.id and e.version<=g.version group by p.id,p.first_name,p.last_name
+          stats.team_id,t.name as team_name,stats.outs,stats.h,stats.bb,stats.k
+        from swl_private.game_pitching(g.id) stats
+        join public.players p on p.id=stats.player_id
+        left join public.teams t on t.id=stats.team_id
       ) summary),'[]'::jsonb) end
   )
   from public.swl_live_games g join public.teams home on home.id=g.home_team_id

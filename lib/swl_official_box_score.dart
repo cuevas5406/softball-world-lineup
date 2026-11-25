@@ -204,6 +204,10 @@ class SwlOfficialBoxScore {
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
+        theme: pw.ThemeData.withFont(
+          base: pw.Font.ttf(await rootBundle.load('assets/fonts/NotoSans-Regular.ttf')),
+          bold: pw.Font.ttf(await rootBundle.load('assets/fonts/NotoSans-Bold.ttf')),
+        ),
         footer: (context) =>
             pw.Text('Softball World Lineup · ${context.pageNumber}'),
         build: (_) => [
@@ -257,10 +261,11 @@ class SwlOfficialBoxScore {
             pw.Text('Estadísticas disponibles insuficientes.')
           else
             table([
-              ['Pitcher', 'IP', 'H', 'BB', 'K'],
+              ['Pitcher', 'Equipo', 'IP', 'H', 'BB', 'K'],
               for (final row in pitching)
                 [
                   _display(row['name']),
+                  _display(row['team_name']),
                   if (row['outs'] case final num outs)
                     '${outs ~/ 3}.${outs % 3}'
                   else

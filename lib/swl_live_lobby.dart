@@ -10,7 +10,7 @@ import 'swl_live_scoreboard_snapshot.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'swl_code_input.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'swl_roster_repository.dart';
@@ -45,6 +45,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   final _client = Supabase.instance.client;
   final _pin = TextEditingController();
   final _teamSearch = TextEditingController();
+  bool _teamSearchByCode = false;
   List<Map<String, dynamic>> _matches = [];
   String? _homeId;
   Map<String, dynamic>? _away;
@@ -157,15 +158,13 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   }
 
   Future<void> _joinFromPin(String supplied) async {
-    final normalized = supplied.trim().toUpperCase();
-    final digits = normalized.startsWith('SWL-')
-        ? normalized.substring(4) : normalized;
+    final digits = swlCodeSuffix(supplied);
     if (!RegExp(r'^\d{6}$').hasMatch(digits)) {
       setState(() => _error = 'El PIN real debe contener 6 números (SWL-XXXXXX).');
       return;
     }
     _pin.text = digits;
-    final pin = 'SWL-$digits';
+    final pin = swlCode(digits);
     await _run(() async {
       // El PIN identifica un único partido. No aceptar una respuesta RPC
       // perteneciente a otro encuentro ni ejecutar una segunda unión.
@@ -2125,8 +2124,17 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             }),
           ),
           const SizedBox(height: 12),
-          TextField(
+          SwlTeamSearchField(
             controller: _teamSearch,
+            byCode: _teamSearchByCode,
+            onModeChanged: (value) {
+              setState(() {
+                _teamSearchByCode = value;
+                _away = null;
+                _teamSearch.clear();
+              });
+              _searchTeams('');
+            },
             style: const TextStyle(color: Colors.white),
             decoration: const InputDecoration(
               labelText: 'Buscar visitante por nombre, localidad o código SWL',
@@ -2148,6 +2156,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
                   style: const TextStyle(color: Colors.white54)),
               onTap: () => setState(() {
                 _away = t;
+                _teamSearchByCode = false;
                 _matches = [];
                 _teamSearch.text = t['name']?.toString() ?? '';
                 _searchTimer?.cancel();
@@ -2176,12 +2185,12 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           TextField(
             controller: _pin,
             keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly,
-              LengthLimitingTextInputFormatter(6)],
+            inputFormatters: const [SwlCodeInputFormatter(maxDigits: 6)],
             style: const TextStyle(color: Colors.white),
             decoration: const InputDecoration(
               labelText: 'PIN del partido (6 números)',
-              prefixText: 'SWL-',
+              floatingLabelBehavior: FloatingLabelBehavior.always,
+              prefixText: swlCodePrefix,
               prefixStyle: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold),
               labelStyle: TextStyle(color: Colors.white70)),
           ),

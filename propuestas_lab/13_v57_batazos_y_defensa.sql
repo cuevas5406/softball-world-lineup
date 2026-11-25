@@ -21,6 +21,7 @@ declare
   dest integer;
   previous_dest integer;
   runs integer := 0;
+  scoring_players uuid[] := ARRAY[]::uuid[];
   made integer := 0;
   last_out uuid;
   last_out_source integer;
@@ -75,6 +76,7 @@ begin
     runners[batter_base] := p_batter_id;
   else
     runs := 1; -- El bateador anota en jonrón.
+    scoring_players := array_append(scoring_players, p_batter_id);
   end if;
   for i in 1..3 loop
     dest := drives[i];
@@ -92,6 +94,7 @@ begin
       last_out_source := i;
     elsif dest = 0 then
       runs := runs + 1;
+      scoring_players := array_append(scoring_players, g.swl_base_players[i]);
       previous_dest := 4;
     else
       if dest > 3 or dest < previous_dest or resulting[dest] or
@@ -123,6 +126,7 @@ begin
   end if;
   terminal := g.outs + made = 3;
   if terminal then
+    scoring_players := ARRAY[]::uuid[];
     -- Nunca contar carreras si el tercer out es forzado. En los demás
     -- casos, el anotador debe confirmar que la carrera llegó ANTES del out.
     -- No inferir cronología a partir de la base de origen del corredor.
@@ -140,6 +144,7 @@ begin
       for i in (last_out_source + 1)..3 loop
         if drives[i] = 0 then
           runs := runs + 1;
+          scoring_players := array_append(scoring_players, g.swl_base_players[i]);
         end if;
       end loop;
     end if;
@@ -169,7 +174,7 @@ begin
     on conflict (game_id,team_id) do update set next_order = excluded.next_order;
 
   details := p_data || jsonb_build_object('scope','hit_with_runners','batter_id',p_batter_id,'batter_base',batter_base,
-    'plate_appearance_completed',true,'ab',1,'hits',hit_count,'runs',runs,'outs',made,
+    'plate_appearance_completed',true,'ab',1,'hits',hit_count,'runs',runs,'scoring_player_ids',to_jsonb(scoring_players),'outs',made,
     'rbi',case when hit_count = 1 then runs else 0 end,
     'charged_team_id',case when hit_count = 0 then defense end,
     'last_out_player_id',case when made >= 1 then last_out end);
