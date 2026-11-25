@@ -82,8 +82,11 @@ language sql stable set search_path = '' as $$
     count(*) filter(where event_type='BALL' and event_data->>'plate_appearance_completed'='true'),
     count(*) filter(where event_type='STRIKE' and event_data->>'plate_appearance_completed'='true'),
     count(*) filter(where event_type='SACRIFICE_FLY')
-  from public.swl_game_events e join public.players p on p.id::text=e.event_data->>'batter_id'
-  where e.game_id=p_game and (p_player is null or p.id=p_player)
+  from public.swl_game_events e
+  join public.swl_live_games g on g.id=e.game_id
+  join public.players p on p.id::text=e.event_data->>'batter_id'
+  where e.game_id=p_game and e.version <= g.version
+    and g.status='OFFICIAL' and (p_player is null or p.id=p_player)
     and not exists (select 1 from public.swl_game_events correction
       where correction.game_id=e.game_id and correction.event_type='UNDO_OUT'
         and correction.event_data->>'reverts_version'=e.version::text)
