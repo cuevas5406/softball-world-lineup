@@ -1,3 +1,4 @@
+import 'swl_role_screens.dart';
 import 'swl_push_notifications.dart';
 import 'swl_player_positions.dart';
 import 'swl_roster_repository.dart';
@@ -1376,11 +1377,13 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('$title: $body'),
         action: SnackBarAction(label: 'AGENDA', onPressed: () {
-          if (mounted) setState(() => _currentIndex = 2);
+          if (mounted && _authorizedTeams.isNotEmpty) {
+            setState(() { _currentIndex = 2; _chosenRole = 'manager'; });
+          }
         }),
       ));
       // Al tocar una notificación de reto, ir a Agenda.
-      if (message.data['type'] == 'challenge' || message.data['screen'] == 'agenda') {
+      if (_experience == 'manager' && (message.data['type'] == 'challenge' || message.data['screen'] == 'agenda')) {
         setState(() => _currentIndex = 2);
       }
     });
@@ -1418,37 +1421,24 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
     });
   }
 
-  Future<void> _editMyRole() async {
-    String next = _chosenRole ?? widget.userRole;
-    if (next == 'super_admin') return;
-    final selected = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
-      backgroundColor: const Color(0xFF162131),
-      title: const Text('Mi tipo de cuenta', style: TextStyle(color: Colors.amber)),
-      content: StatefulBuilder(builder: (ctx, update) => DropdownButton<String>(
-        value: next, dropdownColor: const Color(0xFF162131),
-        items: const [
-          DropdownMenuItem(value: 'fan', child: Text('Fanático', style: TextStyle(color: Colors.white))),
-          DropdownMenuItem(value: 'player', child: Text('Pelotero', style: TextStyle(color: Colors.white))),
-          DropdownMenuItem(value: 'manager', child: Text('Mánager', style: TextStyle(color: Colors.white))),
-        ],
-        onChanged: (v) { if (v != null) update(() => next = v); },
-      )),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCELAR')),
-        TextButton(onPressed: () => Navigator.pop(ctx, next), child: const Text('GUARDAR')),
-      ],
-    ));
-    if (selected == null) return;
-    try {
-      await Supabase.instance.client.rpc('swl_set_my_role', params: {'p_role': selected});
-      if (!mounted) return;
-      setState(() => _chosenRole = selected);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tipo de cuenta actualizado. Los permisos del equipo no cambian.')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo actualizar el tipo de cuenta: $e')));
-    }
-  }
+  String get _experience => _chosenRole ?? (_authorizedTeams.isNotEmpty
+      ? 'manager' : switch (widget.userRole) {
+          'manager' || 'super_admin' => 'manager',
+          'player' => 'player',
+          _ => 'fan',
+        });
+
+  Widget _experienceMenu() => PopupMenuButton<String>(
+    icon: const Icon(Icons.manage_accounts, color: Colors.amber),
+    tooltip: 'Cambiar experiencia',
+    initialValue: _experience,
+    onSelected: (role) => setState(() => _chosenRole = role),
+    itemBuilder: (_) => const [
+      PopupMenuItem(value: 'manager', child: Text('Mánager')),
+      PopupMenuItem(value: 'player', child: Text('Pelotero')),
+      PopupMenuItem(value: 'fan', child: Text('Fanático')),
+    ],
+  );
 
   String? pendingJoinPin;
   String? scheduledOpponent;
@@ -1483,6 +1473,21 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
 
   @override
   Widget build(BuildContext context) {
+    final experience = _experience;
+    if (experience != 'manager') {
+      return Scaffold(
+        backgroundColor: const Color(0xFF080D14),
+        appBar: AppBar(
+          title: Text(experience == 'player' ? 'Mi perfil de pelotero' : 'Fanático'),
+          actions: [
+            _experienceMenu(),
+            IconButton(icon: const Icon(Icons.logout, color: Colors.redAccent),
+              tooltip: 'Cerrar sesión', onPressed: _logout),
+          ],
+        ),
+        body: experience == 'player' ? const SwlPlayerScreen() : const SwlFanScreen(),
+      );
+    }
     final activeName = _activeTeam?['name']?.toString() ?? widget.teamName;
     final activeProvince = _activeTeam?['province']?.toString() ?? widget.teamProvince;
     final List<Widget> screens = [
@@ -1512,9 +1517,6 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
       ),
     ];
 
-    String visibleRole = _authorizedTeams.isNotEmpty ? "manager" : (_chosenRole ?? widget.userRole);
-    String badge = visibleRole == "manager" ? "MÁNAGER" : (visibleRole == "player" ? "PELOTERO" : "FANÁTICO");
-
     return Scaffold(
       backgroundColor: const Color(0xFF080D14),
       appBar: AppBar(
@@ -1525,7 +1527,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(color: Colors.amber, borderRadius: BorderRadius.circular(4)),
-              child: Text(badge, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 9)),
+              child: const Text('MÁNAGER', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 9)),
             ),
             const SizedBox(width: 8),
             Expanded(child: _authorizedTeams.length > 1
@@ -1550,7 +1552,7 @@ class _MainAppMasterHubState extends State<MainAppMasterHub> {
           ],
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.manage_accounts, color: Colors.amber), tooltip: 'Mi tipo de cuenta', onPressed: _editMyRole),
+          _experienceMenu(),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent, size: 20),
             tooltip: "Cerrar Sesión",

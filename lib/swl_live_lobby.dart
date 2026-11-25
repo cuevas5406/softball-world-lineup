@@ -1,3 +1,4 @@
+import 'swl_official_box_score.dart';
 import 'swl_lineup_draft.dart';
 import 'swl_lineup_editor.dart';
 import 'swl_history_events.dart';
@@ -1870,7 +1871,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             for (final event in _recentEvents) ListTile(title: Text(_eventDescription(event))),
         ]),
       )),
-      actions: [TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CERRAR'))],
+      actions: [
+        if (game['status'] == 'OFFICIAL') SwlShareBoxScoreButton(gameId: id),
+        TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CERRAR')),
+      ],
     ));
   }
 

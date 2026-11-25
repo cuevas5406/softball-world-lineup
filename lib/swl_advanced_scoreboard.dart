@@ -1,3 +1,4 @@
+import 'swl_official_box_score.dart';
 import 'swl_history_events.dart';
 import 'swl_roster_repository.dart';
 import 'swl_special_play.dart';
@@ -3063,6 +3064,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           ),
         if (allowed)
           TextButton(onPressed: _undoLastLiveOut, child: const Text('Deshacer último OUT')),
+        if (snapshot?.status == 'OFFICIAL') SwlShareBoxScoreButton(gameId: snapshot!.gameId),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
         if (snapshot != null) ..._cancellationButtons(snapshot, userId),
       ]),

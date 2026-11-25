@@ -1,15 +1,17 @@
 name: SWL V5.7 - APK de pruebas
 
-# Compilacion manual: guardar codigo no genera una APK automaticamente.
-# Ejecutar desde GitHub Actions cuando la tanda de correcciones este lista.
+# Ejecutar manualmente o marcar el commit consolidado con [apk-v57].
 on:
   workflow_dispatch:
+  push:
+    branches: [pruebas-de-V5.7]
 
 permissions:
   contents: read
 
 jobs:
   android-apk:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[apk-v57]')
     name: Compilar APK de prueba
     runs-on: ubuntu-latest
     timeout-minutes: 40
