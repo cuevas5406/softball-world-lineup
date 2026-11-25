@@ -97,6 +97,7 @@ language sql stable set search_path = '' as $$
     and g.status='OFFICIAL' and (p_player is null or p.id=p_player)
     and not exists (select 1 from public.swl_game_events correction
       where correction.game_id=e.game_id and correction.event_type='UNDO_OUT'
+        and correction.version <= g.version
         and correction.event_data->>'reverts_version'=e.version::text)
     and (event_type in ('HIT','ERROR','DOUBLE_PLAY','OUT','SACRIFICE_FLY')
       or (event_type in ('STRIKE','BALL') and event_data->>'plate_appearance_completed'='true'))
