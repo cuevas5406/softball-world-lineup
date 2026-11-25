@@ -70,12 +70,14 @@ end;
 $$;
 
 create function swl_private.game_batting(p_game uuid,p_player uuid default null)
-returns table(player_id uuid,team_id uuid,ab bigint,h bigint,hr bigint,bb bigint,k bigint,sf bigint)
+returns table(player_id uuid,team_id uuid,ab bigint,h bigint,doubles bigint,triples bigint,hr bigint,bb bigint,k bigint,sf bigint)
 language sql stable set search_path = '' as $$
   select p.id,e.batting_team_id,
     count(*) filter(where event_type in ('HIT','ERROR','DOUBLE_PLAY','OUT')
        or (event_type='STRIKE' and event_data->>'plate_appearance_completed'='true')),
     count(*) filter(where event_type='HIT'),
+    count(*) filter(where event_type='HIT' and event_data->>'batter_base'='2'),
+    count(*) filter(where event_type='HIT' and event_data->>'batter_base'='3'),
     count(*) filter(where event_type='HIT' and event_data->>'batter_base'='4'),
     count(*) filter(where event_type='BALL' and event_data->>'plate_appearance_completed'='true'),
     count(*) filter(where event_type='STRIKE' and event_data->>'plate_appearance_completed'='true'),
