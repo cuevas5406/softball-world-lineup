@@ -134,6 +134,7 @@ language sql stable security definer set search_path = '' as $$
       left join public.teams t on t.id=case when event.batting_team_id=g.home_team_id then g.away_team_id
         when event.batting_team_id=g.away_team_id then g.home_team_id end
       where stats.pitcher_id=p.id and g.status='OFFICIAL'
+        and stats.version <= g.version
       group by g.id,g.created_at,g.game_pin,t.id,t.name
     ) rows),'[]'::jsonb))
   from swl_private.player_identity i join public.players p on p.id=i.player_id
