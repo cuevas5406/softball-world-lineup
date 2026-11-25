@@ -144,7 +144,12 @@ begin
       from jsonb_array_elements(batting_order) as slot(item)
       where slot.item ->> 'player_id' = players[source]::text;
     if turn_order is null then raise exception 'El corredor no pertenece al turno activo.'; end if;
-    perform public.swl_v53_substitute_batter(g.id,team,turn_order,players[source],runner,lineup_revision,g.version);
+    if exists (select 1 from public.swl_game_lineups l
+        where l.game_id = g.id and l.team_id = team and l.pitcher_id is not null) then
+      perform public.swl_v56_substitute_batter(g.id,team,turn_order,players[source],runner,lineup_revision,g.version);
+    else
+      perform public.swl_v53_substitute_batter(g.id,team,turn_order,players[source],runner,lineup_revision,g.version);
+    end if;
     update public.swl_live_games set swl_base_players = array_replace(swl_base_players, players[source], runner),
       swl_ghost_player = case when swl_ghost_player = players[source] then runner else swl_ghost_player end
       where id = g.id;
@@ -231,15 +236,17 @@ begin
     if btrim(p_data ->> 'player_id') = 'LAST_OUT' then
       -- Leer primero como texto: un evento histórico incompleto no debe
       -- provocar una excepción de conversión a UUID.
-      select case when event_type::text in ('RUNNER_OUT','DOUBLE_PLAY')
+      select case when event_type::text in ('RUNNER_OUT','DOUBLE_PLAY','HIT')
           then coalesce(nullif(btrim(event_data ->> 'last_out_player_id'), ''),
-                        nullif(btrim(event_data ->> 'runner_id'), ''))
+                        nullif(btrim(event_data ->> 'runner_id'), ''),
+                        nullif(btrim(event_data ->> 'out_runner_id'), ''))
           else coalesce(nullif(btrim(event_data ->> 'last_out_player_id'), ''),
                         nullif(btrim(event_data ->> 'batter_id'), '')) end
         into runner_text
         from public.swl_game_events
         where game_id = g.id and batting_team_id = team and
           (event_type::text in ('OUT','RUNNER_OUT','SACRIFICE_FLY','DOUBLE_PLAY')
+           or (event_type::text = 'HIT' and event_data -> 'third_out' = 'true'::jsonb)
            or (event_type::text = 'STRIKE'
                and event_data -> 'plate_appearance_completed' = 'true'::jsonb))
         order by version desc nulls last, id desc limit 1;

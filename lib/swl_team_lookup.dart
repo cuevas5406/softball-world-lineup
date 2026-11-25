@@ -16,6 +16,7 @@ Future<List<Map<String, dynamic>>> swlQueryTeams(
   Future<List<Map<String, dynamic>>> Function(String) read,
 ) async {
   for (final columns in [
+    'id,name,province,team_code,logo_path,logo_url',
     'id,name,province,logo_path,logo_url',
     'id,name,province,logo_url',
   ]) {
@@ -26,6 +27,30 @@ Future<List<Map<String, dynamic>>> swlQueryTeams(
     }
   }
   return read('id,name,province');
+}
+
+Future<List<Map<String, dynamic>>> swlSearchTeams(
+  SupabaseClient client, String term, {String? excludeId}
+) async {
+  try {
+    final rows = await client.rpc('swl_v57_search_teams', params: {
+      'p_term': term.trim(), 'p_exclude': excludeId,
+    }).timeout(const Duration(seconds: 12));
+    return List<Map<String, dynamic>>.from(rows as List);
+  } on PostgrestException catch (error) {
+    if (error.code != 'PGRST202' && error.code != '42883') rethrow;
+  }
+  final safe = term.trim().replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
+  final results = await Future.wait([
+    for (final column in ['name', 'province'])
+      swlQueryTeams((columns) async {
+        final query = client.from('teams').select(columns).ilike(column, '%$safe%');
+        return await (excludeId == null ? query : query.neq('id', excludeId))
+            .order('name').order('id').limit(20).timeout(const Duration(seconds: 12));
+      }),
+  ]);
+  return {for (final result in results) for (final team in result) team['id']: team}
+      .values.take(20).toList();
 }
 
 class SwlTeamBadge extends StatelessWidget {
@@ -92,23 +117,8 @@ class _SwlTeamLookupState extends State<SwlTeamLookup> {
     });
     if (!_loading) return;
     _debounce = Timer(const Duration(milliseconds: 300), () async {
-      final safe = term
-          .replaceAll(r'\', r'\\')
-          .replaceAll('%', r'\%')
-          .replaceAll('_', r'\_');
-      final client = Supabase.instance.client;
       try {
-        Future<List<Map<String, dynamic>>> search(String columns) async =>
-            await client
-                .from('teams')
-                .select(columns)
-                .neq('id', widget.excludeId)
-                .ilike('name', '%$safe%')
-                .order('name')
-                .order('id')
-                .limit(20)
-                .timeout(const Duration(seconds: 12));
-        final rows = await swlQueryTeams(search);
+        final rows = await swlSearchTeams(Supabase.instance.client, term, excludeId: widget.excludeId);
         if (!mounted || request != _request) return;
         setState(() => _matches = rows);
       } catch (_) {
@@ -149,7 +159,7 @@ class _SwlTeamLookupState extends State<SwlTeamLookup> {
         decoration: InputDecoration(
           labelText: _external
               ? 'Nombre del equipo externo'
-              : 'Busca un equipo registrado',
+              : 'Nombre o código SWL del equipo',
         ),
       ),
       if (_loading) const LinearProgressIndicator(),
@@ -169,7 +179,7 @@ class _SwlTeamLookupState extends State<SwlTeamLookup> {
           leading: SwlTeamBadge(url: swlTeamLogo(team)),
           title: Text(team['name']?.toString() ?? 'Equipo'),
           subtitle: Text(
-            '${team['province'] ?? 'Localidad sin confirmar'}\n${team['id']}',
+            '${team['province'] ?? 'Localidad sin confirmar'}\n${team['team_code'] ?? team['id']}',
           ),
           onTap: () {
             _controller.text = team['name']?.toString() ?? '';

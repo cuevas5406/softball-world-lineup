@@ -91,6 +91,22 @@ void main() {
     );
   });
 
+  test('Ambos mánagers pueden solicitar la cancelación y solo el otro responde', () {
+    final row = game(status: 'SCHEDULED');
+    final scheduled = SwlLiveScoreboardSnapshot.fromGame(row);
+    expect(scheduled.cancellationActions('home-manager'), {'CANCEL_REQUEST'});
+    expect(scheduled.cancellationActions('away-manager'), {'CANCEL_REQUEST'});
+    row['swl_cancel_requested_by'] = 'away-manager';
+    final requested = SwlLiveScoreboardSnapshot.fromGame(row);
+    expect(requested.cancellationActions('away-manager'), isEmpty);
+    expect(requested.cancellationActions('home-manager'), {'CANCEL_ACCEPT', 'CANCEL_REJECT'});
+    expect(requested.cancellationActions('fan'), isEmpty);
+    row['status'] = 'CANCELLED';
+    final cancelled = SwlLiveScoreboardSnapshot.fromGame(row);
+    expect(cancelled.cancellationActions('home-manager'), isEmpty);
+    expect(cancelled.canScore('away-manager'), isFalse);
+  });
+
   test('En FINAL se bloquea la anotación y la firma es individual', () {
     final row = {...game(status: 'FINAL'), 'swl_home_signed': true};
     final finalGame = SwlLiveScoreboardSnapshot.fromGame(row);

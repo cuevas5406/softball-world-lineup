@@ -15,6 +15,7 @@ class SwlLiveScoreboardSnapshot {
   final bool rosterGhostAllowed;
   final String? finishReason;
   final String? finishRequestedBy;
+  final String? cancelRequestedBy;
   final bool homeSigned;
   final bool awaySigned;
   final bool isTop;
@@ -49,6 +50,7 @@ class SwlLiveScoreboardSnapshot {
     this.rosterGhostAllowed = false,
     this.finishReason,
     this.finishRequestedBy,
+    this.cancelRequestedBy,
     this.homeSigned = false,
     this.awaySigned = false,
     required this.isTop,
@@ -94,6 +96,7 @@ class SwlLiveScoreboardSnapshot {
       rosterGhostAllowed: game['swl_allow_roster_ghost'] == true,
       finishReason: game['swl_finish_reason']?.toString(),
       finishRequestedBy: game['swl_finish_requested_by']?.toString(),
+      cancelRequestedBy: game['swl_cancel_requested_by']?.toString(),
       homeSigned: game['swl_home_signed'] == true,
       awaySigned: game['swl_away_signed'] == true,
       isTop: game['is_top'] == true,
@@ -140,6 +143,16 @@ class SwlLiveScoreboardSnapshot {
     if (!hasKnownHalf) return 'No se pudo confirmar qué equipo está al bate.';
     if (userId != battingManagerId) return 'Solo anota el mánager del equipo al bate.';
     return null;
+  }
+
+  Set<String> cancellationActions(String? userId) {
+    if (userId == null || homeManagerId == null || awayManagerId == null ||
+        homeManagerId == awayManagerId ||
+        (userId != homeManagerId && userId != awayManagerId) ||
+        (status != 'SCHEDULED' && status != 'IN_PROGRESS')) return const {};
+    if (cancelRequestedBy == null) return const {'CANCEL_REQUEST'};
+    final other = userId == homeManagerId ? awayManagerId : homeManagerId;
+    return cancelRequestedBy == other ? const {'CANCEL_ACCEPT', 'CANCEL_REJECT'} : const {};
   }
 
   Set<String> matchActions(String? userId) {

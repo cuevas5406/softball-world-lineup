@@ -212,18 +212,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     setState(() => _searching = true);
     _searchTimer = Timer(const Duration(milliseconds: 350), () async {
       try {
-        final safe = term.trim().replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
-        final searches = await Future.wait([
-          for (final column in ['name', 'province'])
-            swlQueryTeams((columns) async => await _client.from('teams').select(columns)
-                .ilike(column, '%$safe%').order('name').order('id').limit(20)),
-        ]).timeout(const Duration(seconds: 12));
-        final teams = {
-          for (final results in searches)
-            for (final team in results)
-              if (team['id'].toString() != _homeId) team['id']: team,
-        }.values.toList();
-        teams.sort((a, b) => a['name'].toString().compareTo(b['name'].toString()));
+        final teams = await swlSearchTeams(_client, term, excludeId: _homeId);
         if (!mounted || searchGeneration != _searchGeneration ||
             _teamSearch.text.trim() != term.trim()) return;
         setState(() {
@@ -1221,7 +1210,25 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       final saved = _savedLineups.where(
           (row) => row['team_id']?.toString() == teamId).firstOrNull;
       final expectedRevision = (saved?['revision'] as num?)?.toInt() ?? 0;
-      final roster = {for (final player in players) player.playerId: player};
+      final rivalPlayers = <String>{};
+      for (final row in _savedLineups) {
+        if (row['team_id']?.toString() == teamId) continue;
+        rivalPlayers.addAll(swlConfirmedBattingSlots(row['lineup'])
+            .map((slot) => slot['player_id']?.toString()).whereType<String>());
+        if (row['defensive_positions'] case final Map defense) {
+          rivalPlayers.addAll(defense.keys.whereType<String>());
+        }
+        if (row['pitcher_id'] case final String pitcher) rivalPlayers.add(pitcher);
+      }
+      final roster = {
+        for (final player in players)
+          if (!rivalPlayers.contains(player.playerId)) player.playerId: player,
+      };
+      if (players.any((player) => rivalPlayers.contains(player.playerId))) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Los peloteros confirmados por el rival no pueden jugar en ambos equipos.'),
+        ));
+      }
       final slots = swlConfirmedBattingSlots(saved?['lineup']);
       final selected = <String>{
         for (final slot in slots)
@@ -1325,7 +1332,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
                         ? 'La alineación cambió en otro dispositivo. Actualízala antes de guardar.'
                         : e.toString().contains('LINEUP_REVISION')
                   ? 'La alineación cambió en otro dispositivo. Actualízala antes de guardar.'
-                  : 'No se pudo confirmar la alineación: $e')));
+                  : (_eligibilityMessage(e) ?? 'No se pudo confirmar la alineación: $e'))));
     } finally {
       if (mounted) setState(() => _savingLineup = false);
     }
@@ -1514,7 +1521,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     } catch (e) {
       if (!mounted || _game?['id']?.toString() != gameId) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('No se pudo verificar la sustitución. '
+        content: Text(_eligibilityMessage(e) ?? 'No se pudo verificar la sustitución. '
             'Actualiza el partido y revisa la alineación antes de reintentar: $e')));
     } finally {
       if (mounted && _game?['id']?.toString() == gameId) {
@@ -1627,7 +1634,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (!mounted) return;
       final message = error.code == 'PGRST202' || error.code == '42883'
           ? 'LAB aún no tiene habilitada la transición para iniciar el partido.'
-          : error.message;
+          : _eligibilityMessage(error) ?? error.message;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       await _refreshGame(afterCurrent: true);
@@ -1783,7 +1790,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       await _loadSavedLineups(announce: true);
     } catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-        error is PostgrestException && error.code == 'PGRST202'
+        error is PostgrestException && (error.code == 'PGRST202' || error.code == '42883')
           ? 'El intercambio de posiciones requiere la función de LAB.'
           : 'No se confirmó el intercambio: $error')));
     } finally {
@@ -1867,6 +1874,36 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     ));
   }
 
+  String? _eligibilityMessage(Object error) {
+    if (error is! PostgrestException) return null;
+    return switch (error.message) {
+      'PELOTERO_EN_AMBOS_EQUIPOS' => 'Un pelotero ya está confirmado con el equipo rival.',
+      'PELOTERO_EN_OTRO_PARTIDO_O_EQUIPO' => 'Un pelotero ya participa con otro equipo o está en otro partido activo.',
+      'PELOTERO_FUERA_DEL_ROSTER' => 'Un pelotero ya no está activo en el roster del equipo.',
+      _ => null,
+    };
+  }
+
+  Future<void> _sendDecision(String gameId, int version, String action) async {
+    final game = _game;
+    if (game == null || game['id']?.toString() != gameId || _myTeamId(game) == null) {
+      throw StateError('El partido ya no está disponible para este mánager.');
+    }
+    final cancel = action.startsWith('CANCEL_');
+    try {
+      await _client.rpc(cancel ? 'swl_v57_cancel_game' : 'swl_v56_match_decision', params: {
+        'p_game_id': gameId, 'p_expected_version': version, 'p_action': action,
+      }).timeout(const Duration(seconds: 12));
+      await _refreshGame(afterCurrent: true);
+    } on PostgrestException catch (error) {
+      if (error.code == 'PGRST202' || error.code == '42883') {
+        throw StateError(cancel ? 'La cancelación conjunta requiere habilitación en LAB.'
+            : 'Cierre y firmas pendientes de habilitación en LAB.');
+      }
+      rethrow;
+    }
+  }
+
   Widget _lineupPreparationView() {
     final game = _game!;
     final myTeamId = _myTeamId(game);
@@ -1913,7 +1950,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         ),
       if (game['status'] == 'SCHEDULED')
         const Text('El mánager local inicia el partido cuando ambos equipos han confirmado su alineación.'),
-      if (_hasMyLineup(game) || game['status'] == 'IN_PROGRESS')
+      if (_hasMyLineup(game) || game['status'] == 'IN_PROGRESS' ||
+          SwlLiveScoreboardSnapshot.fromGame(game).cancellationActions(_client.auth.currentUser?.id).isNotEmpty ||
+          game['swl_cancel_requested_by'] != null || game['status'] == 'CANCELLED')
         FilledButton.icon(
           onPressed: _openOriginalScoreboardPreview,
           icon: const Icon(Icons.sports_baseball),
@@ -2037,19 +2076,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
                 if (mounted) await _swapFielders(live);
               } : null,
         onLiveRefresh: _myTeamId(game) == null ? null : _reviewPendingSubstitution,
-        onMatchDecision: _myTeamId(game) == null ? null : (version, action) async {
-          try {
-            await _client.rpc('swl_v56_match_decision', params: {
-              'p_game_id': game['id'], 'p_expected_version': version, 'p_action': action,
-            }).timeout(const Duration(seconds: 12));
-            await _refreshGame(afterCurrent: true);
-          } on PostgrestException catch (error) {
-            if (error.code == 'PGRST202' || error.code == '42883') {
-              throw StateError('Cierre y firmas pendientes de habilitación en LAB.');
-            }
-            rethrow;
-          }
-        },
+        onMatchDecision: _myTeamId(game) == null ? null :
+            (version, action) => _sendDecision(game['id'].toString(), version, action),
         homeLogo: _teamLogos[game['home_team_id']],
         awayLogo: _teamLogos[game['away_team_id']],
         onLiveAction: _myTeamId(game) == null ? null :
@@ -2097,7 +2125,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             controller: _teamSearch,
             style: const TextStyle(color: Colors.white),
             decoration: const InputDecoration(
-              labelText: 'Buscar visitante por nombre o provincia',
+              labelText: 'Buscar visitante por nombre, localidad o código SWL',
               prefixIcon: Icon(Icons.search),
               labelStyle: TextStyle(color: Colors.white70)),
             onChanged: (term) {

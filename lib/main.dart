@@ -441,9 +441,11 @@ Future<List<Map<String, dynamic>>> swlAuthorizedTeams() async {
   final allowed = <Map<String, dynamic>>[];
   String? lastId;
   while (true) {
-    final query = client.from('teams').select('id, name, province');
-    final page = await (lastId == null ? query : query.gt('id', lastId))
-        .order('id').limit(pageSize).timeout(const Duration(seconds: 12));
+    final page = await swlQueryTeams((columns) async {
+      final query = client.from('teams').select(columns);
+      return await (lastId == null ? query : query.gt('id', lastId))
+          .order('id').limit(pageSize).timeout(const Duration(seconds: 12));
+    });
     if (page.isEmpty) break;
     for (var start = 0; start < page.length; start += permissionBatchSize) {
       final batch = page.skip(start).take(permissionBatchSize);
@@ -2703,16 +2705,57 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
     if (mounted) _refreshRoster();
   }
 
+  Future<void> _openMyTeams() async {
+    final selected = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(builder: (page) => Scaffold(
+        appBar: AppBar(title: const Text('Mis equipos')),
+        body: FutureBuilder<List<Map<String, dynamic>>>(
+          future: _teams,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) return const Center(child: Text('No se pudieron consultar los equipos.'));
+            if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+            return ListView(children: [
+              if (snapshot.data!.isEmpty)
+                const ListTile(title: Text('Aún no tienes equipos administrados.')),
+              for (final team in snapshot.data!)
+                ListTile(
+                  leading: SwlTeamBadge(url: swlTeamLogo(team)),
+                  title: Text(team['name']?.toString() ?? 'Equipo'),
+                  subtitle: Text([team['province'], team['team_code']].whereType<String>().join(' · ')),
+                  selected: team['id']?.toString() == _selectedTeamId,
+                  onTap: () => Navigator.pop(page, team),
+                ),
+              ListTile(
+                leading: const Icon(Icons.add_circle_outline),
+                title: const Text('Crear equipo'),
+                onTap: () async {
+                  await _openCreateTeam();
+                  if (page.mounted) Navigator.pop(page);
+                },
+              ),
+            ]);
+          },
+        ),
+      )),
+    );
+    if (!mounted || selected == null) return;
+    _selectTeam(selected);
+    widget.onTeamChanged?.call(selected);
+  }
+
   Future<void> _openTeamSettings() async {
     final id = _selectedTeamId;
     if (id == null) return;
     final result = await Navigator.of(context).push<Map<String, String>>(MaterialPageRoute(
       builder: (_) => SwlTeamSettings(teamId: id,
         name: _selectedTeamName ?? widget.teamName,
-        province: _selectedProvince ?? widget.teamProvince,
-        onCreateTeam: _openCreateTeam),
+        province: _selectedProvince ?? widget.teamProvince),
     ));
-    if (!mounted || _selectedTeamId != id || result == null) return;
+    if (!mounted || _selectedTeamId != id) return;
+    if (result == null) {
+      await _reloadAuthorizedTeams();
+      return;
+    }
     final updated = {...?widget.activeTeam, 'id': id,
       'name': result['name'], 'province': result['province']};
     setState(() {
@@ -2748,8 +2791,15 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             child: InkWell(
               onTap: _selectedTeamId == null ? null : _openTeamSettings,
               child: Row(children: [
-              const CircleAvatar(backgroundColor: Colors.amber,
-                child: Icon(Icons.shield, color: Colors.black)),
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _teams,
+                builder: (_, snapshot) => SwlTeamBadge(
+                  url: swlTeamLogo(snapshot.data?.where(
+                    (team) => team['id']?.toString() == _selectedTeamId,
+                  ).firstOrNull),
+                  size: 48,
+                ),
+              ),
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2765,41 +2815,10 @@ class _MasterTeamTabState extends State<MasterTeamTab> {
             ])),
           ),
           const SizedBox(height: 12),
-          FutureBuilder<List<Map<String, dynamic>>>(
-            future: _teams,
-            builder: (context, snapshot) {
-              if (snapshot.hasError) return Text('No se pudieron consultar equipos: ${snapshot.error}',
-                style: const TextStyle(color: Colors.orangeAccent));
-              if (!snapshot.hasData) return const LinearProgressIndicator();
-              final teams = snapshot.data!;
-              if (teams.isEmpty) return const Text('No tienes equipos con permisos activos de administración.');
-              if (teams.length == 1) return Text('Equipo autorizado: ${teams.first['name']} (selección automática)');
-              return DropdownButtonFormField<String>(
-                value: teams.any((t) => t['id']?.toString() == _selectedTeamId)
-                  ? _selectedTeamId : null,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Equipo que administras en Supabase LAB'),
-                items: teams.map((t) => DropdownMenuItem<String>(
-                  value: t['id'].toString(),
-                  child: Text('${t['name']} — ${t['province'] ?? ''}',
-                    overflow: TextOverflow.ellipsis))).toList(),
-                onChanged: (id) {
-                  for (final team in teams) {
-                    if (team['id']?.toString() == id) { _selectTeam(team); widget.onTeamChanged?.call(team); break; }
-                  }
-                },
-              );
-            },
-          ),
-          const SizedBox(height: 12),
-          const Text('GESTIÓN DEL EQUIPO', style: TextStyle(
-            color: Colors.amber, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: _openCreateTeam,
-            icon: const Icon(Icons.add_circle_outline),
-            label: const Text('Crear equipo'),
+            onPressed: _openMyTeams,
+            icon: const Icon(Icons.groups_outlined),
+            label: const Text('Mis equipos'),
           ),
           const SizedBox(height: 12),
           const Text('GESTIÓN DE PELOTEROS', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),

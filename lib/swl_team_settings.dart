@@ -9,13 +9,11 @@ class SwlTeamSettings extends StatefulWidget {
     required this.teamId,
     required this.name,
     required this.province,
-    this.onCreateTeam,
   });
 
   final String teamId;
   final String name;
   final String province;
-  final Future<void> Function()? onCreateTeam;
 
   @override
   State<SwlTeamSettings> createState() => _SwlTeamSettingsState();
@@ -114,6 +112,37 @@ class _SwlTeamSettingsState extends State<SwlTeamSettings> {
     }
   }
 
+  Future<void> _pickColor(String field) async {
+    const colors = [
+      '#FACC15', '#F97316', '#DC2626', '#DB2777', '#9333EA',
+      '#2563EB', '#0891B2', '#16A34A', '#FFFFFF', '#111827',
+    ];
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialog) => SimpleDialog(
+        title: Text(_fields[field]!.$1),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                for (final color in colors)
+                  IconButton(
+                    tooltip: color,
+                    color: Color(int.parse('FF${color.substring(1)}', radix: 16)),
+                    icon: const Icon(Icons.circle, size: 32),
+                    onPressed: () => Navigator.pop(dialog, color),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (mounted && selected != null) _controllers[field]!.text = selected;
+  }
+
   @override
   void dispose() {
     for (final controller in _controllers.values) {
@@ -145,12 +174,6 @@ class _SwlTeamSettingsState extends State<SwlTeamSettings> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              if (widget.onCreateTeam != null)
-                OutlinedButton.icon(
-                  onPressed: () async { await widget.onCreateTeam!(); },
-                  icon: const Icon(Icons.add_circle_outline),
-                  label: const Text('Crear otro equipo'),
-                ),
               SwlTeamLogoEditor(teamId: widget.teamId),
               const SizedBox(height: 16),
               for (final entry in _fields.entries)
@@ -158,7 +181,17 @@ class _SwlTeamSettingsState extends State<SwlTeamSettings> {
                   controller: _controllers[entry.key],
                   enabled: _revision != null && !_saving,
                   maxLength: entry.value.$2,
-                  decoration: InputDecoration(labelText: entry.value.$1),
+                  decoration: InputDecoration(
+                    labelText: entry.value.$1,
+                    suffixIcon: entry.key.endsWith('_color')
+                        ? IconButton(
+                            tooltip: 'Elegir color',
+                            onPressed: _revision == null || _saving
+                                ? null : () => _pickColor(entry.key),
+                            icon: const Icon(Icons.palette_outlined),
+                          )
+                        : null,
+                  ),
                   validator: (raw) {
                     final value = raw?.trim() ?? '';
                     if (entry.key == 'name' && value.isEmpty)

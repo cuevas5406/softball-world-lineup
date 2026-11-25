@@ -47,6 +47,7 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
   String? _url;
   String? _message;
   bool _busy = false;
+  bool _loading = true;
 
   @override
   void initState() {
@@ -66,8 +67,9 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
       if (mounted && !_busy)
         setState(() => _url = swlTeamLogo(team.firstOrNull));
     } catch (_) {
-      if (mounted && !_busy)
-        setState(() => _message = 'No se pudo consultar el logo.');
+      if (mounted) setState(() => _message = 'No se pudo consultar el logo.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -110,6 +112,18 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
       if (!valid)
         throw StateError('El logo debe tener hasta 1600 píxeles por lado.');
       if (!mounted || _client.auth.currentUser?.id != userId) return;
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: const Text('Vista previa del logo'),
+          content: Image.memory(bytes, width: 240, height: 240, fit: BoxFit.contain),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Guardar logo')),
+          ],
+        ),
+      );
+      if (accepted != true || !mounted || _client.auth.currentUser?.id != userId) return;
       final suffix = Random.secure().nextInt(1 << 30).toRadixString(16);
       final path =
           '${widget.teamId}/${DateTime.now().microsecondsSinceEpoch}-$suffix.$type';
@@ -122,17 +136,14 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
           )
           .timeout(const Duration(seconds: 25));
       if (!mounted || _client.auth.currentUser?.id != userId) return;
-      await _client
-          .rpc(
-            'swl_v56_set_team_logo',
-            params: {'p_team_id': widget.teamId, 'p_path': path},
-          )
-          .timeout(const Duration(seconds: 12));
-      if (mounted)
-        setState(() {
-          _url = _client.storage.from(swlLogoBucket).getPublicUrl(path);
-          _message = 'Logo actualizado.';
-        });
+      final saved = await _client.rpc('swl_v57_set_team_logo', params: {
+        'p_team_id': widget.teamId, 'p_path': path,
+        'p_expected_url': _url, 'p_public_url': _publicUrl(path),
+      }).timeout(const Duration(seconds: 12));
+      if (mounted) setState(() {
+        _url = saved as String?;
+        _message = 'Logo actualizado.';
+      });
     } catch (error) {
       if (mounted)
         setState(
@@ -141,6 +152,37 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
               ? 'La carga de logos está pendiente de habilitación en LAB.'
               : 'No se confirmó el logo: $error',
         );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _publicUrl(String path) =>
+      _client.storage.from(swlLogoBucket).getPublicUrl(path);
+
+  Future<void> _remove() async {
+    if (_busy || _url == null) return;
+    setState(() { _busy = true; _message = null; });
+    try {
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          title: const Text('Quitar el logo del equipo'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancelar')),
+            FilledButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Quitar logo')),
+          ],
+        ),
+      );
+      if (!mounted || accepted != true) return;
+      await _client.rpc('swl_v57_set_team_logo', params: {
+        'p_team_id': widget.teamId, 'p_path': null,
+        'p_expected_url': _url, 'p_public_url': null,
+      }).timeout(const Duration(seconds: 12));
+      if (mounted) setState(() { _url = null; _message = 'Logo retirado.'; });
+    } catch (error) {
+      if (mounted) setState(() => _message = error is PostgrestException
+          ? error.message : 'No se confirmó la eliminación. Sal y vuelve a consultar el equipo.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -155,12 +197,14 @@ class _SwlTeamLogoEditorState extends State<SwlTeamLogoEditor> {
           const SizedBox(width: 12),
           Expanded(
             child: OutlinedButton(
-              onPressed: _busy ? null : _change,
+              onPressed: _busy || _loading ? null : _change,
               child: Text(_busy ? 'PROCESANDO…' : 'AGREGAR O CAMBIAR LOGO'),
             ),
           ),
         ],
       ),
+      if (_url != null)
+        TextButton(onPressed: _busy ? null : _remove, child: const Text('Quitar logo')),
       if (_message != null) Text(_message!),
     ],
   );

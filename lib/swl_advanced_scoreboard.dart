@@ -1038,13 +1038,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   final List<SwlScorePlayRecord> playsLog = [];
   final List<SwlScoreGameSnapshot> _history = [];
+  final List<SwlScoreGameSnapshot> _redoHistory = [];
 
   int get currentInningsCount => max(6, max(visitorInningRuns.length, inning));
   int get visitorTotalRuns => _currentLiveSnapshot?.awayRuns ?? visitorInningRuns.whereType<int>().fold(0, (a, b) => a + b);
   int get homeTotalRuns => _currentLiveSnapshot?.homeRuns ?? homeInningRuns.whereType<int>().fold(0, (a, b) => a + b);
 
-  void _saveState() {
-    _history.add(SwlScoreGameSnapshot(
+  SwlScoreGameSnapshot _captureLocalState() => SwlScoreGameSnapshot(
       balls: balls,
       strikes: strikes,
       outs: outs,
@@ -1066,13 +1066,27 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       visitorPitcher: visitorPitcher.copy(),
       homePitcher: homePitcher.copy(),
       plays: List.from(playsLog),
-    ));
+    );
+
+  void _saveState() {
+    _redoHistory.clear();
+    _history.add(_captureLocalState());
     if (_history.length > 30) _history.removeAt(0);
   }
 
   void _undo() {
     if (_history.isEmpty) return;
-    final last = _history.removeLast();
+    _redoHistory.add(_captureLocalState());
+    _restoreLocalState(_history.removeLast());
+  }
+
+  void _redo() {
+    if (_redoHistory.isEmpty) return;
+    _history.add(_captureLocalState());
+    _restoreLocalState(_redoHistory.removeLast());
+  }
+
+  void _restoreLocalState(SwlScoreGameSnapshot last) {
     setState(() {
       balls = last.balls;
       strikes = last.strikes;
@@ -1967,6 +1981,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             tooltip: "Deshacer",
             onPressed: _history.isEmpty ? null : _undo,
           ),
+          if (widget.liveSnapshot == null)
+            IconButton(
+              icon: const Icon(Icons.redo, color: Colors.amber, size: 26),
+              tooltip: 'Rehacer',
+              onPressed: _redoHistory.isEmpty ? null : _redo,
+            ),
         ],
       ),
       body: SafeArea(
@@ -2977,6 +2997,27 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     return [];
   }
 
+  List<Widget> _cancellationButtons(SwlLiveScoreboardSnapshot game, String? userId) {
+    if (game.status == 'CANCELLED') return [const Text('Partido cancelado por ambos mánagers')];
+    if (widget.onMatchDecision == null || userId == null) return [];
+    final actions = game.cancellationActions(userId);
+    if (actions.isEmpty && game.cancelRequestedBy == userId &&
+        (game.status == 'SCHEDULED' || game.status == 'IN_PROGRESS')) {
+      return [const Text('Cancelación solicitada · esperando al otro mánager')];
+    }
+    if (actions.isEmpty) return [];
+    return [Wrap(children: [
+      for (final (action, label) in const [
+        ('CANCEL_REQUEST', 'Solicitar cancelación'),
+        ('CANCEL_ACCEPT', 'Confirmar cancelación'),
+        ('CANCEL_REJECT', 'Rechazar cancelación'),
+      ])
+        if (actions.contains(action))
+          TextButton(onPressed: _liveActionInFlight ? null : () => _sendMatchDecision(game, action),
+            child: Text(label)),
+    ])];
+  }
+
   Widget _buildLiveMainButtons() {
     final snapshot = _currentLiveSnapshot;
     final userId = Supabase.instance.client.auth.currentUser?.id;
@@ -3023,6 +3064,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         if (allowed)
           TextButton(onPressed: _undoLastLiveOut, child: const Text('Deshacer último OUT')),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
+        if (snapshot != null) ..._cancellationButtons(snapshot, userId),
       ]),
     );
   }
