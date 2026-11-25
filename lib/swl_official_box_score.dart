@@ -203,6 +203,7 @@ class SwlOfficialBoxScore {
         .where((row) => row['name'] != null);
     doc.addPage(
       pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
         footer: (context) =>
             pw.Text('Softball World Lineup · ${context.pageNumber}'),
         build: (_) => [
