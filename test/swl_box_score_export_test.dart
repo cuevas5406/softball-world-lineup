@@ -60,6 +60,15 @@ void main() {
     expect(official.tables.last.last.skip(2), ['3', '5', '0']);
   });
 
+  test('AVG usa hits y turnos oficiales, sin inventar datos ausentes', () {
+    expect(swlBattingAverage({'ab': 4, 'h': 1}), '.250');
+    expect(swlBattingAverage({'ab': 3, 'h': 2}), '.667');
+    expect(swlBattingAverage({'ab': 0, 'h': 0}), '.000');
+    expect(swlBattingAverage({'ab': null, 'h': 1}), '-');
+    expect(swlBattingAverage({'ab': 2, 'h': 3}), '-');
+    expect(swlBattingAverage({'ab': -1, 'h': 0}), '-');
+  });
+
   test('Genera un PDF con estadísticas oficiales', () async {
     final bytes = await SwlOfficialBoxScore(result()).pdf();
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
