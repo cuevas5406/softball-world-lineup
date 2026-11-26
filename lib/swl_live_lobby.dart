@@ -1,5 +1,6 @@
 import 'swl_official_box_score.dart';
 import 'swl_lineup_draft.dart';
+import 'swl_lineup_conflicts.dart';
 import 'swl_lineup_editor.dart';
 import 'swl_history_events.dart';
 import 'swl_scoring_recovery.dart';
@@ -1229,6 +1230,87 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   /// Alineación oficial: el servidor valida mánager, equipo y roster activo.
   bool _savingLineup = false;
 
+  Future<Map<String, String>> _lineupAvailability(
+    Map<String, dynamic> game, String teamId, String managerId,
+    Set<String> candidates,
+  ) async {
+    final gameId = game['id'].toString();
+    Map<String, Set<SwlLineupConflict>> conflicts;
+    try {
+      conflicts = await swlReadLineupConflicts(_client, gameId: gameId,
+        teamId: teamId, managerId: managerId, candidates: candidates,
+      ).timeout(const Duration(seconds: 8));
+    } catch (_) {
+      conflicts = swlFindLineupConflicts(
+        gameId: gameId, teamId: teamId, candidates: candidates,
+        visibleGames: {gameId: game['game_pin']?.toString()},
+        lineups: _savedLineups.map((row) => {...row, 'game_id': gameId}),
+        substitutions: const [], pitcherChanges: const [],
+      );
+    }
+    final teams = conflicts.values.expand((rows) => rows)
+        .map((row) => row.teamId).toSet().toList();
+    final names = <String, String>{};
+    if (teams.isNotEmpty) {
+      try {
+        final rows = await _client.from('teams').select('id,name')
+            .inFilter('id', teams).timeout(const Duration(seconds: 4));
+        for (final row in rows) {
+          if (row['id'] case final String id) {
+            if (row['name'] case final String name) names[id] = name;
+          }
+        }
+      } catch (_) {
+        // El motivo y el código visible siguen disponibles.
+      }
+    }
+    return conflicts.map((id, rows) => MapEntry(id, rows.map((row) {
+      final teamName = names[row.teamId] ?? _name(row.teamId);
+      return [
+        row.rival ? 'Vinculado al equipo rival en este partido' : 'Vinculado a otro partido activo',
+        if (teamName != 'Equipo') teamName,
+        if (row.pin case final String pin when pin.isNotEmpty) pin,
+      ].join(' · ');
+    }).join('\n')));
+  }
+
+  Future<bool> _showLineupConflict(
+    Map<String, String> unavailable, Set<String> selected,
+    Map<String, SwlRosterPlayer> roster, Object error,
+  ) async {
+    final visible = selected.where(unavailable.containsKey).toList();
+    return await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Conflictos de alineación'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final id in visible)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('${roster[id]?.name ?? "Pelotero"} · '
+                      '#${roster[id]?.number ?? "—"} · ${roster[id]?.universalId ?? "—"}'),
+                  subtitle: Text(unavailable[id]!),
+                ),
+              Text(visible.isEmpty
+                  ? '${_eligibilityMessage(error)} No se pudo identificar al pelotero con los datos disponibles.'
+                  : 'Estos son los conflictos visibles con tu cuenta. El servidor puede haber detectado otros.'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialog, false),
+              child: const Text('Cerrar')),
+          FilledButton(onPressed: () => Navigator.pop(dialog, true),
+              child: const Text('Corregir mi alineación')),
+        ],
+      ),
+    ) ?? false;
+  }
+
   Future<void> _draftLineup(String teamId, String teamName) async {
     final game = _game;
     if (_savingLineup || _startingGame || game == null ||
@@ -1247,25 +1329,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       final saved = _savedLineups.where(
           (row) => row['team_id']?.toString() == teamId).firstOrNull;
       final expectedRevision = (saved?['revision'] as num?)?.toInt() ?? 0;
-      final rivalPlayers = <String>{};
-      for (final row in _savedLineups) {
-        if (row['team_id']?.toString() == teamId) continue;
-        rivalPlayers.addAll(swlConfirmedBattingSlots(row['lineup'])
-            .map((slot) => slot['player_id']?.toString()).whereType<String>());
-        if (row['defensive_positions'] case final Map defense) {
-          rivalPlayers.addAll(defense.keys.whereType<String>());
-        }
-        if (row['pitcher_id'] case final String pitcher) rivalPlayers.add(pitcher);
-      }
-      final roster = {
-        for (final player in players)
-          if (!rivalPlayers.contains(player.playerId)) player.playerId: player,
-      };
-      if (players.any((player) => rivalPlayers.contains(player.playerId))) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Los peloteros confirmados por el rival no pueden jugar en ambos equipos.'),
-        ));
-      }
+      final roster = {for (final player in players) player.playerId: player};
+      var unavailable = await _lineupAvailability(game, teamId, myId, roster.keys.toSet());
+      if (!mounted || _game?['id'] != game['id']) return;
       final slots = swlConfirmedBattingSlots(saved?['lineup']);
       final selected = <String>{
         for (final slot in slots)
@@ -1321,35 +1387,54 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         });
       }
 
-      final save = await showSwlLineupEditor(
-        context, teamName: teamName, roster: roster, draft: draft,
-        onDraftChanged: (working) => persistDraft(jsonEncode(working.toLocalJson())),
-      );
-      if (save == null) persistDraft(previous);
-      await pendingDraftWrite;
-      if (!mounted || _game?['id'] != game['id']) return;
-      if (draftWriteFailed) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No se pudo actualizar el borrador local.')));
+      while (mounted && _game?['id'] == game['id'] &&
+          _client.auth.currentUser?.id == myId) {
+        final save = await showSwlLineupEditor(
+          context, teamName: teamName, roster: roster, draft: draft, unavailable: unavailable,
+          onDraftChanged: (working) => persistDraft(jsonEncode(working.toLocalJson())),
+        );
+        if (save == null) persistDraft(previous);
+        await pendingDraftWrite;
+        if (!mounted || _game?['id'] != game['id']) return;
+        if (draftWriteFailed) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('No se pudo actualizar el borrador local.')));
+        }
+        if (save != true) return;
+        if (_client.auth.currentUser?.id != myId || _game?['status'] != game['status']) {
+          throw StateError('Cambió la sesión o el estado del partido.');
+        }
+        // LAB V5.6 requires a complete defensive lineup to start the game.
+        // Never silently save a batting-only lineup through the legacy RPC:
+        // it would appear saved but fail BOTH_LINEUPS_REQUIRED on start.
+        try {
+          await _client.rpc(
+            'swl_v56_save_lineup',
+            params: draft.saveParameters(
+              gameId: game['id'].toString(), teamId: teamId,
+              revision: expectedRevision, extended: true,
+            ),
+          ).timeout(const Duration(seconds: 12));
+        } on PostgrestException catch (error) {
+          if (!swlIsLineupConflict(error)) rethrow;
+          // Mantener también una copia en memoria si falla SharedPreferences.
+          previous = jsonEncode(draft.toLocalJson());
+          persistDraft(previous);
+          await pendingDraftWrite;
+          unavailable = await _lineupAvailability(game, teamId, myId, roster.keys.toSet());
+          if (!mounted || _game?['id'] != game['id'] ||
+              _client.auth.currentUser?.id != myId) return;
+          final correction = await _showLineupConflict(unavailable,
+              {...draft.selected, ...draft.positions.keys, if (draft.designatedId != null) draft.designatedId!}, roster, error);
+          if (correction) continue;
+          return;
+        }
+        if (!mounted || _game?['id'] != game['id']) return;
+        persistDraft(null);
+        await pendingDraftWrite;
+        await _loadSavedLineups(announce: true);
+        return;
       }
-      if (save != true) return;
-      if (_client.auth.currentUser?.id != myId || _game?['status'] != game['status']) {
-        throw StateError('Cambió la sesión o el estado del partido.');
-      }
-      // LAB V5.6 requires a complete defensive lineup to start the game.
-      // Never silently save a batting-only lineup through the legacy RPC:
-      // it would appear saved but fail BOTH_LINEUPS_REQUIRED on start.
-      await _client.rpc(
-        'swl_v56_save_lineup',
-        params: draft.saveParameters(
-          gameId: game['id'].toString(), teamId: teamId,
-          revision: expectedRevision, extended: true,
-        ),
-      ).timeout(const Duration(seconds: 12));
-      if (!mounted || _game?['id'] != game['id']) return;
-      persistDraft(null);
-      await pendingDraftWrite;
-      await _loadSavedLineups(announce: true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1680,6 +1765,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     final game = _game;
     if (_startingGame || _savingLineup || game == null || !_canStartGame(game)) return;
     setState(() => _startingGame = true);
+    String? correctionTeam;
     try {
       await _client.rpc('swl_v56_start_game', params: {
         'p_game_id': game['id'],
@@ -1688,6 +1774,29 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       await _refreshGame(afterCurrent: true);
     } on PostgrestException catch (error) {
       if (!mounted) return;
+      final myId = _client.auth.currentUser?.id;
+      final teamId = _myTeamId(game);
+      if (swlIsLineupConflict(error) && myId != null && teamId != null) {
+        final roster = <String, SwlRosterPlayer>{};
+        try {
+          final players = await SwlRosterRepository(_client).activePlayers(teamId)
+              .timeout(const Duration(seconds: 8));
+          roster.addEntries(players.map((p) => MapEntry(p.playerId, p)));
+        } catch (_) {
+          // El botón permite volver al editor aun si falla la lectura.
+        }
+        final selected = {
+          for (final row in _savedLineups)
+            if (row['team_id'] == teamId) ...swlLineupParticipantIds(row),
+        };
+        final unavailable = await _lineupAvailability(game, teamId, myId, selected);
+        if (!mounted || _game?['id'] != game['id'] ||
+            _client.auth.currentUser?.id != myId) return;
+        if (await _showLineupConflict(unavailable, selected, roster, error)) {
+          correctionTeam = teamId;
+        }
+        return;
+      }
       final message = error.code == 'PGRST202' || error.code == '42883'
           ? 'LAB aún no tiene habilitada la transición para iniciar el partido.'
           : _eligibilityMessage(error) ?? error.message;
@@ -1699,7 +1808,12 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           const SnackBar(content: Text('No se confirmó el inicio. Actualiza el partido antes de reintentar.')));
       }
     } finally {
-      if (mounted) setState(() => _startingGame = false);
+      if (mounted) {
+        setState(() => _startingGame = false);
+        if (_game?['id'] == game['id'] && correctionTeam != null) {
+          await _draftLineup(correctionTeam, _name(correctionTeam));
+        }
+      }
     }
   }
 

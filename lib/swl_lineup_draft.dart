@@ -91,6 +91,23 @@ class SwlLineupDraft {
     assign(id, null);
   }
 
+  bool replaceParticipant(String outgoing, String incoming) {
+    if (selected.contains(incoming) ||
+        positions.containsKey(incoming) || designatedId == incoming) {
+      return false;
+    }
+    final index = selected.indexOf(outgoing);
+    final position = positions[outgoing];
+    if (index < 0 && position == null) return false;
+    if (index >= 0) selected[index] = incoming;
+    if (position != null) {
+      positions.remove(outgoing);
+      positions[incoming] = position;
+    }
+    if (designatedId == outgoing) designatedId = incoming;
+    return true;
+  }
+
   void setBatting(String id, bool bats) {
     if (bats && !selected.contains(id)) selected.add(id);
     if (!bats) selected.remove(id);

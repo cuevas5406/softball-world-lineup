@@ -11,6 +11,7 @@ Future<bool?> showSwlLineupEditor(
   required Map<String, SwlRosterPlayer> roster,
   required SwlLineupDraft draft,
   ValueChanged<SwlLineupDraft>? onDraftChanged,
+  Map<String, String> unavailable = const {},
 }) {
   // Edit a detached copy: cancelling the dialog must never mutate the draft.
   final working = SwlLineupDraft(
@@ -35,6 +36,37 @@ Future<bool?> showSwlLineupEditor(
           }
 
           final batting = working.batting;
+          final conflicts = {
+            ...selected, ...working.positions.keys, if (working.designatedId != null) working.designatedId!,
+          }.where(unavailable.containsKey).toList();
+
+          Future<void> replace(String outgoing) async {
+            final candidates = roster.values.where((player) =>
+                !unavailable.containsKey(player.playerId) &&
+                !selected.contains(player.playerId) &&
+                !working.positions.containsKey(player.playerId));
+            final incoming = await showDialog<String>(
+              context: context,
+              builder: (picker) => SimpleDialog(
+                title: Text('Reemplazar a ${roster[outgoing]?.name ?? "pelotero"}'),
+                children: [
+                  for (final player in candidates)
+                    SimpleDialogOption(
+                      onPressed: () => Navigator.pop(picker, player.playerId),
+                      child: Text('${player.name} · #${player.number} · ${player.universalId}'),
+                    ),
+                  if (candidates.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text('No hay suplentes disponibles en el roster.'),
+                    ),
+                ],
+              ),
+            );
+            if (incoming != null && context.mounted) {
+              update(() => working.replaceParticipant(outgoing, incoming));
+            }
+          }
           return AlertDialog(
             title: Text('Elegir mi alineación · $teamName'),
             content: SizedBox(
@@ -45,6 +77,18 @@ Future<bool?> showSwlLineupEditor(
                   const Text('Selecciona los jugadores. El pitcher que batea y el DH se configuran en la siguiente pantalla.'),
                   const SizedBox(height: 8),
                   Text('Pitcher titular: ${roster[working.pitcherId]?.name ?? "Sin asignar"}'),
+                  for (final id in conflicts)
+                    ListTile(
+                      leading: const Icon(Icons.warning_amber_rounded),
+                      title: Text('${roster[id]?.name ?? "Pelotero"} · ${working.positions[id] ?? ""}'
+                          '${batting.contains(id) ? " · Turno ${batting.indexOf(id) + 1}" : ""}'),
+                      subtitle: Text('#${roster[id]?.number ?? "—"} · '
+                          '${roster[id]?.universalId ?? "—"}\n${unavailable[id]!}'),
+                      trailing: TextButton(
+                        onPressed: () => replace(id),
+                        child: const Text('Reemplazar'),
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   TextField(
                     decoration: const InputDecoration(
@@ -72,8 +116,10 @@ Future<bool?> showSwlLineupEditor(
                       contentPadding: EdgeInsets.zero,
                       value: selected.contains(player.playerId),
                       title: Text('${player.name} · #${player.number}'),
-                      subtitle: Text(player.positionLabel),
-                      onChanged: (!working.pitcherBats &&
+                      subtitle: Text(unavailable[player.playerId] ?? player.positionLabel),
+                      secondary: unavailable.containsKey(player.playerId)
+                          ? const Icon(Icons.block) : null,
+                      onChanged: unavailable.containsKey(player.playerId) || (!working.pitcherBats &&
                                   working.pitcherId == player.playerId &&
                                   !selected.contains(player.playerId)) ||
                               (!selected.contains(player.playerId) &&
@@ -128,13 +174,14 @@ Future<bool?> showSwlLineupEditor(
                   child: const Text('CONTINUAR DESPUÉS'),
                 ),
               FilledButton(
-                onPressed: () async {
+                onPressed: conflicts.isNotEmpty ? null : () async {
                   final save = await Navigator.of(dialog).push<bool>(
                     MaterialPageRoute(
                       builder: (_) => _SwlBattingOrderPage(
                         draft: working,
                         roster: roster,
                         onChanged: onDraftChanged,
+                        unavailable: unavailable.keys.toSet(),
                       ),
                     ),
                   );
@@ -168,8 +215,10 @@ class _SwlBattingOrderPage extends StatefulWidget {
     required this.draft,
     required this.roster,
     this.onChanged,
+    required this.unavailable,
   });
 
+  final Set<String> unavailable;
   final SwlLineupDraft draft;
   final Map<String, SwlRosterPlayer> roster;
   final ValueChanged<SwlLineupDraft>? onChanged;
@@ -239,6 +288,7 @@ class _SwlBattingOrderPageState extends State<_SwlBattingOrderPage> {
                   for (final player in widget.roster.values)
                     DropdownMenuItem(
                       value: player.playerId,
+                      enabled: !widget.unavailable.contains(player.playerId),
                       child: Text('${player.name} · #${player.number}',
                           overflow: TextOverflow.ellipsis),
                     ),
