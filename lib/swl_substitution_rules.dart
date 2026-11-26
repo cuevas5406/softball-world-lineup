@@ -25,8 +25,10 @@ class SwlSubstitutionRequest {
     required Set<String> previouslyRemovedPlayerIds,
     int? currentLineupRevision,
   }) {
-    if (gameId.trim().isEmpty || teamId.trim().isEmpty) throw StateError('GAME_OR_TEAM_REQUIRED');
-    if (battingOrder < 1 || battingOrder > 13 ||
+    if (gameId.trim().isEmpty || teamId.trim().isEmpty)
+      throw StateError('GAME_OR_TEAM_REQUIRED');
+    if (battingOrder < 1 ||
+        battingOrder > 13 ||
         !activeOrder.containsKey(battingOrder)) {
       throw StateError('INVALID_BATTING_SLOT');
     }
@@ -71,8 +73,43 @@ bool swlIsExplicitSubstitutionRejection(String? code) {
   }
   if (value.startsWith('PGRST')) return true;
   if (RegExp(r'^[0-9A-Z]{5}$').hasMatch(value)) {
-    return !value.startsWith('08') && !value.startsWith('58') &&
+    return !value.startsWith('08') &&
+        !value.startsWith('58') &&
         !value.startsWith('XX');
   }
   return false;
+}
+
+/// Identidades que ya ocupan un rol en una alineación confirmada.
+Set<String> swlLineupParticipantIds(Map<String, dynamic> lineup) => {
+  if (lineup['lineup'] case final List slots)
+    for (final slot in slots.whereType<Map>())
+      if (slot['player_id'] case final String id) id,
+  if (lineup['defensive_positions'] case final Map positions)
+    ...positions.keys.whereType<String>(),
+  if (lineup['pitcher_id'] case final String id) id,
+  if (lineup['designated_hitter_id'] case final String id) id,
+};
+
+bool swlCanSelectPitcher({
+  required String candidate,
+  required String currentPitcher,
+  required bool pitcherBats,
+  required Set<String> battingIds,
+  required Set<String> defensiveIds,
+  required Set<String> rivalIds,
+  required Set<String> removedIds,
+}) {
+  if (candidate == currentPitcher ||
+      rivalIds.contains(candidate) ||
+      removedIds.contains(candidate))
+    return false;
+  if (pitcherBats) {
+    return battingIds.contains(currentPitcher) &&
+        battingIds.contains(candidate) &&
+        defensiveIds.contains(candidate);
+  }
+  return !battingIds.contains(currentPitcher) &&
+      !battingIds.contains(candidate) &&
+      !defensiveIds.contains(candidate);
 }

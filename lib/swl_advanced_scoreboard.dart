@@ -472,7 +472,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       const size = 250;
       for (var offset = 0; ; offset += size) {
         final page = await client.from('swl_game_events')
-            .select('id,event_type,event_data,inning,is_top')
+            .select('id,event_type,event_data,inning,is_top,version,batting_team_id')
             .eq('game_id', live.gameId)
             .order('version', ascending: true).order('id', ascending: true)
             .range(offset, offset + size - 1)
@@ -481,12 +481,53 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         if (page.length < size) break;
         if (!mounted || _currentLiveSnapshot?.gameId != live.gameId) return;
       }
+      // La RPC de pitcheo registra su bitácora aparte del historial de bateo.
+      try {
+        for (var offset = 0; ; offset += size) {
+          final changes = await client.from('swl_v56_pitcher_changes')
+              .select('team_id,version,old_pitcher_id,new_pitcher_id,innings_number')
+              .eq('game_id', live.gameId).lte('version', live.version)
+              .order('version').range(offset, offset + size - 1)
+              .timeout(const Duration(seconds: 4));
+          for (final change in changes) {
+            final version = change['version'];
+            final paired = events.where((event) => event['version'] == version).firstOrNull;
+            events.add({
+              'id': 'pitcher-$version',
+              'version': version,
+              'event_type': 'PITCHER_CHANGE',
+              'inning': change['innings_number'],
+              'is_top': paired?['is_top'] ?? (change['team_id'] == live.homeTeamId),
+              'batting_team_id': change['team_id'],
+              'event_data': {
+                'outgoing_player_id': change['old_pitcher_id'],
+                'incoming_player_id': change['new_pitcher_id'],
+              },
+            });
+          }
+          if (!mounted || _currentLiveSnapshot?.gameId != live.gameId) return;
+          if (changes.length < size) break;
+        }
+      } catch (_) {
+        // El historial de jugadas sigue disponible sin acceso a esta bitácora.
+      }
+      if (!mounted || _currentLiveSnapshot?.gameId != live.gameId) return;
+      events.sort((a, b) {
+        final byVersion = ((a['version'] as num?) ?? -1).compareTo((b['version'] as num?) ?? -1);
+        if (byVersion != 0) return byVersion;
+        final firstPitcher = a['event_type'] == 'PITCHER_CHANGE';
+        final secondPitcher = b['event_type'] == 'PITCHER_CHANGE';
+        if (firstPitcher != secondPitcher) return firstPitcher ? 1 : -1;
+        return (a['id']?.toString() ?? '').compareTo(b['id']?.toString() ?? '');
+      });
       final seen = <String>{};
       events.removeWhere((event) => event['id'] != null && !seen.add(event['id'].toString()));
       final ids = <String>{
         for (final event in events)
           if (event['event_data'] case final Map data) ...{
             for (final key in ['batter_id', 'runner_id', 'last_out_player_id', 'out_runner_id'])
+              if (data[key] case final Object id) id.toString(),
+            for (final key in ['outgoing_player_id', 'incoming_player_id'])
               if (data[key] case final Object id) id.toString(),
           },
       };
@@ -518,6 +559,29 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         final data = raw is Map ? raw : const {};
         // En un out de corredor, priorizar al retirado sobre el bateador.
         final action = event['event_type']?.toString().trim().toUpperCase();
+        if (action == 'SUBSTITUTION' || action == 'PITCHER_CHANGE') {
+          final team = event['batting_team_id']?.toString();
+          final pitcherChange = action == 'PITCHER_CHANGE';
+          String playerName(String key) {
+            final id = data[key]?.toString();
+            final row = players[id];
+            final name = '${row?['first_name'] ?? ''} ${row?['last_name'] ?? ''}'.trim();
+            return name.isNotEmpty ? name : publicNames[id] ?? 'Pelotero sin nombre disponible';
+          }
+          return SwlScorePlayRecord(
+            inning: (event['inning'] as num?)?.toInt() ?? live.inning,
+            isTopInning: event['is_top'] == true,
+            description: '${pitcherChange ? "Cambio de pitcher · posición P" : "Sustitución · turno ${data['batting_order'] ?? '—'}"}'
+                ' · sale ${playerName('outgoing_player_id')} · entra ${playerName('incoming_player_id')}',
+            notation: pitcherChange ? 'P' : 'SUST',
+            batterName: team == live.homeTeamId ? homeName :
+                team == live.awayTeamId ? visitorName : 'Equipo',
+            playerIds: {
+              for (final key in ['outgoing_player_id', 'incoming_player_id'])
+                if (data[key] case final String id) id,
+            },
+          );
+        }
         final playerId = (action == 'RUNNER_OUT' || action == 'DOUBLE_PLAY')
             ? (data['last_out_player_id'] ?? data['runner_id'] ?? data['batter_id'])
             : (data['batter_id'] ?? data['runner_id'] ?? data['last_out_player_id']);

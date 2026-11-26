@@ -46,6 +46,85 @@ void main() {
   tearDownAll(() => Supabase.instance.dispose());
 
   testWidgets(
+    'El historial identifica saliente, entrante, equipo y turno o posición',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(600, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      respond = (request) async {
+        if (request.url.path.endsWith('/swl_game_events')) {
+          return jsonResponse([
+            {
+              'id': 'sust',
+              'version': 3,
+              'inning': 2,
+              'is_top': true,
+              'batting_team_id': 'visitante',
+              'event_type': 'SUBSTITUTION',
+              'event_data': {
+                'outgoing_player_id': 'out',
+                'incoming_player_id': 'in',
+                'batting_order': 6,
+              },
+            },
+          ]);
+        }
+        if (request.url.path.endsWith('/swl_v56_pitcher_changes')) {
+          return jsonResponse([
+            {
+              'team_id': 'local',
+              'version': 4,
+              'innings_number': 2,
+              'old_pitcher_id': 'p1',
+              'new_pitcher_id': 'p2',
+            },
+          ]);
+        }
+        if (request.url.path.endsWith('/players')) {
+          return jsonResponse([
+            {'id': 'out', 'first_name': 'Saliente'},
+            {'id': 'in', 'first_name': 'Entrante'},
+            {'id': 'p1', 'first_name': 'Lanzador A'},
+            {'id': 'p2', 'first_name': 'Lanzador B'},
+          ]);
+        }
+        return jsonResponse([]);
+      };
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwlAdvancedScoreboard(
+            gamePin: 'SWL-TEST',
+            homeTeam: 'Locales',
+            awayTeam: 'Visitantes',
+            liveSnapshot: SwlLiveScoreboardSnapshot.fromGame({
+              'id': 'test',
+              'version': 4,
+              'inning': 2,
+              'is_top': true,
+              'home_team_id': 'local',
+              'away_team_id': 'visitante',
+              'status': 'IN_PROGRESS',
+            }),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining(
+          'Visitantes: Sustitución · turno 6 · sale Saliente · entra Entrante',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'Locales: Cambio de pitcher · posición P · sale Lanzador A · entra Lanzador B',
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
     'Fan consulta la pizarra, equipos separados y jugadas de favoritos',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(400, 740));

@@ -462,7 +462,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       final seen = <String>{};
       for (var offset = 0; rows.length < recentLimit; offset += pageSize) {
         final page = await _client.from('swl_game_events')
-            .select('id,inning,is_top,event_type,event_data,created_at,version')
+            .select('id,inning,is_top,event_type,event_data,created_at,version,batting_team_id')
             .eq('game_id', id)
             .order('version', ascending: false)
             .order('id', ascending: false)
@@ -527,7 +527,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     });
     try {
       final rows = await _client.from('swl_game_events')
-          .select('id,inning,is_top,event_type,event_data,created_at,version')
+          .select('id,inning,is_top,event_type,event_data,created_at,version,batting_team_id')
           .eq('game_id', gameId)
           .eq('event_type', 'SUBSTITUTION')
           .order('id', ascending: false)
@@ -712,7 +712,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       final inId = data['incoming_player_id']?.toString() ?? '';
       final outgoing = _lineupPlayerNames[outId] ?? 'Jugador $outId';
       final incoming = _lineupPlayerNames[inId] ?? 'Jugador $inId';
-      return 'Sustitución · turno ${data['batting_order'] ?? '?'}: '
+      return 'Sustitución · ${_name(event['batting_team_id'])} · entrada ${event['inning']} · turno ${data['batting_order'] ?? '?'} · '
           'sale $outgoing · entra $incoming';
     }
     if ((type == 'HIT' && data['scope'] == 'hit_with_runners') ||
@@ -1376,6 +1376,18 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   }
 
   /// Sustitución de bateador: el servidor valida y registra el cambio atómicamente.
+  Set<String> _rivalParticipants(String teamId) => {
+    for (final lineup in _savedLineups)
+      if (lineup['team_id']?.toString() != teamId) ...swlLineupParticipantIds(lineup),
+  };
+
+  Set<String> _removedBatters(String teamId) => {
+    for (final event in _substitutionHistory)
+      if (event['batting_team_id']?.toString() == teamId)
+        if (event['event_data'] case final Map data)
+          if (data['outgoing_player_id'] case final String id) id,
+  };
+
   Future<void> _substituteBatter(String teamId, String teamName, {BuildContext? dialogHost}) async {
     final game = _game;
     if (game == null || game['status'] != 'IN_PROGRESS' ||
@@ -1406,39 +1418,45 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     }
     setState(() => _substitutionPending = true);
     try {
+      final cursor = await _client.from('swl_game_batting_turns')
+          .select('next_order').eq('game_id', gameId).eq('team_id', teamId)
+          .maybeSingle().timeout(const Duration(seconds: 12));
+      final initialOrder = swlBattingOrder(cursor, slots.length);
+      if (initialOrder == null) throw StateError('No se pudo confirmar el turno de este equipo.');
+      await _loadSubstitutionHistory();
       final roster = await SwlRosterRepository(_client).activePlayers(teamId)
           .timeout(const Duration(seconds: 12));
       if (!mounted || _game?['id']?.toString() != gameId) return;
-      final currentIds = slots.whereType<Map>()
-          .map((slot) => slot['player_id']?.toString()).toSet();
-      final removedIds = {
-        for (final event in _substitutionHistory)
-          if (event['event_data'] case final Map data)
-            data['outgoing_player_id']?.toString(),
+      final excluded = {
+        ...swlLineupParticipantIds(saved),
+        ..._rivalParticipants(teamId),
+        ..._removedBatters(teamId),
       };
-      final available = roster.where((p) => !currentIds.contains(p.playerId) &&
-          p.playerId != saved['pitcher_id'] && !removedIds.contains(p.playerId)).toList();
+      final available = roster.where((p) => !excluded.contains(p.playerId)).toList();
       if (available.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('No hay peloteros disponibles fuera de la alineación.')));
+            content: Text('No hay peloteros elegibles fuera de las alineaciones.')));
         return;
       }
-      int order = 1;
-      String? incomingId = available.first.playerId;
+      var order = initialOrder;
+      String? incomingId;
       if (dialogHost != null && !dialogHost.mounted) return;
       final confirmed = await showDialog<bool>(
         context: dialogHost ?? context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, update) => AlertDialog(
             title: Text('Sustitución · $teamName'),
+            scrollable: true,
             content: SizedBox(width: 420, child: Column(
               mainAxisSize: MainAxisSize.min, children: [
                 const Text('El jugador entrante ocupa el mismo turno. '
                     'El jugador saliente conserva sus estadísticas. '
                     'No se permiten reingresos en esta versión.'),
                 const SizedBox(height: 12),
+                Text('Sale · turno $order · '
+                    '${_lineupPlayerNames[slots[order - 1]['player_id']?.toString()] ?? "Pelotero"}'),
                 DropdownButtonFormField<int>(
-                  value: order,
+                  initialValue: initialOrder,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Turno que se sustituye'),
                   items: [
@@ -1446,7 +1464,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
                       DropdownMenuItem(
                         value: i + 1,
                         child: Text('${i + 1}. '
-                          '${_lineupPlayerNames[slots[i]['player_id']?.toString()] ?? "Pelotero"}',
+                          '${_lineupPlayerNames[slots[i]['player_id']?.toString()] ?? "Pelotero"}'
+                          '${i + 1 == initialOrder ? " · turno del equipo" : ""}',
                           overflow: TextOverflow.ellipsis),
                       ),
                   ],
@@ -1498,7 +1517,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             for (var index = 0; index < slots.length; index++)
               index + 1: slots[index]['player_id'].toString(),
           },
-          rosterIds: roster.map((p) => p.playerId).toSet(),
+          rosterIds: available.map((p) => p.playerId).toSet(),
           previouslyRemovedPlayerIds: {
             for (final event in _substitutionHistory)
               if (event['event_data'] is Map &&
@@ -1719,11 +1738,17 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       // Un ingreso desde el banco con pitcher bateador requiere sustituir
       // primero el turno al bate para evitar desordenar la alineación.
       final defensive = lineup?['defensive_positions'];
-      final assigned = defensive is Map ? defensive.keys.map((e) => e.toString()).toSet() : <String>{};
-      final eligible = players.where((player) => player.playerId != pitcherId &&
-          (lineup?['pitcher_bats'] == false
-              ? !batters.contains(player.playerId) && !assigned.contains(player.playerId)
-              : assigned.contains(player.playerId) && batters.contains(player.playerId)));
+      final assigned = defensive is Map ? defensive.keys.whereType<String>().toSet() : <String>{};
+      final rival = _rivalParticipants(team);
+      await _loadSubstitutionHistory();
+      if (!mounted || _game?['id'] != game['id']) return;
+      final removed = _removedBatters(team);
+      final eligible = players.where((player) => swlCanSelectPitcher(
+        candidate: player.playerId, currentPitcher: pitcherId,
+        pitcherBats: lineup?['pitcher_bats'] != false,
+        battingIds: batters.whereType<String>().toSet(), defensiveIds: assigned,
+        rivalIds: rival, removedIds: removed,
+      ));
       final candidate = await showDialog<String>(context: context, builder: (dialog) =>
         AlertDialog(
           title: const Text('Cambiar pitcher'),
@@ -1760,7 +1785,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
         error is PostgrestException && error.code == 'PGRST202'
-          ? 'LAB aún no admite cambios de pitcher.'
+          ? 'La función de cambio de pitcher aún no está instalada en LAB. El pitcher titular sigue igual.'
           : 'No se confirmó el cambio. Actualiza la alineación antes de repetir: $error')));
     } finally {
       if (mounted) setState(() => _substitutionPending = false);
