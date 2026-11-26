@@ -1,7 +1,10 @@
--- PROPUESTA LAB SIN EJECUTAR. Verificar que el tipo y los checks de status
--- acepten CANCELLED. Si no, adaptar al esquema LAB antes de aplicar.
+-- Propuesta revisada para LAB wgeziptdoabyicufnrfk. Pendiente de autorización.
 begin;
-alter table public.swl_live_games add column swl_cancel_requested_by uuid;
+alter table public.swl_live_games
+  drop constraint swl_live_games_status_check,
+  add constraint swl_live_games_status_check
+    check (status in ('SCHEDULED','IN_PROGRESS','FINAL','OFFICIAL','CANCELLED')),
+  add column swl_cancel_requested_by uuid;
 create table public.swl_v57_cancel_decisions (
   game_id uuid not null references public.swl_live_games(id),
   version bigint not null,
@@ -19,28 +22,34 @@ declare
   g public.swl_live_games%rowtype;
   actor uuid := auth.uid();
 begin
-  select * into strict g from public.swl_live_games where id = p_game_id for update;
-  if actor is null or g.home_manager_id is null or g.away_manager_id is null
+  select * into g from public.swl_live_games where id = p_game_id for update;
+  if not found or actor is null or g.home_manager_id is null or g.away_manager_id is null
       or g.home_manager_id = g.away_manager_id
       or (actor is distinct from g.home_manager_id and actor is distinct from g.away_manager_id)
       or public.swl_can_manage_roster(case when actor = g.home_manager_id then g.home_team_id else g.away_team_id end) is not true then
     raise exception using errcode = '42501', message = 'Acción reservada a los dos mánagers autorizados.';
   end if;
-  if g.status::text not in ('SCHEDULED','IN_PROGRESS') or g.version is distinct from p_expected_version then
-    raise exception 'El partido cambió o ya no admite cancelación.';
+  if g.version is distinct from p_expected_version then
+    raise exception using errcode = '40001', message = 'CANCEL_STALE_VERSION';
+  end if;
+  if g.status not in ('SCHEDULED','IN_PROGRESS') then
+    raise exception 'CANCEL_GAME_NOT_OPEN';
   end if;
   if p_action = 'CANCEL_REQUEST' and g.swl_cancel_requested_by is null then
     update public.swl_live_games set swl_cancel_requested_by = actor, version = g.version + 1 where id = g.id;
   elsif p_action in ('CANCEL_ACCEPT','CANCEL_REJECT')
       and g.swl_cancel_requested_by = (case when actor = g.home_manager_id then g.away_manager_id else g.home_manager_id end) then
     if p_action = 'CANCEL_ACCEPT' then
+      -- Mantener la evidencia histórica. La protección de participación
+      -- deja de reservar jugadores cuando el estado sale de IN_PROGRESS.
       update public.swl_live_games set status = 'CANCELLED',
-        swl_cancel_requested_by = null, version = g.version + 1 where id = g.id;
+        swl_cancel_requested_by = null, swl_finish_requested_by = null,
+        version = g.version + 1 where id = g.id;
     else
       update public.swl_live_games set swl_cancel_requested_by = null, version = g.version + 1 where id = g.id;
     end if;
   else
-    raise exception 'No hay una solicitud válida para esta acción.';
+    raise exception 'CANCEL_ACTION_UNAVAILABLE';
   end if;
   insert into public.swl_v57_cancel_decisions(game_id,version,actor_id,action)
     values(g.id,g.version + 1,actor,p_action);

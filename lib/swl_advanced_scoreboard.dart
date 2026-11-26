@@ -2283,6 +2283,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             ),
 
             if (!watching) _buildMainButtons(),
+            if (watching && widget.liveSnapshot?.status == 'CANCELLED')
+              const Text('Partido cancelado por ambos mánagers'),
             if (watching && latestPlay != null)
               Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 child: Text(
@@ -3257,7 +3259,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       await widget.onMatchDecision!(game.version, action);
       await _refreshLiveScore();
     } catch (error) {
-      if (mounted) setState(() => _liveActionError = error.toString());
+      if (mounted) {
+        setState(() => _liveActionError = error is StateError
+            ? error.message
+            : action.startsWith('CANCEL_')
+                ? 'No se pudo confirmar la decisión. Actualiza el partido para revisar su estado.'
+                : error.toString());
+      }
     } finally {
       if (mounted) setState(() => _liveActionInFlight = false);
     }
@@ -3301,16 +3309,22 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       return [const Text('Cancelación solicitada · esperando al otro mánager')];
     }
     if (actions.isEmpty) return [];
-    return [Wrap(children: [
-      for (final (action, label) in const [
-        ('CANCEL_REQUEST', 'Solicitar cancelación'),
-        ('CANCEL_ACCEPT', 'Confirmar cancelación'),
-        ('CANCEL_REJECT', 'Rechazar cancelación'),
-      ])
-        if (actions.contains(action))
-          TextButton(onPressed: _liveActionInFlight ? null : () => _sendMatchDecision(game, action),
-            child: Text(label)),
-    ])];
+    return [
+      if (actions.contains('CANCEL_ACCEPT'))
+        const Text('El otro mánager solicitó cancelar el partido.'),
+      Wrap(children: [
+        for (final (action, label) in const [
+          ('CANCEL_REQUEST', 'Solicitar cancelación'),
+          ('CANCEL_ACCEPT', 'Confirmar cancelación'),
+          ('CANCEL_REJECT', 'Rechazar cancelación'),
+        ])
+          if (actions.contains(action))
+            TextButton(
+              onPressed: _liveActionInFlight ? null : () => _sendMatchDecision(game, action),
+              child: Text(label),
+            ),
+      ]),
+    ];
   }
 
   Widget _buildLiveMainButtons() {

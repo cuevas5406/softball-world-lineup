@@ -107,6 +107,28 @@ void main() {
     expect(cancelled.canScore('away-manager'), isFalse);
   });
 
+  test('Cancelación local permite responder solo al visitante durante el juego', () {
+    final row = game()..['swl_cancel_requested_by'] = 'home-manager';
+    final pending = SwlLiveScoreboardSnapshot.fromGame(row);
+    expect(pending.cancellationActions('home-manager'), isEmpty);
+    expect(pending.cancellationActions('away-manager'), {'CANCEL_ACCEPT', 'CANCEL_REJECT'});
+    expect(pending.canScore('away-manager'), isTrue);
+
+    final rejected = SwlLiveScoreboardSnapshot.fromGame(
+      {...row, 'swl_cancel_requested_by': null},
+    );
+    expect(rejected.cancellationActions('away-manager'), {'CANCEL_REQUEST'});
+    expect(rejected.canScore('away-manager'), isTrue);
+
+    final cancelled = SwlLiveScoreboardSnapshot.fromGame(
+      {...row, 'status': 'CANCELLED', 'swl_cancel_requested_by': null},
+    );
+    expect(cancelled.cancellationActions('away-manager'), isEmpty);
+    expect(cancelled.cancellationActions('home-manager'), isEmpty);
+    expect(cancelled.scoringBlock('away-manager'),
+        'Partido cancelado. No se pueden registrar jugadas.');
+  });
+
   test('En FINAL se bloquea la anotación y la firma es individual', () {
     final row = {...game(status: 'FINAL'), 'swl_home_signed': true};
     final finalGame = SwlLiveScoreboardSnapshot.fromGame(row);

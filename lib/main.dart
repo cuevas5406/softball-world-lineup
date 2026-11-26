@@ -1829,17 +1829,24 @@ class MasterScoreboardTab extends StatefulWidget {
 
 class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
   late Future<List<Map<String, dynamic>>> _games;
+  RealtimeChannel? _cancellations;
+  Set<Object?> _pendingCancellationIds = {};
 
   @override
   void initState() {
     super.initState();
     _reload();
+    _watchCancellations();
   }
 
   @override
   void didUpdateWidget(covariant MasterScoreboardTab oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.teamId != widget.teamId) _reload();
+    if (oldWidget.teamId != widget.teamId) {
+      _pendingCancellationIds = {};
+      _reload();
+      _watchCancellations();
+    }
   }
 
   void _reload() {
@@ -1848,13 +1855,56 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
         _fetchGames(id);
   }
 
+  void _watchCancellations() {
+    final client = Supabase.instance.client;
+    if (_cancellations case final channel?) unawaited(client.removeChannel(channel));
+    _cancellations = null;
+    final team = widget.teamId;
+    if (team == null) return;
+    final channel = client.channel('swl-team-cancellations-$team-${identityHashCode(this)}');
+    for (final side in ['home', 'away']) {
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'swl_live_games',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq, column: '${side}_team_id', value: team,
+        ),
+        callback: (payload) {
+          if (!mounted || widget.teamId != team) return;
+          final row = payload.newRecord;
+          if (row['swl_cancel_requested_by'] != null ||
+              _pendingCancellationIds.contains(row['id']) ||
+              row['status'] == 'CANCELLED') _refresh();
+        },
+      );
+    }
+    _cancellations = channel.subscribe();
+  }
+
+  @override
+  void dispose() {
+    if (_cancellations case final channel?) {
+      unawaited(Supabase.instance.client.removeChannel(channel));
+    }
+    super.dispose();
+  }
+
   Future<List<Map<String, dynamic>>> _fetchGames(String id) async {
-    final rows = await Supabase.instance.client.from('swl_live_games')
-        .select('id,game_pin,home_team_id,away_team_id,status,inning,is_top,home_runs,away_runs,created_at')
-        .or('home_team_id.eq.$id,away_team_id.eq.$id')
-        .order('created_at', ascending: false).limit(100)
-        .timeout(const Duration(seconds: 15));
-    return [for (final row in rows) Map<String, dynamic>.from(row)];
+    const columns = 'id,game_pin,home_team_id,away_team_id,status,inning,is_top,'
+        'home_runs,away_runs,created_at,home_manager_id,away_manager_id';
+    Future<List<Map<String, dynamic>>> read(String projection) async =>
+        Supabase.instance.client.from('swl_live_games')
+            .select(projection)
+            .or('home_team_id.eq.$id,away_team_id.eq.$id')
+            .order('created_at', ascending: false).limit(100)
+            .timeout(const Duration(seconds: 15));
+    try {
+      return await read('$columns,swl_cancel_requested_by');
+    } on PostgrestException catch (error) {
+      if (error.code != '42703' && error.code != 'PGRST204') rethrow;
+      return read(columns);
+    }
   }
 
   void _refresh() => setState(_reload);
@@ -1870,9 +1920,10 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
           child: Text('No tienes un equipo autorizado seleccionado.',
             textAlign: TextAlign.center)))
       : FutureBuilder<List<Map<String, dynamic>>>(
+          key: ValueKey(widget.teamId),
           future: _games,
           builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
+            if (snapshot.connectionState != ConnectionState.done && !snapshot.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
@@ -1881,6 +1932,11 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
                   TextButton(onPressed: _refresh, child: const Text('REINTENTAR'))]));
             }
             final games = snapshot.data ?? [];
+            _pendingCancellationIds = {
+              for (final game in games)
+                if (game['swl_cancel_requested_by'] != null) game['id'],
+            };
+            final manager = Supabase.instance.client.auth.currentUser?.id;
             if (games.isEmpty) {
               return const Center(child: Padding(padding: EdgeInsets.all(24),
                 child: Text('Tu equipo todavía no tiene partidos registrados. '
@@ -1896,11 +1952,19 @@ class _MasterScoreboardTabState extends State<MasterScoreboardTab> {
                 final game = games[index];
                 final status = game['status']?.toString() ?? 'SCHEDULED';
                 final pin = game['game_pin']?.toString() ?? '';
+                final requester = game['swl_cancel_requested_by'];
+                final needsResponse = manager != null && requester != null &&
+                    requester != manager &&
+                    (manager == game['home_manager_id'] || manager == game['away_manager_id']) &&
+                    (status == 'SCHEDULED' || status == 'IN_PROGRESS');
                 return Card(color: const Color(0xFF172334),
                   child: ListTile(
                     leading: const Icon(Icons.sports_baseball, color: Colors.amber),
                     title: Text('Partido $pin'),
-                    subtitle: Text('$status · Entrada ${game['inning'] ?? 1} · '
+                    subtitle: Text(needsResponse
+                        ? 'Solicitud de cancelación pendiente · Toca para responder'
+                        : '${status == 'CANCELLED' ? 'Cancelado por ambos mánagers' : status}'
+                          ' · Entrada ${game['inning'] ?? 1} · '
                       '${game['away_runs'] ?? 0} - ${game['home_runs'] ?? 0}'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: pin.isEmpty ? null : () => Navigator.of(context).push(

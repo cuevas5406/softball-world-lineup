@@ -2075,11 +2075,29 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       }).timeout(const Duration(seconds: 12));
       await _refreshGame(afterCurrent: true);
     } on PostgrestException catch (error) {
-      if (error.code == 'PGRST202' || error.code == '42883') {
-        throw StateError(cancel ? 'La cancelación conjunta requiere habilitación en LAB.'
-            : 'Cierre y firmas pendientes de habilitación en LAB.');
+      if (!cancel) {
+        if (error.code == 'PGRST202' || error.code == '42883') {
+          throw StateError('Cierre y firmas pendientes de habilitación en LAB.');
+        }
+        rethrow;
       }
-      rethrow;
+      if (error.code == '40001' || error.message == 'CANCEL_ACTION_UNAVAILABLE') {
+        await _refreshGame(afterCurrent: true);
+      }
+      throw StateError(switch (error.code) {
+        'PGRST202' || '42883' => 'La cancelación conjunta todavía no está disponible en este servidor.',
+        '42501' => 'Solo los dos mánagers autorizados pueden decidir la cancelación.',
+        '40001' => 'El partido cambió. Revisa el estado actualizado antes de responder.',
+        _ => switch (error.message) {
+          'CANCEL_GAME_NOT_OPEN' => 'Este partido ya no admite cancelación.',
+          'CANCEL_ACTION_UNAVAILABLE' => 'Ya no hay una solicitud disponible para esta acción.',
+          _ => 'No se pudo registrar la decisión. Revisa el estado antes de reintentar.',
+        },
+      });
+    } on TimeoutException {
+      if (!cancel) rethrow;
+      await _refreshGame(afterCurrent: true);
+      throw StateError('No se recibió la confirmación. Revisa el estado actualizado antes de reintentar.');
     }
   }
 
@@ -2129,6 +2147,13 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         ),
       if (game['status'] == 'SCHEDULED')
         const Text('El mánager local inicia el partido cuando ambos equipos han confirmado su alineación.'),
+      if (SwlLiveScoreboardSnapshot.fromGame(game)
+          .cancellationActions(_client.auth.currentUser?.id).contains('CANCEL_ACCEPT'))
+        const ListTile(
+          leading: Icon(Icons.notifications_active_outlined),
+          title: Text('El otro mánager solicitó cancelar el partido.'),
+          subtitle: Text('Abre la pizarra para aceptar o rechazar.'),
+        ),
       if (_hasMyLineup(game) || game['status'] == 'IN_PROGRESS' ||
           SwlLiveScoreboardSnapshot.fromGame(game).cancellationActions(_client.auth.currentUser?.id).isNotEmpty ||
           game['swl_cancel_requested_by'] != null || game['status'] == 'CANCELLED')

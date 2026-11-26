@@ -139,6 +139,7 @@ class SwlLiveScoreboardSnapshot {
     }
     if (status == 'SCHEDULED') return 'El partido está programado. El local debe iniciarlo desde la preparación.';
     if (status == 'FINAL' || status == 'OFFICIAL') return 'Partido finalizado.';
+    if (status == 'CANCELLED') return 'Partido cancelado. No se pueden registrar jugadas.';
     if (status != 'IN_PROGRESS') return 'El partido no está en curso ($status).';
     if (!hasKnownHalf) return 'No se pudo confirmar qué equipo está al bate.';
     if (userId != battingManagerId) return 'Solo anota el mánager del equipo al bate.';
