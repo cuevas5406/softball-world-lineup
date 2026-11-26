@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'swl_official_box_score.dart';
+import 'swl_advanced_scoreboard.dart';
+import 'swl_live_scoreboard_snapshot.dart';
 import 'swl_team_lookup.dart';
 
 bool _missingRpc(Object error) =>
@@ -160,7 +162,9 @@ class _SwlPlayerScreenState extends State<SwlPlayerScreen> {
       if (await image.length() > 2 * 1024 * 1024) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Selecciona una foto JPEG de hasta 2 MB.')),
+            const SnackBar(
+              content: Text('Selecciona una foto JPEG de hasta 2 MB.'),
+            ),
           );
         }
         return;
@@ -389,6 +393,9 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
   bool _error = false;
   bool _favoritesReady = false;
   bool _more = true;
+  int _offset = 0;
+  bool _onlyFavorites = false;
+  String? _teamScope;
   String _section = 'IN_PROGRESS';
   int _revision = 0;
   late final String _key;
@@ -405,7 +412,7 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
           schema: 'public',
           table: 'swl_live_games',
           callback: (_) {
-            if (_section == 'IN_PROGRESS') unawaited(_refresh());
+            if (_section != 'favorite') unawaited(_refresh());
           },
         )
         .subscribe();
@@ -425,6 +432,7 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
         }
         _favoritesReady = true;
       });
+      unawaited(_refresh());
     } catch (_) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(
@@ -450,7 +458,9 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
         setState(() {
           _favorites.clear();
           _favorites.addAll(next);
+          _revision++;
         });
+      if (mounted) unawaited(_refresh());
     } catch (_) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(
@@ -461,49 +471,99 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
     }
   }
 
+  List<String> get _favoriteTeams => [
+    for (final key in _favorites.keys)
+      if (key.startsWith('team:')) key.substring(5),
+  ];
+
+  bool _favored(Map<String, dynamic> row) =>
+      _favorites.containsKey('team:${row['home_team_id']}') ||
+      _favorites.containsKey('team:${row['away_team_id']}');
+
   Future<void> _refresh({bool append = false}) async {
-    if (_section == 'favorite') return;
     if (_loading) {
       _queued = true;
       return;
     }
     _loading = true;
     final revision = _revision;
-    final count = append ? (_games?.length ?? 0) : 0;
+    final section = _section;
+    final favoriteIds = _favoriteTeams;
+    final scope = _teamScope;
+    final restricted = scope != null || _onlyFavorites;
+    final filters = scope == null ? favoriteIds : [scope];
+    final offset = append ? _offset : 0;
     try {
-      final games = await _client
-          .from('swl_live_games')
-          .select(
-            'id,game_pin,created_at,home_team_id,away_team_id,home_runs,away_runs,inning,status',
-          )
-          .eq('status', _section)
-          .order('created_at', ascending: false)
-          .order('id')
-          .range(count, count + 29)
-          .timeout(const Duration(seconds: 12));
-      final ids = {
-        for (final game in games) ...[
-          game['home_team_id'],
-          game['away_team_id'],
-        ],
-      }.whereType<String>().toList();
-      final teams = ids.isEmpty
-          ? <Map<String, dynamic>>[]
-          : await swlQueryTeams(
-              (columns) async => await _client
-                  .from('teams')
-                  .select(columns)
-                  .inFilter('id', ids)
-                  .timeout(const Duration(seconds: 12)),
-            );
+      Future<List<Map<String, dynamic>>> fetch(
+        int from,
+        List<String>? ids,
+      ) async {
+        if (ids != null && ids.isEmpty) return [];
+        var query = _client
+            .from('swl_live_games')
+            .select(
+              'id,game_pin,created_at,home_team_id,away_team_id,home_runs,away_runs,inning,is_top,status',
+            )
+            .eq('status', section);
+        if (ids != null) {
+          final teams = ids.join(',');
+          query = query.or('home_team_id.in.($teams),away_team_id.in.($teams)');
+        }
+        return query
+            .order('created_at', ascending: false)
+            .order('id')
+            .range(from, from + 29)
+            .timeout(const Duration(seconds: 12));
+      }
+
+      List<Map<String, dynamic>> page = [];
+      List<Map<String, dynamic>> priority = [];
+      if (section != 'favorite') {
+        final pages = await Future.wait([
+          fetch(offset, restricted ? filters : null),
+          if (!restricted && !append && favoriteIds.isNotEmpty)
+            fetch(0, favoriteIds),
+        ]);
+        page = pages.first;
+        if (pages.length > 1) priority = pages[1];
+      }
+      final ids =
+          <String>{
+                ...favoriteIds,
+                for (final game in [...page, ...priority])
+                  for (final side in ['home', 'away'])
+                    if (game['${side}_team_id'] case final String id) id,
+              }
+              .where((id) => !_teams.containsKey(id) || section == 'favorite')
+              .toList();
+      final teams = <Map<String, dynamic>>[];
+      for (var i = 0; i < ids.length; i += 40) {
+        final batch = ids.skip(i).take(40).toList();
+        teams.addAll(
+          await swlQueryTeams(
+            (columns) async => await _client
+                .from('teams')
+                .select(columns)
+                .inFilter('id', batch)
+                .timeout(const Duration(seconds: 12)),
+          ),
+        );
+      }
       if (!mounted || revision != _revision) return;
       setState(() {
-        _games = [if (append) ...?_games, ...games];
-        _teams = {
-          if (append) ..._teams,
-          for (final team in teams) team['id'].toString(): team,
-        };
-        _more = games.length == 30;
+        final merged = {
+          for (final row in [if (append) ...?_games, ...priority, ...page])
+            row['id']: row,
+        }.values;
+        _games = [
+          ...merged.where(_favored),
+          ...merged.where((row) => !_favored(row)),
+        ];
+        _teams.addEntries(
+          teams.map((team) => MapEntry(team['id'].toString(), team)),
+        );
+        _offset = offset + page.length;
+        _more = page.length == 30;
         _error = false;
       });
     } catch (_) {
@@ -517,14 +577,16 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
     }
   }
 
-  void _switchSection(String value) {
+  void _switchSection(String value, {String? team, bool keepTeam = false}) {
     setState(() {
       _section = value;
+      if (!keepTeam || value == 'favorite') _teamScope = team;
       _revision++;
       _games = null;
+      _offset = 0;
       _error = false;
     });
-    _refresh();
+    unawaited(_refresh());
   }
 
   Future<void> _openGame(String id) async {
@@ -533,6 +595,7 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
         builder: (_) => _SwlFanGame(
           gameId: id,
           favorites: _favorites,
+          knownTeams: Map.of(_teams),
           toggleFavorite: _toggleFavorite,
         ),
       ),
@@ -562,10 +625,29 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
               ChoiceChip(
                 label: Text(label),
                 selected: _section == value,
-                onSelected: (_) => _switchSection(value),
+                onSelected: (_) => _switchSection(value, keepTeam: true),
               ),
           ],
         ),
+        if (_section != 'favorite')
+          if (_teamScope case final String id)
+            InputChip(
+              label: Text(
+                _teams[id]?['name']?.toString() ??
+                    _favorites['team:$id'] ??
+                    'Equipo',
+              ),
+              onDeleted: () => _switchSection(_section),
+            )
+          else
+            FilterChip(
+              label: const Text('Solo mis equipos favoritos'),
+              selected: _onlyFavorites,
+              onSelected: (value) {
+                _onlyFavorites = value;
+                _switchSection(_section);
+              },
+            ),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _refresh,
@@ -573,23 +655,50 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 if (_section == 'favorite') ...[
-                  if (_favorites.isEmpty)
+                  if (_error)
                     const ListTile(
                       title: Text(
-                        'Añade equipos y peloteros desde la ficha de un partido.',
+                        'No se pudieron actualizar los logos de favoritos.',
                       ),
                     ),
-                  for (final item in _favorites.entries)
+                  const ListTile(title: Text('Mis equipos favoritos')),
+                  if (_favoriteTeams.isEmpty)
+                    const ListTile(
+                      subtitle: Text('Añade equipos desde un partido.'),
+                    ),
+                  for (final id in _favoriteTeams)
                     ListTile(
-                      leading: Icon(
-                        item.key.startsWith('team:')
-                            ? Icons.shield_outlined
-                            : Icons.person_outline,
+                      leading: SwlTeamBadge(url: swlTeamLogo(_teams[id])),
+                      title: Text(
+                        _teams[id]?['name']?.toString() ??
+                            _favorites['team:$id']!,
                       ),
+                      onTap: () => _switchSection('IN_PROGRESS', team: id),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.star, color: Colors.amber),
+                        tooltip: 'Quitar equipo favorito',
+                        onPressed: () => _toggleFavorite(
+                          'team:$id',
+                          _favorites['team:$id']!,
+                        ),
+                      ),
+                    ),
+                  const ListTile(title: Text('Mis peloteros favoritos')),
+                  if (!_favorites.keys.any((key) => key.startsWith('player:')))
+                    const ListTile(
+                      subtitle: Text(
+                        'Marca la estrella de un pelotero en Alineaciones.',
+                      ),
+                    ),
+                  for (final item in _favorites.entries.where(
+                    (item) => item.key.startsWith('player:'),
+                  ))
+                    ListTile(
+                      leading: const Icon(Icons.person_outline),
                       title: Text(item.value),
                       trailing: IconButton(
-                        icon: const Icon(Icons.star),
-                        tooltip: 'Quitar favorito',
+                        icon: const Icon(Icons.star, color: Colors.amber),
+                        tooltip: 'Quitar pelotero favorito',
                         onPressed: () => _toggleFavorite(item.key, item.value),
                       ),
                     ),
@@ -641,11 +750,19 @@ class _SwlFanScreenState extends State<SwlFanScreen> {
       subtitle: Text(
         row['status'] == 'OFFICIAL'
             ? "${row['game_pin']} · Oficial"
-            : "${row['game_pin']} · Entrada ${row['inning']}",
+            : "${row['game_pin']} · En vivo · ${row['is_top'] == true
+                  ? 'Alta'
+                  : row['is_top'] == false
+                  ? 'Baja'
+                  : 'Entrada'} ${row['inning']}",
       ),
-      trailing: favored
-          ? const Icon(Icons.star, color: Colors.amber)
-          : SwlTeamBadge(url: swlTeamLogo(home)),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (favored) const Icon(Icons.star, color: Colors.amber, size: 18),
+          SwlTeamBadge(url: swlTeamLogo(home)),
+        ],
+      ),
       onTap: () => _openGame(row['id'] as String),
     );
   }
@@ -655,10 +772,12 @@ class _SwlFanGame extends StatefulWidget {
   const _SwlFanGame({
     required this.gameId,
     required this.favorites,
+    required this.knownTeams,
     required this.toggleFavorite,
   });
   final String gameId;
   final Map<String, String> favorites;
+  final Map<String, Map<String, dynamic>> knownTeams;
   final Future<void> Function(String, String) toggleFavorite;
 
   @override
@@ -670,6 +789,8 @@ class _SwlFanGameState extends State<_SwlFanGame> {
   late final RealtimeChannel _channel;
   late final Timer _timer;
   Map<String, dynamic>? _game;
+  SwlLiveScoreboardSnapshot? _snapshot;
+  bool _liveDetailsAvailable = false;
   bool _loading = false;
   bool _queued = false;
   bool _failed = false;
@@ -691,8 +812,8 @@ class _SwlFanGameState extends State<_SwlFanGame> {
           callback: (_) => unawaited(_read()),
         )
         .subscribe();
-    _timer = Timer.periodic(const Duration(seconds: 20), (_) {
-      if (_game?['status'] != 'OFFICIAL') unawaited(_read());
+    _timer = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (_snapshot?.status != 'OFFICIAL') unawaited(_read());
     });
     _read();
   }
@@ -704,12 +825,78 @@ class _SwlFanGameState extends State<_SwlFanGame> {
     }
     _loading = true;
     try {
-      final game = await swlReadSpectatorGame(widget.gameId);
-      if (mounted)
-        setState(() {
-          _game = game;
-          _failed = false;
-        });
+      // La ficha pública conserva logos, alineaciones y estadísticas oficiales.
+      // El marcador detallado usa la misma fila oficial que la pizarra del mánager.
+      final reads = await Future.wait<Map<String, dynamic>?>([
+        swlReadSpectatorGame(widget.gameId)
+            .then<Map<String, dynamic>?>((value) => value)
+            .catchError((Object _) => null),
+        _client
+            .from('swl_live_games')
+            .select(
+              'id,game_pin,status,version,inning,is_top,balls,strikes,outs,bases_state,'
+              'home_team_id,away_team_id,home_runs,away_runs,home_hits,away_hits,'
+              'home_errors,away_errors,home_innings,away_innings,'
+              'swl_regulation_innings,swl_final_half_completed,swl_finish_reason',
+            )
+            .eq('id', widget.gameId)
+            .inFilter('status', [
+              'IN_PROGRESS',
+              'FINAL',
+              'OFFICIAL',
+              'CANCELED',
+              'CANCELLED',
+            ])
+            .maybeSingle()
+            .timeout(const Duration(seconds: 8))
+            .catchError((Object _) => null),
+      ]);
+      final row = reads.last;
+      if (!mounted) return;
+      if (reads.first == null && row == null) {
+        throw StateError('Marcador no disponible.');
+      }
+      final game =
+          reads.first ??
+          _game ??
+          <String, dynamic>{
+            'code': row?['game_pin'],
+            for (final side in ['home', 'away'])
+              side: widget.knownTeams[row?['${side}_team_id']],
+          };
+      final publicState = <String, dynamic>{
+        'id': widget.gameId,
+        'game_pin': game['code'],
+        'status': game['status'],
+        'version': game['version'],
+        'inning': game['inning'],
+        'swl_finish_reason': game['finish'],
+        for (final side in ['home', 'away'])
+          if (game[side] case final Map team) ...{
+            '${side}_team_id': team['id'],
+            for (final field in ['runs', 'hits', 'errors', 'innings'])
+              '${side}_$field': team[field],
+          },
+      };
+      final direct = row == null
+          ? null
+          : SwlLiveScoreboardSnapshot.fromGame(row);
+      final reduced = SwlLiveScoreboardSnapshot.fromGame(publicState);
+      final detailed = direct != null && direct.version >= reduced.version;
+      final incoming = detailed ? direct : reduced;
+      final current = _snapshot;
+      if (current != null &&
+          (incoming.version < current.version ||
+              (incoming.version == current.version &&
+                  _liveDetailsAvailable &&
+                  !detailed)))
+        return;
+      setState(() {
+        _game = game;
+        _snapshot = incoming;
+        _liveDetailsAvailable = detailed;
+        _failed = false;
+      });
     } catch (_) {
       if (mounted) setState(() => _failed = true);
     } finally {
@@ -728,91 +915,48 @@ class _SwlFanGameState extends State<_SwlFanGame> {
     super.dispose();
   }
 
-  Widget _favorite(String key, String label) => IconButton(
-    icon: Icon(
-      widget.favorites.containsKey(key) ? Icons.star : Icons.star_border,
-      color: Colors.amber,
-    ),
-    tooltip: 'Cambiar favorito',
-    onPressed: () async {
-      await widget.toggleFavorite(key, label);
-      if (mounted) setState(() {});
-    },
-  );
-
   @override
   Widget build(BuildContext context) {
     final game = _game;
-    final lineups = swlRows(game?['lineups']);
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(game?['code']?.toString() ?? 'Partido'),
-        actions: [
-          IconButton(
-            onPressed: _read,
-            tooltip: 'Actualizar',
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
+    final snapshot = _snapshot;
+    if (game == null || snapshot == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Partido')),
+        body: Center(
+          child: _failed
+              ? TextButton(
+                  onPressed: _read,
+                  child: const Text('Volver a consultar el marcador'),
+                )
+              : const CircularProgressIndicator(),
+        ),
+      );
+    }
+    Map<String, dynamic> team(String side, String id) => {
+      ...?widget.knownTeams[id],
+      if (game[side] case final Map publicTeam)
+        for (final entry in publicTeam.entries)
+          if (entry.key is String && entry.value != null)
+            entry.key as String: entry.value,
+    };
+    final home = team('home', snapshot.homeTeamId);
+    final away = team('away', snapshot.awayTeamId);
+    return SwlAdvancedScoreboard(
+      gamePin: snapshot.pin,
+      homeTeam: home['name']?.toString() ?? 'Local',
+      awayTeam: away['name']?.toString() ?? 'Visitante',
+      homeLogo: swlTeamLogo(home),
+      awayLogo: swlTeamLogo(away),
+      liveSnapshot: snapshot,
+      spectator: SwlSpectatorView(
+        publicGame: game,
+        detailed: _liveDetailsAvailable,
+        isFavorite: widget.favorites.containsKey,
+        toggleFavorite: (key, label) async {
+          await widget.toggleFavorite(key, label);
+          if (mounted) setState(() {});
+        },
       ),
-      body: game == null && !_failed
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              children: [
-                if (_failed)
-                  const ListTile(
-                    title: Text(
-                      'El marcador no está disponible en este momento.',
-                    ),
-                  ),
-                if (game != null) ...[
-                  if (game['status'] == 'OFFICIAL')
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: SwlShareBoxScoreButton(gameId: widget.gameId),
-                    ),
-                  if (game['status'] == 'IN_PROGRESS')
-                    ListTile(
-                      title: Text('En vivo · entrada ${game['inning']}'),
-                    ),
-                  for (final side in ['away', 'home'])
-                    if (game[side] case final Map team) ...[
-                      ListTile(
-                        leading: SwlTeamBadge(
-                          url: swlTeamLogo(Map<String, dynamic>.from(team)),
-                        ),
-                        title: Text(
-                          "${team['name'] ?? 'Equipo'} · ${team['runs'] ?? '—'}",
-                        ),
-                        trailing: _favorite(
-                          'team:${team['id']}',
-                          team['name']?.toString() ?? 'Equipo',
-                        ),
-                      ),
-                      for (final player in lineups.where(
-                        (row) => row['team_id'] == team['id'],
-                      ))
-                        ListTile(
-                          title: Text("${player['order']}. ${player['name']}"),
-                          subtitle: Text(
-                            [
-                              player['number'],
-                              player['position'],
-                            ].whereType<String>().join(' · '),
-                          ),
-                          trailing: _favorite(
-                            'player:${player['id']}',
-                            player['name']?.toString() ?? 'Pelotero',
-                          ),
-                        ),
-                    ],
-                  if (lineups.isEmpty)
-                    const ListTile(
-                      title: Text('Alineaciones públicas aún no disponibles.'),
-                    ),
-                ],
-              ],
-            ),
     );
   }
 }

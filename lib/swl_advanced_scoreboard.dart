@@ -114,6 +114,9 @@ class SwlScorePlayRecord {
   final String description;
   final String notation;
   final String batterName;
+  final Set<String> playerIds;
+  final String? batterId;
+  final bool completedPlateAppearance;
 
   SwlScorePlayRecord({
     required this.inning,
@@ -121,6 +124,9 @@ class SwlScorePlayRecord {
     required this.description,
     required this.notation,
     required this.batterName,
+    this.playerIds = const {},
+    this.batterId,
+    this.completedPlateAppearance = false,
   });
 }
 
@@ -172,8 +178,23 @@ class SwlScoreGameSnapshot {
   });
 }
 
+class SwlSpectatorView {
+  const SwlSpectatorView({
+    required this.publicGame,
+    required this.detailed,
+    required this.isFavorite,
+    required this.toggleFavorite,
+  });
+
+  final Map<String, dynamic> publicGame;
+  final bool detailed;
+  final bool Function(String) isFavorite;
+  final Future<void> Function(String, String) toggleFavorite;
+}
+
 class SwlAdvancedScoreboard extends StatefulWidget {
-  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveSubstitute, this.onLivePitcher, this.onLiveSwapFielders, this.onLiveRefresh, this.onMatchDecision, this.homeLogo, this.awayLogo});
+  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveSubstitute, this.onLivePitcher, this.onLiveSwapFielders, this.onLiveRefresh, this.onMatchDecision, this.homeLogo, this.awayLogo, this.spectator}) : assert(spectator == null || liveSnapshot != null);
+  final SwlSpectatorView? spectator;
   final String? homeLogo;
   final String? awayLogo;
   final VoidCallback? onLiveDetails;
@@ -209,6 +230,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   int _lastLineupRefreshVersion = -1;
   int _livePollCount = 0;
   String? _lineupLoadError;
+  Map<String, Map<String, int>> _spectatorBatting = {};
+  Map<String, SwlPitchingTotals> _spectatorPitching = {};
+  Map<String, String> _spectatorNames = {};
+  int _spectatorSection = 0;
+  bool _spectatorHome = false;
 
   Future<void> _loadLiveLineups() async {
     final live = _currentLiveSnapshot;
@@ -257,14 +283,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         if (data is! Map || data['batter_id'] == null) continue;
         final playerId = data['batter_id'].toString();
         final action = event['event_type']?.toString().toUpperCase();
-        final totals = batterStats.putIfAbsent(playerId,
-            () => {'ab': 0, 'hits': 0, 'bb': 0, 'rbi': 0, 'sf': 0});
         // Las impulsadas solo pertenecen a resultados de turno confirmados.
         // Nunca contar RBI de RUNNER_MOVE, RUN, UNDO_OUT o eventos auxiliares.
         const completedActions = {'HIT', 'OUT', 'DOUBLE_PLAY', 'ERROR', 'SACRIFICE_FLY'};
         final completedPlateAppearance = completedActions.contains(action) ||
             ((action == 'BALL' || action == 'STRIKE') &&
                 data['plate_appearance_completed'] == true);
+        if (widget.spectator != null && !completedPlateAppearance) continue;
+        final totals = batterStats.putIfAbsent(playerId,
+            () => {'ab': 0, 'hits': 0, 'bb': 0, 'rbi': 0, 'sf': 0});
         final rbi = data['rbi'] ?? data['rbis'];
         if (completedPlateAppearance && rbi is int && rbi >= 0 && rbi <= 4) {
           totals['rbi'] = totals['rbi']! + rbi;
@@ -320,6 +347,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               name: name.isEmpty ? 'Pelotero no disponible' : name,
               number: player?['jersey_number']?.toString() ?? '-',
               playerId: id,
+              defensivePosition: widget.spectator == null ? 'SIN' :
+                  (row['defensive_positions'] is Map
+                      ? (row['defensive_positions'] as Map)[id]?.toString() : null) ??
+                  (row['designated_hitter_id']?.toString() == id ? 'DH' : 'SIN'),
               ab: batterStats[id]?['ab'] ?? 0,
               hits: batterStats[id]?['hits'] ?? 0,
               bb: batterStats[id]?['bb'] ?? 0,
@@ -370,6 +401,14 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         );
       }
       setState(() {
+        if (widget.spectator != null) {
+          _spectatorBatting = batterStats;
+          _spectatorPitching = pitching ?? {};
+          _spectatorNames = {
+            for (final entry in players.entries)
+              entry.key: '${entry.value['first_name'] ?? ''} ${entry.value['last_name'] ?? ''}'.trim(),
+          };
+        }
         _pitchingConfirmed = pitching != null && (pitching.isNotEmpty || rawEvents.isEmpty);
         homePitcher = readPitcher(live.homeTeamId, homeName);
         visitorPitcher = readPitcher(live.awayTeamId, visitorName);
@@ -465,6 +504,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         }
       }
       if (!mounted || _currentLiveSnapshot?.gameId != live.gameId) return;
+      final publicNames = <String, String>{
+        if (widget.spectator case final SwlSpectatorView view)
+          for (final row in swlRows(view.publicGame['lineups']))
+            if (row['id'] != null && row['name'] != null)
+              row['id'].toString(): row['name'].toString(),
+      };
       final history = events.map((event) {
         final raw = event['event_data'];
         final data = raw is Map ? raw : const {};
@@ -568,7 +613,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               ? '$description · $outsAdded out(s)$outDetail$thirdOutDetail$runsDetail'
               : '$description$errorDetail',
           notation: notation,
-          batterName: name.isEmpty ? 'Partido' : name,
+          batterName: name.isEmpty ? publicNames[playerId?.toString()] ?? 'Partido' : name,
+          batterId: data['batter_id']?.toString(),
+          completedPlateAppearance: data['plate_appearance_completed'] == true ||
+              const {'HIT', 'OUT', 'DOUBLE_PLAY', 'SACRIFICE_FLY', 'ERROR'}.contains(action),
+          playerIds: {
+            for (final key in ['batter_id', 'runner_id', 'last_out_player_id',
+              'out_runner_id', 'incoming_player_id', 'outgoing_player_id'])
+              if (data[key] case final Object id) id.toString(),
+          },
         );
       }).toList();
       // Si el marcador avanzó mientras llegaban los eventos, no mostrar
@@ -719,8 +772,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       Future.microtask(_refreshLiveHistory);
       _liveRefreshTimer = Timer.periodic(
         const Duration(seconds: 4), (_) {
-          unawaited(_refreshLiveScore());
-          unawaited(_refreshLiveHistory());
+          if (widget.spectator == null) {
+            unawaited(_refreshLiveScore());
+            unawaited(_refreshLiveHistory());
+          } else {
+            if (_lastLineupRefreshVersion != _currentLiveSnapshot?.version) {
+              unawaited(_loadLiveLineups());
+            }
+            if (_historyReadError != null || playsLog.isEmpty) unawaited(_refreshLiveHistory());
+          }
         });
     }
   }
@@ -753,6 +813,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   @override
   void didUpdateWidget(covariant SwlAdvancedScoreboard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.spectator != null) {
+      homeName = widget.homeTeam;
+      visitorName = widget.awayTeam;
+    }
     final incoming = widget.liveSnapshot;
     final current = _currentLiveSnapshot;
     if (incoming != oldWidget.liveSnapshot && (incoming == null ||
@@ -1928,6 +1992,12 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         ? currentBatter
         : SwlScorePlayer(name: 'Bateador por sincronizar', number: '-');
     final pitcher = activePitcher;
+    final watching = widget.spectator != null;
+    final favoriteAtBat = watching && syncedBatter && _isFavoritePlayer(batter.playerId);
+    final latestPlay = playsLog.lastOrNull;
+    final favoriteResult = watching && latestPlay != null &&
+        latestPlay.completedPlateAppearance && _isFavoritePlayer(latestPlay.batterId);
+
 
     final scoreboard = Scaffold(
       backgroundColor: const Color(0xFF0B1118),
@@ -1936,7 +2006,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         elevation: 0,
         title: Text(widget.liveSnapshot == null ? '⚾ PIZARRA · PRUEBA LOCAL' : '⚾ PIZARRA · EN VIVO', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
         actions: [
-          if (widget.liveSnapshot != null)
+          if (widget.liveSnapshot != null && !watching)
             IconButton(tooltip: 'Actualizar pizarra', icon: const Icon(Icons.refresh, size: 20),
               onPressed: () async {
                 // Primero actualizar la versión del partido. Esa lectura ya
@@ -1946,8 +2016,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 await _refreshLiveHistory();
                 if (mounted) await widget.onLiveRefresh?.call();
               }),
-          if (widget.onLiveSubstitute != null || widget.onLivePitcher != null ||
-              widget.onLiveSwapFielders != null)
+          if (!watching && (widget.onLiveSubstitute != null || widget.onLivePitcher != null ||
+              widget.onLiveSwapFielders != null))
             PopupMenuButton<String>(
               tooltip: 'Cambios de jugadores',
               icon: const Icon(Icons.swap_horiz, color: Colors.amber),
@@ -1971,7 +2041,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   const PopupMenuItem(value: 'fielders', child: Text('Intercambiar posiciones defensivas')),
               ],
             ),
-          if (widget.onLiveDetails != null)
+          if (!watching && widget.onLiveDetails != null)
             IconButton(
               tooltip: 'Box Score, alineaciones e historial',
               onPressed: widget.onLiveDetails,
@@ -2013,12 +2083,21 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           children: [
             Padding(
               padding: const EdgeInsets.all(6),
-              child: Text(widget.liveSnapshot == null ? 'PIN: ${widget.gamePin} · SOLO DEMOSTRACIÓN LOCAL · SIN SINCRONIZACIÓN' : 'PIN: ${widget.gamePin} · ${widget.onLiveAction == null ? 'SOLO LECTURA' : 'ANOTACIÓN POR EQUIPO'}',
+              child: Text(widget.liveSnapshot == null ? 'PIN: ${widget.gamePin} · SOLO DEMOSTRACIÓN LOCAL · SIN SINCRONIZACIÓN' : 'PIN: ${widget.gamePin} · ${watching || widget.onLiveAction == null ? 'SOLO LECTURA' : 'ANOTACIÓN POR EQUIPO'}',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold)),
             ),
             _buildMlbLineScore(),
-            _buildCountAndBases(),
+            if (!watching || widget.spectator!.detailed) _buildCountAndBases()
+            else const Padding(padding: EdgeInsets.all(8),
+              child: Text('Conteo y bases no disponibles para consulta.')),
+            if (watching)
+              Text(switch (_currentLiveSnapshot?.status) {
+                'OFFICIAL' => 'Resultado oficial',
+                'FINAL' => 'Final · pendiente de oficializar',
+                'IN_PROGRESS' => 'En vivo',
+                _ => 'Partido',
+              }),
 
             // BARRA INTERACTIVA: DUELO BATEADOR VS PITCHER (AMBOS CON CLIC)
             Container(
@@ -2038,14 +2117,16 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                         decoration: BoxDecoration(
                           color: const Color(0xFF16202C),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.blueGrey.shade800),
+                          border: Border.all(color: favoriteAtBat ? Colors.amber : Colors.blueGrey.shade800),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               children: [
-                                const Icon(Icons.sports_baseball, color: Colors.amber, size: 14),
+                                Icon(favoriteAtBat ? Icons.star : Icons.sports_baseball,
+                                  color: Colors.amber, size: 14,
+                                  semanticLabel: favoriteAtBat ? 'Pelotero favorito al bate' : null),
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
@@ -2121,12 +2202,21 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               ),
             ),
 
-            _buildMainButtons(),
+            if (!watching) _buildMainButtons(),
+            if (watching && latestPlay != null)
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Text(
+                  '${favoriteResult ? "★ " : ""}Última jugada: ${latestPlay.batterName} · ${latestPlay.description}',
+                  style: favoriteResult ? const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold) : null,
+                  maxLines: 2, overflow: TextOverflow.ellipsis)),
+            if (watching) _spectatorTabs(),
 
             const SizedBox(height: 4),
 
             Expanded(
-              child: Container(
+              child: watching && _spectatorSection != 0
+                  ? (_spectatorSection == 1 ? _spectatorLineups() : _spectatorStatistics())
+                  : Container(
                 margin: const EdgeInsets.all(10),
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
@@ -2137,7 +2227,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("HISTORIAL JUGADA A JUGADA:", style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                    if (!watching) const Text("HISTORIAL JUGADA A JUGADA:", style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
                     const Divider(color: Colors.white24, height: 10),
                     if (_historyReadError case final String message)
                       Text(message, style: const TextStyle(color: Colors.orangeAccent, fontSize: 11)),
@@ -2170,6 +2260,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                                         child: Text(p.notation, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11)),
                                       ),
                                       const SizedBox(width: 8),
+                                      if (watching && p.playerIds.any(_isFavoritePlayer))
+                                        const Icon(Icons.star, color: Colors.amber, size: 15),
                                       Expanded(
                                         child: Text(
                                           "${p.inning}ra ${p.isTopInning ? 'Alta' : 'Baja'} · ${p.batterName}: ${p.description}",
@@ -2191,6 +2283,105 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       ),
     );
     return scoreboard;
+  }
+
+  bool _isFavoritePlayer(String? id) =>
+      id != null && (widget.spectator?.isFavorite('player:$id') ?? false);
+
+  Widget _spectatorTabs() => Wrap(
+    spacing: 6,
+    children: [
+      for (final (index, label) in ['Jugadas', 'Alineaciones', 'Estadísticas'].indexed)
+        ChoiceChip(label: Text(label), selected: _spectatorSection == index,
+          onSelected: (_) => setState(() => _spectatorSection = index)),
+    ],
+  );
+
+  Widget _spectatorStar(String key, String name) {
+    final view = widget.spectator!;
+    final selected = view.isFavorite(key);
+    return IconButton(
+      tooltip: selected ? 'Quitar de favoritos' : 'Añadir a favoritos',
+      icon: Icon(selected ? Icons.star : Icons.star_border, color: Colors.amber),
+      onPressed: () => view.toggleFavorite(key, name),
+    );
+  }
+
+  Widget _spectatorLineups() {
+    final view = widget.spectator!;
+    final live = _currentLiveSnapshot!;
+    final id = _spectatorHome ? live.homeTeamId : live.awayTeamId;
+    final name = _spectatorHome ? homeName : visitorName;
+    final publicRows = swlRows(view.publicGame['lineups']).where((row) => row['team_id']?.toString() == id).toList();
+    final confirmed = (_spectatorHome ? homeLineup : visitorLineup)
+        .where((player) => player.playerId != null).toList();
+    final rows = confirmed.isNotEmpty && _lastLineupRefreshVersion == live.version ? [
+      for (final (index, player) in confirmed.indexed) {
+        'id': player.playerId, 'order': index + 1, 'name': player.name,
+        'number': player.number, 'position': player.defensivePosition,
+      },
+    ] : publicRows;
+    return Column(children: [
+      Wrap(spacing: 6, children: [
+        for (final (home, label, logo) in [
+          (false, visitorName, widget.awayLogo), (true, homeName, widget.homeLogo),
+        ])
+          ChoiceChip(label: Text(label, overflow: TextOverflow.ellipsis),
+            avatar: SwlTeamBadge(url: logo, size: 20), selected: _spectatorHome == home,
+            onSelected: (_) => setState(() => _spectatorHome = home)),
+      ]),
+      Expanded(child: ListView(children: [
+        if (id.isNotEmpty)
+          ListTile(dense: true, title: Text(name), trailing: _spectatorStar('team:$id', name)),
+        if (rows.isEmpty) const ListTile(title: Text('Alineación pública no disponible.')),
+        for (final row in rows)
+          ListTile(dense: true,
+            title: Text("${row['order']}. ${row['name']}"),
+            subtitle: Text([
+              if (row['number'] != null && row['number'] != '-') "#${row['number']}",
+              if (row['position'] != null && row['position'] != 'SIN') "${row['position']}"
+              else 'Sin posición defensiva publicada',
+            ].join(' · ')),
+            trailing: row['id'] == null ? null :
+                _spectatorStar("player:${row['id']}", row['name'].toString())),
+      ])),
+    ]);
+  }
+
+  Widget _spectatorStatistics() {
+    final game = widget.spectator!.publicGame;
+    final batting = swlRows(game['batting']);
+    final pitching = swlRows(game['pitching']);
+    String name(String id) {
+      final row = _historyPlayers[id];
+      final historyName = '${row?['first_name'] ?? ''} ${row?['last_name'] ?? ''}'.trim();
+      final name = _spectatorNames[id] ?? historyName;
+      return name.isEmpty ? 'Pelotero' : name;
+    }
+    return ListView(children: [
+      if (_currentLiveSnapshot?.status == 'OFFICIAL')
+        Padding(padding: const EdgeInsets.all(12), child: SwlShareBoxScoreButton(gameId: _currentLiveSnapshot!.gameId)),
+      if (batting.isNotEmpty || _spectatorBatting.isNotEmpty) const ListTile(title: Text('Bateo')),
+      if (batting.isNotEmpty)
+        for (final row in batting)
+          ListTile(dense: true, title: Text(row['name']?.toString() ?? 'Pelotero'),
+            subtitle: Text("AB ${row['ab'] ?? '—'} · H ${row['h'] ?? '—'} · BB ${row['bb'] ?? '—'} · RBI ${row['rbi'] ?? '—'}"))
+      else
+        for (final entry in _spectatorBatting.entries)
+          ListTile(dense: true, title: Text(name(entry.key)),
+            subtitle: Text("AB ${entry.value['ab']} · H ${entry.value['hits']} · BB ${entry.value['bb']} · RBI ${entry.value['rbi']}")),
+      if (pitching.isNotEmpty || _spectatorPitching.isNotEmpty) const ListTile(title: Text('Pitcheo')),
+      if (pitching.isNotEmpty)
+        for (final row in pitching)
+          ListTile(dense: true, title: Text(row['name']?.toString() ?? 'Lanzador'),
+            subtitle: Text("${row['outs'] is int ? '${(row['outs'] as int) ~/ 3}.${(row['outs'] as int) % 3}' : '—'} IP · ${row['k'] ?? '—'} K"))
+      else
+        for (final entry in _spectatorPitching.entries)
+          ListTile(dense: true, title: Text(name(entry.key)),
+            subtitle: Text('${entry.value.innings} IP · ${entry.value.strikeouts} K · ${entry.value.walks} BB · ${entry.value.hits} H')),
+      if (batting.isEmpty && pitching.isEmpty && _spectatorBatting.isEmpty && _spectatorPitching.isEmpty)
+        const ListTile(title: Text('Aún no hay estadísticas individuales disponibles.')),
+    ]);
   }
 
   Widget _buildMlbLineScore() {
@@ -2592,7 +2783,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         Positioned(
           top: 0,
           child: _baseNode(on2B, () {
-            if (widget.liveSnapshot != null) { _liveBaseMenu(2); return; }
+            if (widget.liveSnapshot != null) {
+              if (widget.spectator == null) _liveBaseMenu(2);
+              return;
+            }
             if (on2B) _openRunnerActionModal(2);
             else { _saveState(); setState(() => on2B = true); }
           }),
@@ -2601,7 +2795,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           left: 4,
           top: 20,
           child: _baseNode(on3B, () {
-            if (widget.liveSnapshot != null) { _liveBaseMenu(3); return; }
+            if (widget.liveSnapshot != null) {
+              if (widget.spectator == null) _liveBaseMenu(3);
+              return;
+            }
             if (on3B) _openRunnerActionModal(3);
             else { _saveState(); setState(() => on3B = true); }
           }),
@@ -2610,7 +2807,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           right: 4,
           top: 20,
           child: _baseNode(on1B, () {
-            if (widget.liveSnapshot != null) { _liveBaseMenu(1); return; }
+            if (widget.liveSnapshot != null) {
+              if (widget.spectator == null) _liveBaseMenu(1);
+              return;
+            }
             if (on1B) _openRunnerActionModal(1);
             else { _saveState(); setState(() => on1B = true); }
           }),

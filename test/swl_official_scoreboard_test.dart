@@ -45,6 +45,139 @@ void main() {
   });
   tearDownAll(() => Supabase.instance.dispose());
 
+  testWidgets(
+    'Fan consulta la pizarra, equipos separados y jugadas de favoritos',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(400, 740));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      methods.clear();
+      respond = (request) async {
+        if (request.url.path.endsWith('/swl_game_lineups')) {
+          return jsonResponse([
+            {
+              'team_id': 'away',
+              'lineup': [
+                {'order': 1, 'player_id': 'away-player'},
+              ],
+              'defensive_positions': {'away-player': '1B'},
+            },
+          ]);
+        }
+        if (request.url.path.endsWith('/players')) {
+          return jsonResponse([
+            {
+              'id': 'away-player',
+              'first_name': 'Visitante',
+              'last_name': 'Uno',
+              'jersey_number': 12,
+            },
+          ]);
+        }
+        if (request.url.path.endsWith('/swl_game_events')) {
+          return jsonResponse([
+            {
+              'id': 'play',
+              'event_type': 'HIT',
+              'inning': 1,
+              'is_top': true,
+              'version': 1,
+              'event_data': {'batter_id': 'away-player', 'batter_base': 2},
+            },
+          ]);
+        }
+        return jsonResponse([]);
+      };
+      final favorites = <String>{'player:away-player'};
+      var scoringCalls = 0;
+      Widget game(int version, bool isTop) => MaterialApp(
+        home: SwlAdvancedScoreboard(
+          gamePin: 'SWL-TEST',
+          awayTeam: 'Visitantes',
+          homeTeam: 'Locales',
+          liveSnapshot: SwlLiveScoreboardSnapshot.fromGame({
+            'id': 'spectator-test',
+            'status': 'IN_PROGRESS',
+            'version': version,
+            'is_top': isTop,
+            'inning': 1,
+            'away_team_id': 'away',
+            'home_team_id': 'home',
+            'away_runs': version - 1,
+          }),
+          onLiveAction: (_, _, _) async {
+            scoringCalls++;
+          },
+          spectator: SwlSpectatorView(
+            detailed: true,
+            isFavorite: favorites.contains,
+            toggleFavorite: (id, _) async {
+              favorites.remove(id);
+            },
+            publicGame: const {
+              'lineups': [
+                {
+                  'team_id': 'away',
+                  'id': 'away-player',
+                  'order': 1,
+                  'name': 'Visitante Uno',
+                  'number': 12,
+                  'position': '1B',
+                },
+                {
+                  'team_id': 'home',
+                  'id': 'home-player',
+                  'order': 1,
+                  'name': 'Local Uno',
+                  'number': 8,
+                  'position': 'P',
+                },
+              ],
+            },
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(game(1, true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('★ Última jugada:'), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Icon &&
+              widget.semanticLabel == 'Pelotero favorito al bate',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Doble'), findsWidgets);
+      for (final label in ['BOLA', 'STRIKE', 'OUT', 'BATAZO / HIT']) {
+        expect(find.widgetWithText(ElevatedButton, label), findsNothing);
+      }
+      expect(find.byTooltip('Cambios de jugadores'), findsNothing);
+      expect(find.byTooltip('Actualizar pizarra'), findsNothing);
+
+      await tester.tap(find.text('Alineaciones'));
+      await tester.pumpAndSettle();
+      expect(find.text('1. Visitante Uno'), findsOneWidget);
+      expect(find.text('#12 · 1B'), findsOneWidget);
+      expect(find.text('1. Local Uno'), findsNothing);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Locales'));
+      await tester.pumpAndSettle();
+      expect(find.text('1. Local Uno'), findsOneWidget);
+      expect(find.text('1. Visitante Uno'), findsNothing);
+
+      await tester.pumpWidget(game(2, false));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('BAJA'), findsOneWidget);
+      expect(find.text('1. Local Uno'), findsOneWidget);
+      await tester.tap(find.text('Estadísticas'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('AB 1 · H 1'), findsOneWidget);
+      expect(scoringCalls, 0);
+      expect(methods.every((method) => method == 'GET'), isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('La pizarra oficial de solo lectura acepta un cambio de turno', (
     tester,
   ) async {
