@@ -72,6 +72,12 @@ BEGIN
     EXCEPTION WHEN raise_exception THEN
       IF SQLERRM <> 'CANCEL_ACTION_UNAVAILABLE' THEN RAISE; END IF;
     END;
+    BEGIN
+      PERFORM public.swl_v57_cancel_game(fixture,2,'CANCEL_REJECT');
+      RAISE SQLSTATE 'ZX011' USING MESSAGE='El solicitante pudo rechazar su propia solicitud';
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM <> 'CANCEL_ACTION_UNAVAILABLE' THEN RAISE; END IF;
+    END;
     PERFORM set_config('request.jwt.claim.sub',gen_random_uuid()::text,true);
     BEGIN
       PERFORM public.swl_v57_cancel_game(fixture,2,'CANCEL_ACCEPT');
@@ -90,21 +96,34 @@ BEGIN
     IF NOT EXISTS (SELECT FROM public.swl_live_games
       WHERE id=fixture AND status='IN_PROGRESS' AND swl_cancel_requested_by IS NULL AND version=3)
     THEN RAISE EXCEPTION 'El rechazo cambió el estado o no retiró la solicitud'; END IF;
-    PERFORM public.swl_v56_record_plate_action(fixture,3,'OUT',away_players[1]);
+    PERFORM public.swl_v56_substitute_batter(
+      fixture,source_game.away_team_id,1,away_players[1],away_players[11],
+      (SELECT revision FROM public.swl_game_lineups
+       WHERE game_id=fixture AND team_id=source_game.away_team_id),3
+    );
+    PERFORM public.swl_v56_record_plate_action(fixture,4,'OUT',away_players[11]);
     SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id) INTO history_before
       FROM public.swl_game_events e WHERE game_id=fixture;
     IF history_before IS NULL THEN RAISE EXCEPTION 'No se registró la jugada de control'; END IF;
-    PERFORM public.swl_v57_cancel_game(fixture,4,'CANCEL_REQUEST');
+    BEGIN
+      PERFORM swl_private.v57_check_participation(
+        other_game,source_game.away_team_id,ARRAY[away_players[1]]
+      );
+      RAISE SQLSTATE 'ZX011' USING MESSAGE='Se liberó al sustituido antes de cancelar';
+    EXCEPTION WHEN raise_exception THEN
+      IF SQLERRM <> 'PELOTERO_EN_OTRO_PARTIDO_O_EQUIPO' THEN RAISE; END IF;
+    END;
+    PERFORM public.swl_v57_cancel_game(fixture,5,'CANCEL_REQUEST');
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
     BEGIN
-      PERFORM public.swl_v57_cancel_game(fixture,4,'CANCEL_ACCEPT');
+      PERFORM public.swl_v57_cancel_game(fixture,5,'CANCEL_ACCEPT');
       RAISE SQLSTATE 'ZX011' USING MESSAGE='Se aceptó una versión obsoleta';
     EXCEPTION WHEN serialization_failure THEN
       IF SQLERRM <> 'CANCEL_STALE_VERSION' THEN RAISE; END IF;
     END;
-    PERFORM public.swl_v57_cancel_game(fixture,5,'CANCEL_ACCEPT');
+    PERFORM public.swl_v57_cancel_game(fixture,6,'CANCEL_ACCEPT');
     IF NOT EXISTS (SELECT FROM public.swl_live_games
-      WHERE id=fixture AND status='CANCELLED' AND swl_cancel_requested_by IS NULL AND version=6)
+      WHERE id=fixture AND status='CANCELLED' AND swl_cancel_requested_by IS NULL AND version=7)
       OR (SELECT array_agg(action ORDER BY version)
           FROM public.swl_v57_cancel_decisions WHERE game_id=fixture)
          IS DISTINCT FROM ARRAY['CANCEL_REQUEST','CANCEL_REJECT','CANCEL_REQUEST','CANCEL_ACCEPT']
@@ -112,13 +131,13 @@ BEGIN
           FROM public.swl_v57_cancel_decisions WHERE game_id=fixture)
          IS DISTINCT FROM ARRAY[source_game.home_manager_id, source_game.away_manager_id,
                                   source_game.away_manager_id, source_game.home_manager_id]
-      OR (SELECT count(*) FROM swl_private.v57_participation WHERE game_id=fixture) <> 19
+      OR (SELECT count(*) FROM swl_private.v57_participation WHERE game_id=fixture) <> 20
       OR EXISTS (SELECT FROM swl_private.game_batting(fixture,NULL))
       OR EXISTS (SELECT FROM swl_private.game_pitching(fixture,NULL))
     THEN RAISE EXCEPTION 'Estado, auditoría, participación histórica o estadísticas incorrectas'; END IF;
     PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
     BEGIN
-      PERFORM public.swl_v56_record_plate_action(fixture,6,'BALL',away_players[2]);
+      PERFORM public.swl_v56_record_plate_action(fixture,7,'BALL',away_players[2]);
       RAISE SQLSTATE 'ZX011' USING MESSAGE='Un partido cancelado permitió anotar';
     EXCEPTION WHEN raise_exception THEN
       IF SQLERRM <> 'El partido o la versión cambió antes de anotar.' THEN RAISE; END IF;
@@ -127,6 +146,8 @@ BEGIN
         FROM public.swl_game_events e WHERE game_id=fixture)
        IS DISTINCT FROM history_before
     THEN RAISE EXCEPTION 'Se alteró el historial del partido cancelado'; END IF;
+    PERFORM swl_private.v57_check_participation(other_game,source_game.home_team_id,home_players[1:9]);
+    PERFORM swl_private.v57_check_participation(other_game,source_game.away_team_id,away_players);
     PERFORM public.swl_v56_save_lineup(other_game,source_game.away_team_id,away_players[1:9],0,away_players[10],false,away_players[9],away_def);
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
     PERFORM public.swl_v56_save_lineup(other_game,source_game.home_team_id,home_players[1:9],0,home_players[1],true,NULL,home_def);
