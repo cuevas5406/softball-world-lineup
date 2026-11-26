@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 // URL y Claves de tu servidor Supabase
 const String kSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+const String kSwlBrandAsset = 'assets/branding/swl-logo.webp';
 const String kLabUrl = 'https://wgeziptdoabyicufnrfk.supabase.co';
 // Debe coincidir con AndroidManifest.xml y la allowlist de Supabase LAB.
 const String kAuthRedirectUrl = 'com.softballworld.lineup://login-callback';
@@ -929,7 +930,6 @@ class SplashScreen extends StatelessWidget {
   final VoidCallback? onWatch;
   const SplashScreen({super.key, required this.onContinue, this.onWatch});
 
-  final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
   @override
   Widget build(BuildContext context) {
@@ -969,11 +969,10 @@ class SplashScreen extends StatelessWidget {
                           BoxShadow(color: Colors.amber.withAlpha(150), blurRadius: 45, spreadRadius: 2),
                         ],
                       ),
-                      child: Image.network(
-                        logoUrl,
+                      child: Image.asset(
+                        kSwlBrandAsset,
                         height: 220,
                         fit: BoxFit.contain,
-                        errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball, color: Colors.amber, size: 90),
                       ),
                     ),
                   ),
@@ -1018,7 +1017,6 @@ class AuthLoginScreen extends StatefulWidget {
 }
 
 class _AuthLoginScreenState extends State<AuthLoginScreen> {
-  final String logoUrl = "https://epqyabaegmyjtwqezvbc.supabase.co/storage/v1/object/public/team-logos/logo_transparent-removebg-preview.png";
 
   void _showProviderPending(String provider) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1035,9 +1033,7 @@ class _AuthLoginScreenState extends State<AuthLoginScreen> {
       body: SafeArea(child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Column(children: [
-          Image.network(logoUrl, height: 76, fit: BoxFit.contain,
-            errorBuilder: (ctx, err, stack) => const Icon(Icons.sports_baseball,
-                color: Colors.amber, size: 54)),
+          Image.asset(kSwlBrandAsset, height: 76, fit: BoxFit.contain),
           FullTeamRegistrationSheet(onClose: widget.onClose),
           const SizedBox(height: 12),
           const Text('Otras opciones (pendientes de configurar)',
