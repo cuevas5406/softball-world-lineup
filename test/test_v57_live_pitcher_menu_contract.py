@@ -33,7 +33,10 @@ class LivePitcherMenuContract(unittest.TestCase):
         self.assertIn("widget.onLiveSwapFielders?.call()", SCOREBOARD)
         self.assertIn("await _swapFielders(live)", LOBBY)
         self.assertIn("await widget.onLiveRefresh?.call()", SCOREBOARD)
-        self.assertIn("onLiveRefresh: _myTeamId(game) == null ? null : _reviewPendingSubstitution", LOBBY)
+        self.assertIn("onLiveRefresh: _myTeamId(game) == null ? null : _refreshOfficialScoring", LOBBY)
+        refresh = LOBBY.split("Future<void> _refreshOfficialScoring()", 1)[1].split("void _subscribe", 1)[0]
+        self.assertIn("await _reviewPendingSubstitution()", refresh)
+        self.assertIn("await _recoverScoring(explicit: true)", refresh)
 
 
 if __name__ == '__main__':

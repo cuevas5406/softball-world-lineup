@@ -219,6 +219,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
   SwlLiveScoreboardSnapshot? _currentLiveSnapshot;
   bool _refreshInFlight = false;
   bool _scoreQueued = false;
+  bool _forceQueuedLineups = false;
   Completer<void>? _scoreIdleCompleter;
   bool _liveActionInFlight = false;
   bool _lineupsLoading = false;
@@ -365,7 +366,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       int nextIndex(String teamId, int length) {
         for (final row in rawTurns) {
           if (row['team_id']?.toString() == teamId) {
-            final order = (row['next_order'] as num?)?.toInt() ?? 1;
+            final order = widget.spectator != null
+                ? (row['next_order'] as num?)?.toInt() ?? 1
+                : swlBattingOrder(row, length) ?? 0;
             return order >= 1 && order <= length ? order - 1 : -1;
           }
         }
@@ -675,6 +678,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     if (!mounted || snapshot == null || snapshot.gameId.isEmpty) return;
     if (_refreshInFlight) {
       _scoreQueued = true;
+      _forceQueuedLineups |= forceLineups;
       await _scoreIdleCompleter?.future;
       return;
     }
@@ -720,7 +724,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       if (_scoreQueued && mounted) {
         _scoreQueued = false;
         // Una jugada confirmada durante el sondeo requiere otra lectura.
-        await _refreshLiveScore();
+        final forceQueuedLineups = _forceQueuedLineups;
+        _forceQueuedLineups = false;
+        if (forceQueuedLineups) {
+          await _refreshLiveScore(forceLineups: true);
+        } else {
+          await _refreshLiveScore();
+        }
       } else {
         _scoreQueued = false;
         final idle = _scoreIdleCompleter;
@@ -2014,7 +2024,13 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 await _refreshLiveScore(forceLineups: true);
                 if (!mounted) return;
                 await _refreshLiveHistory();
-                if (mounted) await widget.onLiveRefresh?.call();
+                if (!mounted) return;
+                try {
+                  await widget.onLiveRefresh?.call();
+                  if (mounted) setState(() => _liveActionError = null);
+                } catch (error) {
+                  if (mounted) setState(() => _liveActionError = '$error');
+                }
               }),
           if (!watching && (widget.onLiveSubstitute != null || widget.onLivePitcher != null ||
               widget.onLiveSwapFielders != null))
@@ -2868,14 +2884,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     final turn = await client.from('swl_game_batting_turns')
         .select('next_order').eq('game_id', live.gameId)
         .eq('team_id', teamId).maybeSingle().timeout(const Duration(seconds: 12));
-    final order = (turn?['next_order'] as num?)?.toInt() ?? 1;
-    if (order < 1 || order > lineup.length) {
-      throw StateError('Turno al bate inválido');
-    }
-    final batterId = lineup[order - 1]['player_id']?.toString();
-    if (batterId == null || batterId.isEmpty) {
-      throw StateError('Bateador no disponible');
-    }
+    final resolved = swlResolveBattingTurn(lineupRow?['lineup'], turn);
+    if (resolved == null) throw StateError('Turno al bate inválido');
+    final order = resolved.order;
+    final batterId = resolved.playerId;
     // Mostrar la identidad del bateador del turno real, no un jugador demo.
     final batterRow = await client.from('players')
         .select('first_name,last_name,jersey_number,universal_id')

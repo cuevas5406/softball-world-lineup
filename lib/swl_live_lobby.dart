@@ -2,6 +2,7 @@ import 'swl_official_box_score.dart';
 import 'swl_lineup_draft.dart';
 import 'swl_lineup_editor.dart';
 import 'swl_history_events.dart';
+import 'swl_scoring_recovery.dart';
 import 'swl_lineup_identity.dart';
 import 'swl_pitching_stats.dart';
 import 'swl_team_lookup.dart';
@@ -68,7 +69,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   bool _substitutionPending = false;
   int? _uncertainSubstitutionVersion;
   bool _confirmingPlay = false;
-  bool _uncertainPlay = false;
+  int? _uncertainPlayVersion;
+  bool get _uncertainPlay => _uncertainPlayVersion != null;
   int _recordGeneration = 0;
   String? _scoringMessage;
   bool _searching = false;
@@ -269,15 +271,15 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     }
   }
 
-  Future<void> _refreshGame({bool afterCurrent = false}) async {
+  Future<void> _refreshGame({bool afterCurrent = false, bool requireFresh = false}) async {
     final id = _game?['id']?.toString();
     if (id == null || !mounted) return;
     final generation = _watchGeneration;
     final current = _gameRefresh;
     if (current != null) {
       await current.future;
-      if (afterCurrent && mounted && generation == _watchGeneration) {
-        await _refreshGame();
+      if ((afterCurrent || requireFresh) && mounted && generation == _watchGeneration) {
+        await _refreshGame(requireFresh: requireFresh);
       }
       return;
     }
@@ -289,7 +291,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         final incoming = Map<String, dynamic>.from(row);
         final currentVersion = (_game?['version'] as num?)?.toInt() ?? -1;
         final incomingVersion = (incoming['version'] as num?)?.toInt() ?? -1;
-        if (incomingVersion < currentVersion) return;
+        if (incomingVersion < currentVersion || incomingVersion < 0) {
+          if (requireFresh) throw StateError('La lectura oficial todavía no coincide con la pizarra.');
+          return;
+        }
         final changed = jsonEncode(incoming) != jsonEncode(_game);
         if (changed || _connectionWarning != null) {
           setState(() {
@@ -301,7 +306,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           _scoreboard.value = SwlLiveScoreboardSnapshot.fromGame(incoming);
         }
       }
-    } catch (_) {
+    } catch (error) {
       // Conservar el partido y el PIN; no ocultar el fallo de sincronización.
       if (mounted && generation == _watchGeneration && _game?['id']?.toString() == id) {
         if (_connectionWarning == null) {
@@ -309,6 +314,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
               'No se pudo actualizar el partido. Comprueba la conexión.');
         }
       }
+      if (requireFresh) rethrow;
     } finally {
       if (identical(_gameRefresh, refresh)) _gameRefresh = null;
       refresh.complete();
@@ -435,10 +441,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   }
 
   // Historial de solo lectura. No crea ni modifica eventos.
-  Future<void> _loadRecentEvents() async {
+  Future<void> _loadRecentEvents({bool force = false}) async {
     final id = _game?['id']?.toString();
     if (!mounted || id == null) return;
-    if (_eventsLoading && _eventsRequestGameId == id) {
+    if (!force && _eventsLoading && _eventsRequestGameId == id) {
       _eventsRefreshQueued = true;
       return;
     }
@@ -477,7 +483,12 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           if (data[key] != null) ids.add(data[key].toString());
         }
       }
-      final names = await _lookupPlayerNames(ids);
+      Map<String, String> names = {};
+      try {
+        names = await _lookupPlayerNames(ids);
+      } catch (_) {
+        // Una lectura de perfiles fallida no invalida los eventos oficiales.
+      }
       if (!mounted || requestGeneration != _eventsRequestGeneration || _game?['id']?.toString() != id) return;
       setState(() {
         _recentEvents = List<Map<String, dynamic>>.from(rows);
@@ -852,25 +863,21 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     var sent = false;
     try {
       String? plateBatterId;
-      if (!isHit && (!special || const {'SACRIFICE_FLY', 'DOUBLE_PLAY', 'HIT_WITH_OUT', 'ERROR'}.contains(action))) {
+      if (isHit || !special || const {'SACRIFICE_FLY', 'DOUBLE_PLAY', 'HIT_WITH_OUT', 'ERROR'}.contains(action)) {
         final lineup = await _client.from('swl_game_lineups').select('lineup')
             .eq('game_id', gameId).eq('team_id', snapshot.battingTeamId)
             .maybeSingle().timeout(const Duration(seconds: 12));
-        final slots = swlConfirmedBattingSlots(lineup?['lineup']);
         final cursor = await _client.from('swl_game_batting_turns')
             .select('next_order').eq('game_id', gameId)
             .eq('team_id', snapshot.battingTeamId)
             .maybeSingle().timeout(const Duration(seconds: 12));
-        final nextOrder = (cursor?['next_order'] as num?)?.toInt() ?? 1;
-        if (nextOrder < 1 || nextOrder > slots.length) {
-          throw StateError('Guarda y actualiza la alineación del equipo que batea.');
+        final turn = swlResolveBattingTurn(lineup?['lineup'], cursor);
+        if (turn == null) {
+          throw StateError('No se pudo confirmar el turno al bate. Actualiza la pizarra y la alineación.');
         }
-        plateBatterId = slots[nextOrder - 1]['player_id']?.toString();
-        if (extendedBall && plateBatterId != hitParams?['p_batter_id']) {
+        plateBatterId = turn.playerId;
+        if ((isHit || extendedBall) && plateBatterId != hitParams?['p_batter_id']) {
           throw StateError('Cambió el bateador. Vuelve a abrir el batazo.');
-        }
-        if (plateBatterId == null || plateBatterId.isEmpty) {
-          throw StateError('El bateador no tiene identificador válido.');
         }
       }
       if (!mounted || _game?['id']?.toString() != gameId) return;
@@ -938,8 +945,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     } catch (error) {
       if (!sent) rethrow;
       if (error is PostgrestException) {
-        final status = int.tryParse(error.code ?? '');
-        if (status == null || status < 500) {
+        if (!swlIsUncertainHttpStatus(error.code)) {
           // Un rechazo puede coincidir con una jugada registrada por el otro
           // teléfono. Refrescar también historial y estadísticas evita dejar
           // la pizarra y el relato en versiones distintas.
@@ -960,34 +966,65 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (!mounted || requestGeneration != _recordGeneration ||
           _game?['id']?.toString() != gameId) return;
       setState(() {
-        _uncertainPlay = true;
-        _scoringMessage = 'La respuesta se interrumpió. Revisa el historial antes de volver a anotar.';
+        _uncertainPlayVersion = expectedVersion;
+        _scoringMessage = 'La respuesta se interrumpió. Pulsa Actualizar pizarra para verificar el estado oficial.';
       });
-      try {
-        final event = await _client.from('swl_game_events')
-            .select('version')
-            .eq('game_id', gameId).eq('version', expectedVersion + 1)
-            .maybeSingle().timeout(const Duration(seconds: 8));
-        if (!mounted || requestGeneration != _recordGeneration ||
-            _game?['id']?.toString() != gameId) return;
-        if (event != null) {
-          setState(() {
-            _uncertainPlay = false;
-            _scoringMessage =
-                'El partido avanzó. Revisa el historial antes de anotar otra jugada.';
-          });
-        }
-      } catch (_) {
-        // El bloqueo se mantiene si el historial no permite resolver el envío.
+      await _recoverScoring(explicit: false);
+      if (mounted && requestGeneration == _recordGeneration && _scoringMessage != null) {
+        throw StateError(_scoringMessage!);
       }
-      await _refreshGame(afterCurrent: true);
-      await _loadRecentEvents();
-      if (_scoringMessage != null) throw StateError(_scoringMessage!);
     } finally {
       if (mounted && requestGeneration == _recordGeneration) {
         setState(() => _recording = false);
       }
     }
+  }
+
+  Future<void> _recoverScoring({required bool explicit}) async {
+    final id = _game?['id'];
+    final sentVersion = _uncertainPlayVersion;
+    if (id == null || (explicit && (_recording || _confirmingPlay || _substitutionPending))) {
+      if (explicit) throw StateError('Espera a que termine la operación en curso.');
+      return;
+    }
+    try {
+      await _refreshGame(afterCurrent: true, requireFresh: true);
+    } catch (_) {
+      if (explicit) throw StateError('No se pudo confirmar la versión oficial. Vuelve a actualizar la pizarra.');
+      return;
+    }
+    if (!mounted || _game?['id'] != id) return;
+    await Future.wait([_loadRecentEvents(force: true), _loadBattingStats()]);
+    if (!mounted || _game?['id'] != id || sentVersion != _uncertainPlayVersion) return;
+    if (sentVersion == null) {
+      if (explicit && (_connectionWarning != null || _eventsError != null)) {
+        throw StateError(_connectionWarning ?? _eventsError!);
+      }
+      return;
+    }
+    final outcome = swlScoringRecovery(
+      sentVersion: sentVersion,
+      officialVersion: _connectionWarning == null && _eventsError == null
+          ? (_game?['version'] as num?)?.toInt() : null,
+      explicitRefresh: explicit,
+    );
+    if (outcome == SwlScoringRecovery.waitForRead) {
+      if (explicit) throw StateError(_scoringMessage ?? 'No se pudo verificar la jugada pendiente.');
+      return;
+    }
+    final message = outcome == SwlScoringRecovery.reviewAdvanced
+        ? 'El partido avanzó. Revisa el historial y el bateador antes de anotar.'
+        : 'La versión oficial sigue igual. Revisa el turno antes de volver a anotar.';
+    setState(() {
+      _uncertainPlayVersion = null;
+      _scoringMessage = message;
+    });
+    if (explicit) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _refreshOfficialScoring() async {
+    if (_uncertainSubstitutionVersion != null) await _reviewPendingSubstitution();
+    await _recoverScoring(explicit: true);
   }
 
   void _subscribe(String id) {
@@ -1048,7 +1085,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _substitutionHistoryError = null;
     _lineupPlayerNames = {};
     _lineupsError = null;
-    _uncertainPlay = false;
+    _uncertainPlayVersion = null;
     _substitutionPending = false;
     _uncertainSubstitutionVersion = null;
     _confirmingPlay = false;
@@ -2078,7 +2115,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
                 await _loadSavedLineups();
                 if (mounted) await _swapFielders(live);
               } : null,
-        onLiveRefresh: _myTeamId(game) == null ? null : _reviewPendingSubstitution,
+        onLiveRefresh: _myTeamId(game) == null ? null : _refreshOfficialScoring,
         onMatchDecision: _myTeamId(game) == null ? null :
             (version, action) => _sendDecision(game['id'].toString(), version, action),
         homeLogo: _teamLogos[game['home_team_id']],

@@ -226,10 +226,17 @@ void main() {
     (tester) async {
       var substituted = false;
       var gameReads = 0;
+      var reconciliations = 0;
       respond = (request) async {
         if (request.url.path.endsWith('/swl_live_games')) {
           gameReads++;
-          return jsonResponse([]);
+          return jsonResponse({
+            'id': 'partido-prueba',
+            'status': 'IN_PROGRESS',
+            'version': 2,
+            'inning': 1,
+            'is_top': false,
+          });
         }
         return jsonResponse([]);
       };
@@ -246,6 +253,9 @@ void main() {
               'is_top': true,
             }),
             onLiveSubstitute: () => substituted = true,
+            onLiveRefresh: () async {
+              reconciliations++;
+            },
           ),
         ),
       );
@@ -258,6 +268,8 @@ void main() {
       await tester.tap(find.byTooltip('Actualizar pizarra'));
       await tester.pumpAndSettle();
       expect(gameReads, greaterThan(0));
+      expect(reconciliations, 1);
+      expect(find.textContaining('BAJA'), findsOneWidget);
       expect(find.byType(LinearProgressIndicator), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
     },

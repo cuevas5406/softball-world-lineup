@@ -89,3 +89,16 @@ List<Map> swlConfirmedBattingSlots(Object? raw) {
   }
   return [for (var order = 1; order <= byOrder.length; order++) byOrder[order]!];
 }
+
+/// The first turn is implicit until the server creates a cursor for this team.
+int? swlBattingOrder(Map? cursor, int lineupLength) {
+  final order = cursor == null ? 1 : int.tryParse('${cursor['next_order']}');
+  return order != null && order >= 1 && order <= lineupLength ? order : null;
+}
+
+({String playerId, int order})? swlResolveBattingTurn(Object? lineup, Map? cursor) {
+  final slots = swlConfirmedBattingSlots(lineup);
+  final order = swlBattingOrder(cursor, slots.length);
+  if (order == null) return null;
+  return (playerId: slots[order - 1]['player_id'].toString(), order: order);
+}
