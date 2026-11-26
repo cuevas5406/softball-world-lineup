@@ -14,7 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 // URL y Claves de tu servidor Supabase
 const String kSupabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String kSupabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
-const String kSwlBrandAsset = 'assets/branding/swl-logo.webp';
+const String kSwlBrandAsset = 'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png';
 const String kLabUrl = 'https://wgeziptdoabyicufnrfk.supabase.co';
 // Debe coincidir con AndroidManifest.xml y la allowlist de Supabase LAB.
 const String kAuthRedirectUrl = 'com.softballworld.lineup://login-callback';
