@@ -1,11 +1,10 @@
-import 'swl_official_box_score.dart';
+import 'swl_game_detail_page.dart';
 import 'swl_lineup_draft.dart';
 import 'swl_lineup_conflicts.dart';
 import 'swl_lineup_editor.dart';
 import 'swl_history_events.dart';
 import 'swl_scoring_recovery.dart';
 import 'swl_lineup_identity.dart';
-import 'swl_pitching_stats.dart';
 import 'swl_team_lookup.dart';
 import 'swl_advanced_scoreboard.dart';
 import 'swl_live_scoreboard_snapshot.dart';
@@ -78,22 +77,14 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   Completer<void>? _gameRefresh;
   int _watchGeneration = 0;
   String? _connectionWarning;
-  List<Map<String, dynamic>> _recentEvents = [];
   List<Map<String, dynamic>> _substitutionHistory = [];
   bool _substitutionHistoryLoading = false;
   bool _substitutionHistoryQueued = false;
-  bool _substitutionHistoryTruncated = false;
   String? _substitutionHistoryError;
   int _substitutionHistoryGeneration = 0;
-  List<Map<String, dynamic>> _battingStats = [];
-  bool _battingStatsLoading = false;
-  bool _battingStatsQueued = false;
-  int _battingStatsGeneration = 0;
-  String? _battingStatsError;
   bool _eventsLoading = false;
   bool _eventsRefreshQueued = false;
   int _historyPollTicks = 0;
-  bool _eventsQueried = false;
   String? _eventsRequestGameId;
   int _eventsRequestGeneration = 0;
   String? _eventsError;
@@ -245,15 +236,12 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         _lineupsError = null;
         _lineupsGeneration++;
         _connectionWarning = null;
-        _recentEvents = [];
         _substitutionHistory = [];
         _substitutionHistoryGeneration++;
         _substitutionHistoryLoading = false;
         _substitutionHistoryQueued = false;
-        _substitutionHistoryTruncated = false;
         _substitutionHistoryError = null;
         _eventsError = null;
-        _eventsQueried = false;
         _eventsRequestGameId = null;
         _eventsRequestGeneration++;
         _recordGeneration++;
@@ -454,7 +442,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     setState(() {
       _eventsLoading = true;
       _eventsError = null;
-      _eventsQueried = true;
     });
     try {
       const pageSize = 50;
@@ -492,7 +479,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       }
       if (!mounted || requestGeneration != _eventsRequestGeneration || _game?['id']?.toString() != id) return;
       setState(() {
-        _recentEvents = List<Map<String, dynamic>>.from(rows);
         _lineupPlayerNames = {..._lineupPlayerNames, ...names};
       });
     } catch (_) {
@@ -548,7 +534,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           _game?['id']?.toString() != gameId) return;
       setState(() {
         _substitutionHistory = history;
-        _substitutionHistoryTruncated = rows.length > 500;
         _lineupPlayerNames = {..._lineupPlayerNames, ...names};
       });
     } catch (_) {
@@ -567,183 +552,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         }
       }
     }
-  }
-
-  Future<void> _loadBattingStats() async {
-    final id = _game?['id']?.toString();
-    if (!mounted || id == null) return;
-    if (_battingStatsLoading) {
-      _battingStatsQueued = true;
-      return;
-    }
-    final generation = ++_battingStatsGeneration;
-    setState(() {
-      _battingStatsLoading = true;
-      _battingStatsError = null;
-    });
-    try {
-      final raw = await _client.rpc('swl_v53_batting_stats',
-          params: {'p_game_id': id})
-          .timeout(const Duration(seconds: 12));
-      if (!mounted || _game?['id']?.toString() != id ||
-          generation != _battingStatsGeneration) return;
-      final stats = raw is List
-          ? raw.whereType<Map>().map((r) =>
-              Map<String, dynamic>.from(r)).toList()
-          : <Map<String, dynamic>>[];
-      final names = await _lookupPlayerNames(stats
-          .map((r) => r['player_id']?.toString() ?? '')
-          .where((id) => id.isNotEmpty).toSet());
-      if (!mounted || _game?['id']?.toString() != id ||
-          generation != _battingStatsGeneration) return;
-      setState(() {
-        _battingStats = stats;
-        _lineupPlayerNames = {..._lineupPlayerNames, ...names};
-      });
-    } catch (_) {
-      if (mounted && _game?['id']?.toString() == id &&
-          generation == _battingStatsGeneration) {
-        setState(() => _battingStatsError =
-            'No se pudieron consultar las estadísticas. Reintenta la actualización.');
-      }
-    } finally {
-      if (mounted && generation == _battingStatsGeneration) {
-        setState(() => _battingStatsLoading = false);
-        if (_battingStatsQueued) {
-          _battingStatsQueued = false;
-          _loadBattingStats();
-        }
-      }
-    }
-  }
-
-  /// Agrupa el box score preliminar por equipo, sin sumar a los sustitutos
-  /// sobre los titulares. Los datos provienen del RPC de eventos anotados.
-  Widget _battingBoxScore(Map<String, dynamic> game) {
-    final homeId = game['home_team_id']?.toString() ?? '';
-    final awayId = game['away_team_id']?.toString() ?? '';
-    final currentIds = <String>{};
-    for (final lineup in _savedLineups) {
-      final slots = lineup['lineup'];
-      if (slots is List) {
-        for (final slot in slots) {
-          if (slot is Map && slot['player_id'] != null) {
-            currentIds.add(slot['player_id'].toString());
-          }
-        }
-      }
-    }
-    final substitutedOut = <String>{};
-    final substitutedIn = <String>{};
-    for (final event in _substitutionHistory) {
-      if (event['event_type'] != 'SUBSTITUTION') continue;
-      final raw = event['event_data'];
-      if (raw is! Map) continue;
-      if (raw['outgoing_player_id'] != null) {
-        substitutedOut.add(raw['outgoing_player_id'].toString());
-      }
-      if (raw['incoming_player_id'] != null) {
-        substitutedIn.add(raw['incoming_player_id'].toString());
-      }
-    }
-    int count(Map<String, dynamic> row, String field) =>
-        (row[field] as num?)?.toInt() ?? 0;
-    Widget section(String teamId, String heading) {
-      final rows = _battingStats.where((r) =>
-          r['team_id']?.toString() == teamId).toList();
-      rows.sort((a, b) =>
-          (_lineupPlayerNames[a['player_id']?.toString()] ?? '').compareTo(
-              _lineupPlayerNames[b['player_id']?.toString()] ?? ''));
-      final vb = rows.fold<int>(0, (sum, r) => sum + count(r, 'at_bats'));
-      final h = rows.fold<int>(0, (sum, r) => sum + count(r, 'hits'));
-      final bb = rows.fold<int>(0, (sum, r) => sum + count(r, 'walks'));
-      final k = rows.fold<int>(0, (sum, r) => sum + count(r, 'strikeouts'));
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const SizedBox(height: 10),
-        Text(heading, style: const TextStyle(
-            color: Colors.amber, fontWeight: FontWeight.bold)),
-        if (rows.isEmpty)
-          const Text('Sin apariciones registradas para este equipo.',
-              style: TextStyle(color: Colors.white70)),
-        for (final stat in rows) Builder(builder: (context) {
-          final id = stat['player_id']?.toString() ?? '';
-          final role = substitutedOut.contains(id) && !currentIds.contains(id)
-              ? 'Sustituido'
-              : substitutedIn.contains(id) ? 'Entró de cambio'
-              : currentIds.contains(id) ? 'En alineación' : 'Participó';
-          return ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: Text(_lineupPlayerNames[id] ?? id,
-                style: const TextStyle(color: Colors.white)),
-            subtitle: Text('$role · VB ${count(stat, 'at_bats')} · '
-                'H ${count(stat, 'hits')} · 1B ${count(stat, 'singles')} · '
-                '2B ${count(stat, 'doubles')} · 3B ${count(stat, 'triples')} · '
-                'HR ${count(stat, 'home_runs')} · BB ${count(stat, 'walks')} · '
-                'K ${count(stat, 'strikeouts')}',
-                style: const TextStyle(color: Colors.white70)),
-          );
-        }),
-        Text('Subtotal registrado · VB $vb · H $h · BB $bb · K $k',
-            style: const TextStyle(color: Colors.white70,
-                fontWeight: FontWeight.bold)),
-      ]);
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const SizedBox(height: 8),
-      const Text('BOX SCORE INDIVIDUAL · PRELIMINAR',
-          style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-      const Text('Solo jugadas con pelotero identificado. Los subtotales no '
-          'sustituyen el marcador oficial. Los titulares y sustitutos '
-          'mantienen registros individuales separados.',
-          style: TextStyle(color: Colors.white70, fontSize: 12)),
-      section(awayId, 'VISITANTE · ${_name(awayId)}'),
-      section(homeId, 'LOCAL · ${_name(homeId)}'),
-    ]);
-  }
-
-  /// Presenta la jugada que el servidor confirmó, no una estimación local.
-  /// Los eventos antiguos sin metadatos siguen mostrándose como contadores.
-  String _eventDescription(Map<String, dynamic> event) {
-    final type = event['event_type']?.toString() ?? 'Jugada';
-    final raw = event['event_data'];
-    final data = raw is Map ? Map<String, dynamic>.from(raw) : const <String, dynamic>{};
-    if (type == 'SUBSTITUTION') {
-      final outId = data['outgoing_player_id']?.toString() ?? '';
-      final inId = data['incoming_player_id']?.toString() ?? '';
-      final outgoing = _lineupPlayerNames[outId] ?? 'Jugador $outId';
-      final incoming = _lineupPlayerNames[inId] ?? 'Jugador $inId';
-      return 'Sustitución · ${_name(event['batting_team_id'])} · entrada ${event['inning']} · turno ${data['batting_order'] ?? '?'} · '
-          'sale $outgoing · entra $incoming';
-    }
-    if ((type == 'HIT' && data['scope'] == 'hit_with_runners') ||
-        (type == 'ERROR' && data['charged_team_id'] != null)) {
-      final base = (data['batter_base'] as num?)?.toInt();
-      final hitName = type == 'ERROR' ? 'Error defensivo' : switch (base) {
-        1 => 'Sencillo', 2 => 'Doble', 3 => 'Triple', 4 => 'Jonrón',
-        _ => 'Hit',
-      };
-      final runs = (data['runs'] as num?)?.toInt() ?? 0;
-      final outs = (data['outs'] as num?)?.toInt() ?? 0;
-      final outLabel = [data['p_first_to'], data['p_second_to'], data['p_third_to']].contains(-4)
-          ? ' · out en home' : outs > 0 ? ' · $outs out(s)' : '';
-      return '$hitName · $runs ${runs == 1 ? 'carrera' : 'carreras'}$outLabel';
-    }
-    if (type == 'HIT' && data['scope'] == 'basic_counters') {
-      return 'Hit manual (sin avance de corredores)';
-    }
-    return switch (type) {
-      'BALL' => 'Base por bolas',
-      'STRIKE' => 'Ponche',
-      'RUNNER_MOVE' => 'Movimiento de corredor',
-      'RUNNER_OUT' => 'Out del corredor',
-      'DOUBLE_PLAY' => 'Doble play',
-      'SACRIFICE_FLY' => 'Fly de sacrificio',
-      'OUT' => 'Out',
-      'RUN' => 'Carrera manual',
-      'ERROR' => 'Error manual',
-      _ => type,
-    };
   }
 
   /// Describe el boleto a partir del estado real recibido del servidor.
@@ -942,7 +750,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       sent = false;
       await _refreshGame(afterCurrent: true);
       await _loadRecentEvents();
-      await _loadBattingStats();
     } catch (error) {
       if (!sent) rethrow;
       if (error is PostgrestException) {
@@ -955,7 +762,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           try {
             await _refreshGame(afterCurrent: true);
             await _loadRecentEvents();
-            await _loadBattingStats();
           } catch (_) {
             // Mantener visible el rechazo original del servidor.
           }
@@ -995,7 +801,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       return;
     }
     if (!mounted || _game?['id'] != id) return;
-    await Future.wait([_loadRecentEvents(force: true), _loadBattingStats()]);
+    await _loadRecentEvents(force: true);
     if (!mounted || _game?['id'] != id || sentVersion != _uncertainPlayVersion) return;
     if (sentVersion == null) {
       if (explicit && (_connectionWarning != null || _eventsError != null)) {
@@ -1073,16 +879,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _historyPollTicks = 0;
     _lineupsGeneration++;
     _lineupsLoading = false;
-    _battingStatsGeneration++;
-    _battingStatsQueued = false;
-    _battingStatsLoading = false;
-    _battingStatsError = null;
     _savedLineups = [];
     _substitutionHistory = [];
     _substitutionHistoryGeneration++;
     _substitutionHistoryLoading = false;
     _substitutionHistoryQueued = false;
-    _substitutionHistoryTruncated = false;
     _substitutionHistoryError = null;
     _lineupPlayerNames = {};
     _lineupsError = null;
@@ -1161,42 +962,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     final state = game['bases_state'];
     if (state is! Map) return false;
     return state[base] == true;
-  }
-
-  // Solo lectura: el RPC básico aún no actualiza home_innings/away_innings.
-  // No mostrar un desglose como oficial cuando no concilia con el total.
-  List<int>? _serverInnings(dynamic raw) {
-    if (raw is! List) return null;
-    final values = <int>[];
-    for (final item in raw) {
-      if (item is! num || item < 0 || item != item.toInt()) return null;
-      values.add(item.toInt());
-    }
-    return values;
-  }
-
-  Widget _inningAudit(Map<String, dynamic> game) {
-    final home = _serverInnings(game['home_innings']);
-    final away = _serverInnings(game['away_innings']);
-    final homeRuns = (game['home_runs'] as num?)?.toInt() ?? 0;
-    final awayRuns = (game['away_runs'] as num?)?.toInt() ?? 0;
-    final valid = home != null && away != null &&
-        home.fold<int>(0, (a, b) => a + b) == homeRuns &&
-        away.fold<int>(0, (a, b) => a + b) == awayRuns;
-    if (!valid) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 10),
-        child: Text('Desglose por entrada pendiente de conciliación con el servidor. '
-            'El marcador total sigue siendo la referencia de esta prueba LAB.',
-            style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Text('Carreras por entrada · Visitante: ${away.join(' / ')} · '
-          'Local: ${home.join(' / ')}',
-          style: const TextStyle(color: Colors.white70, fontSize: 12)),
-    );
   }
 
   Future<void> _showActiveRoster(String teamId, String teamName) async {
@@ -1655,7 +1420,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       await _loadSavedLineups();
       await _refreshGame(afterCurrent: true);
       await _loadSubstitutionHistory();
-      await _loadBattingStats();
       if (!mounted || _game?['id']?.toString() != gameId) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Sustitución confirmada en LAB.')));
@@ -2001,58 +1765,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     }
   }
 
-  Future<void> _showGameDetails(BuildContext scoreboardContext) async {
-    final game = _game;
-    if (game == null) return;
-    final id = game['id'].toString();
-    Map<String, SwlPitchingTotals>? pitching;
-    Map<String, String> pitcherNames = {};
-    String? pitchingError;
-    Future<void> readPitching() async {
-      try {
-        pitching = await swlLoadPitching(_client, id, SwlLiveScoreboardSnapshot.fromGame(game).version);
-        pitcherNames = await _lookupPlayerNames(pitching?.keys.toSet() ?? {});
-      } catch (_) {
-        pitchingError = 'No se pudo leer la estadística de pitcheo.';
-      }
-    }
-    await Future.wait([_loadSavedLineups(), _loadRecentEvents(),
-      _loadSubstitutionHistory(), _loadBattingStats(), readPitching()]);
-    if (!mounted || !scoreboardContext.mounted || _game?['id']?.toString() != id) return;
-    await showDialog<void>(context: scoreboardContext, builder: (dialog) => AlertDialog(
-      title: const Text('Box Score y alineaciones'),
-      content: SizedBox(width: 450, child: SingleChildScrollView(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('${_name(game['away_team_id'])} ${game['away_runs'] ?? 0} · '
-            '${_name(game['home_team_id'])} ${game['home_runs'] ?? 0} · ${game['status']}'),
-          _inningAudit(game),
-          for (final side in ['away', 'home'])
-            if (game['${side}_team_id'] != null)
-              _lineupStatus(game['${side}_team_id'].toString(), _name(game['${side}_team_id'])),
-          for (final message in [_lineupsError, _battingStatsError, _substitutionHistoryError,
-            _eventsError, if (_substitutionHistoryTruncated) 'Historial de sustituciones limitado.'])
-            if (message != null) Text(message),
-          _battingBoxScore(game),
-          const Text('Pitcheo individual · jugadas acreditadas'),
-          if (pitchingError != null) Text(pitchingError!),
-          if (pitchingError == null && (pitching == null || pitching!.isEmpty))
-            const Text('Aún no hay estadísticas de pitcheo confirmadas.'),
-          for (final entry in (pitching ?? <String, SwlPitchingTotals>{}).entries)
-            ListTile(title: Text(pitcherNames[entry.key] ?? _lineupPlayerNames[entry.key] ?? 'Pitcher'),
-              subtitle: Text('${entry.value.innings} IP · ${entry.value.strikeouts} K · '
-                '${entry.value.walks} BB · ${entry.value.hits} H\n${entry.value.pitchLine}')), 
-          const Text('Jugadas recientes'),
-          if (_eventsQueried)
-            for (final event in _recentEvents) ListTile(title: Text(_eventDescription(event))),
-        ]),
-      )),
-      actions: [
-        if (game['status'] == 'OFFICIAL') SwlShareBoxScoreButton(gameId: id),
-        TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('CERRAR')),
-      ],
-    ));
-  }
-
   String? _eligibilityMessage(Object error) {
     if (error is! PostgrestException) return null;
     return switch (error.message) {
@@ -2207,7 +1919,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _stopWatching();
     setState(() {
       _game = null;
-      _battingStats = [];
       _teamConfirmed = false;
       _away = null;
       _teamNames.clear();
@@ -2217,6 +1928,51 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       _savedLineups = [];
       _lineupPlayerNames = {};
     });
+  }
+
+  Future<void> _substituteFromScoreboard(
+    BuildContext context, String team,
+  ) async {
+    if (_uncertainSubstitutionVersion != null) {
+      await _reviewPendingSubstitution();
+      return;
+    }
+    await _refreshGame(afterCurrent: true);
+    if (!mounted || _game == null ||
+        _game!['status'] != 'IN_PROGRESS' || _myTeamId(_game!) != team ||
+        _substitutionPending || _uncertainSubstitutionVersion != null) return;
+    await _loadSavedLineups();
+    if (mounted && context.mounted) {
+      await _substituteBatter(team, _name(team), dialogHost: context);
+    }
+  }
+
+  Future<void> _openGameDetail(BuildContext host, String id, {required bool boxScore}) async {
+    if (!host.mounted || _game?['id']?.toString() != id) return;
+    await Navigator.of(host).push(MaterialPageRoute<void>(
+      builder: (_) => SwlGameDetailPage(
+        gameId: id,
+        boxScore: boxScore,
+        teamName: _name,
+        teamLogo: (team) => _teamLogos[team],
+        substitute: (page, team) => _substituteFromScoreboard(page, team),
+        changePitcher: (team) async {
+          if (_uncertainSubstitutionVersion != null) {
+            await _reviewPendingSubstitution();
+            return;
+          }
+          await _refreshGame(afterCurrent: true);
+          final game = _game;
+          if (!mounted || game == null || game['id']?.toString() != id ||
+              _myTeamId(game) != team) return;
+          final live = SwlLiveScoreboardSnapshot.fromGame(game);
+          if (live.status != 'IN_PROGRESS' || live.battingTeamId == team ||
+              live.balls != 0 || live.strikes != 0) return;
+          await _loadSavedLineups();
+          if (mounted) await _changePitcher(live);
+        },
+      ),
+    ));
   }
 
   // La pizarra oficial es la única pantalla de anotación del partido.
@@ -2231,27 +1987,13 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         homeTeam: _name(game['home_team_id']?.toString() ?? ''),
         awayTeam: _name(game['away_team_id']?.toString() ?? ''),
         liveSnapshot: live ?? SwlLiveScoreboardSnapshot.fromGame(game),
-        onLiveDetails: () => _showGameDetails(context),
+        onLiveDetails: () => _openGameDetail(context, game['id'].toString(), boxScore: true),
+        onLiveLineups: () => _openGameDetail(context, game['id'].toString(), boxScore: false),
         onLiveSubstitute: _myTeamId(_game ?? game) != null &&
             live?.status == 'IN_PROGRESS'
             ? () async {
-              if (_uncertainSubstitutionVersion != null) {
-                await _reviewPendingSubstitution();
-                return;
-              }
               final team = _myTeamId(_game ?? game);
-              if (team == null) return;
-              // Leer la versión y el turno actuales antes de sustituir:
-              // el rival puede haber anotado mientras se abría el menú.
-              await _refreshGame(afterCurrent: true);
-              if (!mounted || _game == null ||
-                  _game!['status'] != 'IN_PROGRESS' ||
-                  _myTeamId(_game!) != team ||
-                  _substitutionPending || _uncertainSubstitutionVersion != null) return;
-              await _loadSavedLineups();
-              if (mounted && context.mounted) {
-                await _substituteBatter(team, _name(team), dialogHost: context);
-              }
+              if (team != null) await _substituteFromScoreboard(context, team);
             } : null,
         onLivePitcher: _myTeamId(_game ?? game) != null &&
             live?.status == 'IN_PROGRESS' &&

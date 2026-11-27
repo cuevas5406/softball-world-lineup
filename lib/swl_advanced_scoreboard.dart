@@ -193,11 +193,12 @@ class SwlSpectatorView {
 }
 
 class SwlAdvancedScoreboard extends StatefulWidget {
-  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveSubstitute, this.onLivePitcher, this.onLiveSwapFielders, this.onLiveRefresh, this.onMatchDecision, this.homeLogo, this.awayLogo, this.spectator}) : assert(spectator == null || liveSnapshot != null);
+  const SwlAdvancedScoreboard({super.key, required this.gamePin, required this.homeTeam, required this.awayTeam, this.liveSnapshot, this.onLiveAction, this.onLiveDetails, this.onLiveLineups, this.onLiveSubstitute, this.onLivePitcher, this.onLiveSwapFielders, this.onLiveRefresh, this.onMatchDecision, this.homeLogo, this.awayLogo, this.spectator}) : assert(spectator == null || liveSnapshot != null);
   final SwlSpectatorView? spectator;
   final String? homeLogo;
   final String? awayLogo;
   final VoidCallback? onLiveDetails;
+  final VoidCallback? onLiveLineups;
   final VoidCallback? onLiveSubstitute;
   final VoidCallback? onLivePitcher;
   final VoidCallback? onLiveSwapFielders;
@@ -2121,9 +2122,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   const PopupMenuItem(value: 'fielders', child: Text('Intercambiar posiciones defensivas')),
               ],
             ),
+          if (!watching && widget.onLiveLineups != null)
+            IconButton(
+              tooltip: 'Alineaciones',
+              onPressed: widget.onLiveLineups,
+              icon: const Icon(Icons.format_list_numbered, color: Colors.amber),
+            ),
           if (!watching && widget.onLiveDetails != null)
             IconButton(
-              tooltip: 'Box Score, alineaciones e historial',
+              tooltip: 'Box Score',
               onPressed: widget.onLiveDetails,
               icon: const Icon(Icons.analytics_outlined, color: Colors.amber),
             ),
