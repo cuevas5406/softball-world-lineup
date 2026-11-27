@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'swl_game_box_data.dart';
 import 'swl_lineup_identity.dart';
+import 'swl_lineup_draft.dart';
 import 'swl_official_box_score.dart';
 import 'swl_substitution_rules.dart';
 import 'swl_team_lookup.dart';
@@ -33,6 +34,7 @@ class SwlGameDetailPage extends StatefulWidget {
 
 class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
   final _client = Supabase.instance.client;
+  final _offsets = <String, double>{};
   final _players = <String, SwlRow>{};
   SwlRow? _game;
   List<SwlRow> _lineups = [], _events = [], _changes = [], _turns = [];
@@ -249,6 +251,12 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     final dh = lineup['designated_hitter_id'];
     final defense = lineup['defensive_positions'];
     final defenseRows = defense is Map ? defense : const {};
+    final defenders = <String, List<String>>{};
+    for (final entry in defenseRows.entries) {
+      if (entry.key is String && entry.value is String) {
+        (defenders[entry.value as String] ??= []).add(entry.key as String);
+      }
+    }
     final cursor = _turns.where((row) => row['team_id'] == team).firstOrNull;
     final turn = swlResolveBattingTurn(lineup['lineup'], cursor)?.order;
     final live = game['status'] == 'IN_PROGRESS';
@@ -271,7 +279,10 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
         for (var i = 0; i < slots.length; i++)
           ListTile(
             dense: true,
-            leading: CircleAvatar(child: Text('${i + 1}')),
+            minTileHeight: 38,
+            minVerticalPadding: 0,
+            visualDensity: VisualDensity.compact,
+            leading: CircleAvatar(radius: 12, child: Text('${i + 1}')),
             title: Text(_name(slots[i]['player_id'] as String)),
             subtitle: Text(
               [
@@ -296,11 +307,14 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
             ),
           ),
         _section('Defensa'),
-        for (final entry in defenseRows.entries)
-          if (entry.key case final String id)
-            Text(
-              '${entry.value} · ${_name(id)} · ${entrants.contains(id) ? "Sustituto" : "Titular"}',
-            ),
+        for (final role in {...swlDefensivePositions, ...defenders.keys})
+          if (defenders[role] case final List<String> players)
+            for (final id in players)
+              Text(
+                '$role · ${_name(id)} · ${entrants.contains(id) ? "Sustituto" : "Titular"}',
+              )
+          else if (role == 'C' && lineup.isNotEmpty)
+            const Text('C · Sin receptor asignado'),
         if (retired.isNotEmpty) _section('Jugadores retirados'),
         for (final id in retired) Text(_name(id)),
         if (canManage && widget.substitute != null)
@@ -325,27 +339,92 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     );
   }
 
-  Widget _table(List<String> labels, List<(String, List<String>)> rows) =>
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          columnSpacing: 14,
-          columns: [
-            const DataColumn(label: Text('Pelotero')),
-            for (final label in labels)
-              DataColumn(label: Text(label), numeric: true),
-          ],
-          rows: [
-            for (final (name, stats) in rows)
-              DataRow(
-                cells: [
-                  DataCell(Text(name)),
-                  for (final stat in stats) DataCell(Text(stat)),
-                ],
+  Widget _statRow(
+    String team,
+    String name,
+    List<String> values, {
+    bool header = false,
+  }) {
+    const cellWidth = 44.0;
+    final style = header
+        ? const TextStyle(
+            color: Colors.amber,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          )
+        : const TextStyle(fontSize: 12);
+    return ColoredBox(
+      color: header ? const Color(0xFF172334) : const Color(0xFF080D14),
+      child: SizedBox(
+        height: header ? 31 : 27,
+        child: Row(
+          children: [
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  name,
+                  style: style,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
+            ),
+            Expanded(
+              flex: 3,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final maximum =
+                      (values.length * cellWidth - constraints.maxWidth)
+                          .clamp(0.0, double.infinity)
+                          .toDouble();
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onHorizontalDragUpdate: maximum == 0
+                        ? null
+                        : (event) {
+                            setState(
+                              () => _offsets[team] =
+                                  ((_offsets[team] ?? 0).clamp(0.0, maximum) -
+                                          event.delta.dx)
+                                      .clamp(0.0, maximum)
+                                      .toDouble(),
+                            );
+                          },
+                    child: ClipRect(
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            left: -(_offsets[team] ?? 0)
+                                .clamp(0.0, maximum)
+                                .toDouble(),
+                            top: 0,
+                            bottom: 0,
+                            child: Row(
+                              children: [
+                                for (final value in values)
+                                  SizedBox(
+                                    width: cellWidth,
+                                    child: Center(
+                                      child: Text(value, style: style),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
           ],
         ),
-      );
+      ),
+    );
+  }
 
   Widget _box(SwlRow game, String team) {
     final stats = _stats!;
@@ -361,10 +440,13 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     };
     final changes = _changes.where((row) => row['team_id'] == team);
     final pitchers = {
-      if (lineup['pitcher_id'] case final String id) id,
-      ..._byId(changes, 'old_pitcher_id'),
-      ..._byId(changes, 'new_pitcher_id'),
+      for (final change in changes)
+        ...[
+          change['old_pitcher_id'],
+          change['new_pitcher_id'],
+        ].whereType<String>(),
       ...throws.keys,
+      if (lineup['pitcher_id'] case final String id) id,
     };
     final isHome = team == game['home_team_id'];
     final runsAllowed = swlStat(game[isHome ? 'away_runs' : 'home_runs']);
@@ -381,54 +463,84 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
           '${row[i]}',
       SwlGameBoxData.average(row),
     ];
-    List<String> pitchingLine(List<int> row, {bool total = false}) => [
+    List<String> pitchingLine(List<int> row, {String? pitcher}) => [
       SwlGameBoxData.ip(row[0]),
       '${row[1]}',
-      if (total ||
-          runsAllowed == 0 ||
-          (pitchers.length == 1 &&
-              throws.length == 1 &&
-              !stats.incompletePitching.contains(team)))
-        '$runsAllowed'
-      else
-        '—',
-      if (runsAllowed == 0) '0' else '—',
+      '${(pitcher == null ? runsAllowed : stats.runCredit.runs(team, pitcher)) ?? "—"}',
+      '${(pitcher == null ? stats.runCredit.cleanTotal(team) : stats.runCredit.cleanRuns(team, pitcher)) ?? "—"}',
       for (final n in row.skip(4)) '$n',
     ];
-    return ListView(
+    Widget table(
+      String title,
+      List<String> labels,
+      List<(String, List<String>)> rows,
+    ) => SliverMainAxisGroup(
+      slivers: [
+        PinnedHeaderSliver(
+          child: _statRow(team, '$title · Pelotero', labels, header: true),
+        ),
+        SliverList.list(
+          children: [
+            for (final (name, stats) in rows) _statRow(team, name, stats),
+          ],
+        ),
+      ],
+    );
+    return CustomScrollView(
       key: PageStorageKey('box-$team'),
-      children: [
-        _section('Bateo'),
+      slivers: [
         if (stats.incompleteRuns.contains(team) ||
             stats.incompleteRbi.contains(team) ||
             bTotal[3] != game[isHome ? 'home_hits' : 'away_hits'])
-          const Text(
-            'El historial no permite atribuir todos los resultados a peloteros individuales.',
+          const SliverToBoxAdapter(
+            child: Text(
+              'El historial no permite atribuir todos los resultados a peloteros individuales.',
+            ),
           ),
-        _table(SwlGameBoxData.battingLabels, [
+        table('Bateo', SwlGameBoxData.battingLabels, [
           for (final id in batters)
             (_name(id), battingLine(bats[id] ?? List.filled(11, 0))),
           ('Total', battingLine(bTotal, total: true)),
         ]),
-        _section('Pitcheo'),
         if (stats.incompletePitching.contains(team))
-          const Text('Conteo parcial · hay jugadas sin pitcher acreditado.'),
-        _table(SwlGameBoxData.pitchingLabels, [
+          const SliverToBoxAdapter(
+            child: Text('Conteo parcial · hay jugadas sin pitcher acreditado.'),
+          ),
+        table('Pitcheo', SwlGameBoxData.pitchingLabels, [
           for (final id in pitchers)
-            (_name(id), pitchingLine(throws[id] ?? List.filled(10, 0))),
-          ('Total', pitchingLine(pTotal, total: true)),
+            (
+              _name(id),
+              pitchingLine(throws[id] ?? List.filled(10, 0), pitcher: id),
+            ),
+          ('Total', pitchingLine(pTotal)),
         ]),
         if (game['status'] == 'OFFICIAL')
-          SwlShareBoxScoreButton(gameId: widget.gameId),
+          SliverToBoxAdapter(
+            child: SwlShareBoxScoreButton(gameId: widget.gameId),
+          ),
       ],
     );
   }
 
   Widget _score(SwlRow game, List<String> teams) {
     final innings = _stats!.innings;
-    final count = teams
-        .map((team) => innings[team]?.length ?? 0)
-        .reduce((a, b) => a > b ? a : b);
+    final regulation = (game['swl_regulation_innings'] as int?) ?? 6;
+    final count = [
+      regulation,
+      ...teams.map((team) => innings[team]?.length ?? 0),
+    ].reduce((a, b) => a > b ? a : b);
+    String entry(String team, int i, int side) {
+      final cells = innings[team] ?? const [];
+      if (i >= cells.length) return '·';
+      final value = cells[i];
+      if (value == null) return '?';
+      final activeHalf =
+          game['status'] == 'IN_PROGRESS' &&
+          i + 1 == game['inning'] &&
+          (game['is_top'] == true ? side == 0 : side == 1);
+      return activeHalf && value == 0 ? '0*' : '$value';
+    }
+
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
@@ -447,13 +559,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
               cells: [
                 DataCell(Text(widget.teamName(team))),
                 for (var i = 0; i < count; i++)
-                  DataCell(
-                    Text(
-                      i < (innings[team]?.length ?? 0)
-                          ? '${innings[team]![i] ?? "—"}'
-                          : '—',
-                    ),
-                  ),
+                  DataCell(Text(entry(team, i, index))),
                 for (final field in ['runs', 'hits', 'errors'])
                   DataCell(
                     Text(
@@ -519,7 +625,10 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
               ),
             if (game['status'] == 'CANCELLED')
               const Text('Partido cancelado · registro para consulta'),
-            if (widget.boxScore) _score(game, teams),
+            if (widget.boxScore) ...[
+              _score(game, teams),
+              const Text('· Sin jugar   0* En curso   ? Sin desglose'),
+            ],
             Expanded(
               child: TabBarView(
                 children: [

@@ -1,8 +1,11 @@
+import 'swl_pitch_run_credit.dart';
+
 typedef SwlRow = Map<String, dynamic>;
 
 int swlStat(Object? value) => value is num ? value.toInt() : 0;
 
 class SwlGameBoxData {
+  late final SwlPitchRunCredit runCredit;
   final Map<String, Map<String, List<int>>> batting = {};
   final Map<String, Map<String, List<int>>> pitching = {};
   final Map<String, List<int?>> innings = {};
@@ -53,6 +56,7 @@ class SwlGameBoxData {
         if (e['event_type'] == 'UNDO_OUT' && e['event_data'] is Map)
           int.tryParse('${e['event_data']['reverts_version']}'),
     };
+    runCredit = SwlPitchRunCredit(game, events, pitches, undone);
     final credited = {for (final p in pitches) p['version']};
     for (final (team, side) in [(home, 'home'), (away, 'away')]) {
       if (team is! String) continue;

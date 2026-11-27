@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:softball_world_lineup/swl_advanced_scoreboard.dart';
+import 'package:softball_world_lineup/swl_game_detail_page.dart';
 import 'package:softball_world_lineup/swl_live_scoreboard_snapshot.dart';
 import 'package:softball_world_lineup/swl_team_settings.dart';
 
@@ -24,6 +25,9 @@ void main() {
     await Supabase.initialize(
       url: 'https://swl-test.invalid',
       publishableKey: 'test-only',
+      realtimeClientOptions: const RealtimeClientOptions(
+        disconnectOnEmptyChannelsAfter: Duration.zero,
+      ),
       authOptions: const FlutterAuthClientOptions(
         detectSessionInUri: false,
         persistSession: false,
@@ -44,6 +48,79 @@ void main() {
     );
   });
   tearDownAll(() => Supabase.instance.dispose());
+
+  testWidgets('Box Score mantiene nombres y encabezado al desplazar', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(420, 460));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    respond = (request) async {
+      final table = request.url.path.split('/').last;
+      return switch (table) {
+        'swl_live_games' => jsonResponse({
+          'id': 'game',
+          'version': 1,
+          'game_pin': 'SWL-378859',
+          'home_team_id': 'home',
+          'away_team_id': 'away',
+          'status': 'IN_PROGRESS',
+          'inning': 2,
+          'is_top': true,
+          'home_runs': 0,
+          'away_runs': 0,
+          'home_hits': 0,
+          'away_hits': 0,
+        }),
+        'swl_game_lineups' => jsonResponse([
+          {
+            'team_id': 'away',
+            'lineup': [
+              for (var i = 1; i <= 12; i++) {'order': i, 'player_id': 'p$i'},
+            ],
+          },
+        ]),
+        'players' => jsonResponse([
+          for (var i = 1; i <= 12; i++)
+            {'id': 'p$i', 'first_name': 'Jugador $i'},
+        ]),
+        _ => jsonResponse([]),
+      };
+    };
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SwlGameDetailPage(
+          gameId: 'game',
+          boxScore: true,
+          teamName: (id) => id,
+          teamLogo: (_) => null,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('6'), findsOneWidget);
+    expect(find.text('·'), findsWidgets);
+    expect(find.text('0*'), findsOneWidget);
+
+    final name = find.text('Jugador 1');
+    final header = find.text('Bateo · Pelotero');
+    final pa = find.text('PA');
+    final original = tester.getTopLeft(name);
+    final originalPa = tester.getTopLeft(pa).dx;
+    await tester.dragFrom(
+      tester.getCenter(pa) + const Offset(100, 0),
+      const Offset(-90, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(name), original);
+    expect(tester.getTopLeft(pa).dx, lessThan(originalPa));
+
+    final headerY = tester.getTopLeft(header).dy;
+    await tester.dragFrom(tester.getCenter(name), const Offset(0, -90));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(header).dy, headerY);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 8));
+  });
 
   testWidgets(
     'El historial identifica saliente, entrante, equipo y turno o posición',
