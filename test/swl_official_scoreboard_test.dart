@@ -118,6 +118,13 @@ void main() {
     await tester.dragFrom(tester.getCenter(name), const Offset(0, -90));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(header).dy, headerY);
+    await tester.tap(find.widgetWithText(Tab, 'home'));
+    await tester.pumpAndSettle();
+    await tester.binding.setSurfaceSize(const Size(800, 440));
+    await tester.pumpAndSettle();
+    expect(find.text('Pitcheo · Pelotero'), findsOneWidget);
+    expect(find.text('Box Score · SWL-378859'), findsOneWidget);
+    expect(find.text('Jugador 1'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 8));
   });

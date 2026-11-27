@@ -40,6 +40,103 @@ SwlRow game(int away, {int home = 0}) => {
 };
 
 void main() {
+  test('LAB v28 atribuye el error sin fila y conserva C/CL anteriores', () {
+    final stats = SwlGameBoxData(
+      game(4),
+      [
+        play(23, 'HIT', hit('inherited'), inning: 2),
+        play(
+          26,
+          'HIT',
+          hit('first-hr', scoring: ['first-hr', 'inherited']),
+          inning: 2,
+        ),
+        play(27, 'ERROR', {
+          ...hit('error'),
+          'scope': 'defensive_error',
+          'outs_added': 0,
+        }, inning: 2),
+        play(
+          28,
+          'HIT',
+          hit('second-hr', scoring: ['second-hr', 'error']),
+          inning: 2,
+        ),
+      ],
+      [pitch(23, '93'), pitch(26, '92'), pitch(28, '92')],
+      changes: [
+        {
+          'team_id': 'home',
+          'version': 25,
+          'old_pitcher_id': '93',
+          'new_pitcher_id': '92',
+        },
+      ],
+    );
+    expect(stats.incompletePitching, isEmpty);
+    expect(stats.pitching['home']!['92']!.last, 3);
+    final credit = stats.runCredit;
+    expect(
+      [
+        for (final id in ['91', '93', '92']) credit.runs('home', id),
+      ],
+      [0, 1, 3],
+    );
+    expect(
+      [
+        for (final id in ['91', '93', '92']) credit.cleanRuns('home', id),
+      ],
+      [0, 1, 2],
+    );
+    expect(credit.cleanTotal('home'), 3);
+  });
+
+  test('un error heredado mantiene el cargo al relevado y no suma CL', () {
+    final stats = SwlGameBoxData(
+      game(2),
+      [
+        play(2, 'ERROR', {
+          ...hit('error'),
+          'scope': 'defensive_error',
+          'outs_added': 0,
+        }),
+        play(4, 'HIT', hit('homer', scoring: ['error', 'homer'])),
+      ],
+      [pitch(4, 'p2')],
+      changes: [
+        {
+          'team_id': 'home',
+          'version': 1,
+          'old_pitcher_id': 'p0',
+          'new_pitcher_id': 'p1',
+        },
+        {
+          'team_id': 'home',
+          'version': 3,
+          'old_pitcher_id': 'p1',
+          'new_pitcher_id': 'p2',
+        },
+      ],
+    );
+    expect(stats.runCredit.runs('home', 'p1'), 1);
+    expect(stats.runCredit.cleanRuns('home', 'p1'), 0);
+    expect(stats.runCredit.cleanRuns('home', 'p2'), 1);
+  });
+
+  test('un evento sin atribución conserva los créditos confirmados', () {
+    final credit = SwlGameBoxData(
+      game(2),
+      [
+        play(1, 'HIT', hit('homer', scoring: ['homer'])),
+        play(2, 'RUN', {'runs': 1}),
+      ],
+      [pitch(1, 'p')],
+    ).runCredit;
+    expect(credit.runsLabel('home', 'p'), '≥1');
+    expect(credit.cleanLabel('home', 'p'), '≥1');
+    expect(credit.runsLabel('home', 'other'), '—');
+  });
+
   test('reconstruye los dos jonrones de SWL-378859 por versión', () {
     final credit = SwlGameBoxData(
       game(2, home: 1),

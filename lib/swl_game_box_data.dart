@@ -47,7 +47,14 @@ class SwlGameBoxData {
     'ERROR',
   };
 
-  SwlGameBoxData(SwlRow game, List<SwlRow> events, List<SwlRow> pitches) {
+  SwlGameBoxData(
+    SwlRow game,
+    List<SwlRow> events,
+    List<SwlRow> pitches, {
+    List<SwlRow> changes = const [],
+    List<SwlRow> lineups = const [],
+  }) {
+    pitches = _creditDefensiveErrors(game, events, pitches, changes, lineups);
     final home = game['home_team_id'];
     final away = game['away_team_id'];
     final versions = {for (final e in events) e['version']: e};
@@ -188,6 +195,69 @@ class SwlGameBoxData {
         if (cells.any((cell) => cell == null)) incompleteRbi.add(team);
       }
     }
+  }
+
+  /// A defensive error was recorded without a pitching row in LAB.
+  /// Reconcile its owner from both directions of the official timeline.
+  static List<SwlRow> _creditDefensiveErrors(
+    SwlRow game,
+    List<SwlRow> events,
+    List<SwlRow> pitches,
+    List<SwlRow> changes,
+    List<SwlRow> lineups,
+  ) {
+    final home = game['home_team_id'];
+    final away = game['away_team_id'];
+    final result = [...pitches];
+    final byVersion = {for (final p in pitches) p['version']: p};
+    for (final (defense, offense) in [(home, away), (away, home)]) {
+      final current = lineups
+          .where((l) => l['team_id'] == defense)
+          .firstOrNull?['pitcher_id'];
+      final timeline = <(int, String?, String?)>[
+        for (final e in events)
+          if (e['batting_team_id'] == offense)
+            if (byVersion[e['version']]?['pitcher_id']
+                case final String pitcher)
+              (swlStat(e['version']), pitcher, pitcher),
+        if (current is String) (swlStat(game['version']) + 1, current, current),
+        for (final c in changes)
+          if (c['team_id'] == defense)
+            (
+              swlStat(c['version']),
+              c['old_pitcher_id'] as String?,
+              c['new_pitcher_id'] as String?,
+            ),
+      ]..sort((a, b) => a.$1.compareTo(b.$1));
+      for (final e in events) {
+        final version = e['version'];
+        final data = e['event_data'];
+        if (e['batting_team_id'] != offense ||
+            version is! int ||
+            byVersion.containsKey(version) ||
+            e['event_type'] != 'ERROR' ||
+            data is! Map ||
+            data['scope'] != 'defensive_error' ||
+            data['batter_id'] is! String ||
+            swlStat(data['batter_base']) < 1 ||
+            data['outs_added'] is! int)
+          continue;
+        final before = timeline
+            .lastWhere((a) => a.$1 < version, orElse: () => (0, null, null))
+            .$3;
+        final after = timeline
+            .firstWhere((a) => a.$1 > version, orElse: () => (0, null, null))
+            .$2;
+        if (before == null || before != after) continue;
+        result.add({
+          'version': version,
+          'pitcher_id': before,
+          'outs': data['outs_added'],
+        });
+      }
+    }
+    return result
+      ..sort((a, b) => swlStat(a['version']).compareTo(swlStat(b['version'])));
   }
 
   static List<int> _row(

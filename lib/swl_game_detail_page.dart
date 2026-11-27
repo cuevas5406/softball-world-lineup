@@ -41,6 +41,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
   SwlGameBoxData? _stats;
   Timer? _timer;
   RealtimeChannel? _channel;
+  int _failedReads = 0;
   bool _loading = false, _queued = false, _failed = false, _changing = false;
 
   @override
@@ -105,6 +106,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
       return;
     }
     _loading = true;
+    final failuresBefore = _failedReads;
     try {
       final game = await _client
           .from('swl_live_games')
@@ -131,7 +133,13 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
               .timeout(const Duration(seconds: 10)),
       ]);
       final stats = widget.boxScore
-          ? SwlGameBoxData(game, rows[1], rows[3])
+          ? SwlGameBoxData(
+              game,
+              rows[1],
+              rows[3],
+              changes: rows[2],
+              lineups: rows[0],
+            )
           : null;
       final ids = <String>{
         for (final row in rows[0]) ...swlLineupParticipantIds(row),
@@ -169,6 +177,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
         return;
       }
       if (!mounted) return;
+      _failedReads = 0;
       setState(() {
         _game = game;
         _lineups = rows[0];
@@ -179,7 +188,10 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
         _failed = false;
       });
     } catch (_) {
-      if (mounted && !_failed) setState(() => _failed = true);
+      _failedReads++;
+      if (mounted && !_failed && (_game == null || failuresBefore > 0)) {
+        setState(() => _failed = true);
+      }
     } finally {
       _loading = false;
       if (mounted && _queued) {
@@ -360,19 +372,22 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
         child: Row(
           children: [
             Expanded(
-              flex: 2,
+              flex: MediaQuery.sizeOf(context).width >= 600 ? 1 : 2,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  name,
-                  style: style,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                child: Tooltip(
+                  message: name,
+                  child: Text(
+                    name,
+                    style: style,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
             ),
             Expanded(
-              flex: 3,
+              flex: MediaQuery.sizeOf(context).width >= 600 ? 2 : 3,
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final maximum =
@@ -448,6 +463,26 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
       ...throws.keys,
       if (lineup['pitcher_id'] case final String id) id,
     };
+    final firstAppearance = <String, int>{...stats.runCredit.firstPitchVersion};
+    for (final change in changes) {
+      final version = swlStat(change['version']);
+      if (change['old_pitcher_id'] case final String id) {
+        firstAppearance.putIfAbsent(id, () => version - 1);
+      }
+      if (change['new_pitcher_id'] case final String id) {
+        firstAppearance.update(
+          id,
+          (old) => old < version ? old : version,
+          ifAbsent: () => version,
+        );
+      }
+    }
+    final orderedPitchers = pitchers.toList()
+      ..sort(
+        (a, b) => (firstAppearance[a] ?? 0x7fffffff).compareTo(
+          firstAppearance[b] ?? 0x7fffffff,
+        ),
+      );
     final isHome = team == game['home_team_id'];
     final runsAllowed = swlStat(game[isHome ? 'away_runs' : 'home_runs']);
     final runs = swlStat(game[isHome ? 'home_runs' : 'away_runs']);
@@ -466,8 +501,12 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     List<String> pitchingLine(List<int> row, {String? pitcher}) => [
       SwlGameBoxData.ip(row[0]),
       '${row[1]}',
-      '${(pitcher == null ? runsAllowed : stats.runCredit.runs(team, pitcher)) ?? "—"}',
-      '${(pitcher == null ? stats.runCredit.cleanTotal(team) : stats.runCredit.cleanRuns(team, pitcher)) ?? "—"}',
+      pitcher == null
+          ? '$runsAllowed'
+          : stats.runCredit.runsLabel(team, pitcher),
+      pitcher == null
+          ? stats.runCredit.cleanTotalLabel(team)
+          : stats.runCredit.cleanLabel(team, pitcher),
       for (final n in row.skip(4)) '$n',
     ];
     Widget table(
@@ -507,7 +546,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
             child: Text('Conteo parcial · hay jugadas sin pitcher acreditado.'),
           ),
         table('Pitcheo', SwlGameBoxData.pitchingLabels, [
-          for (final id in pitchers)
+          for (final id in orderedPitchers)
             (
               _name(id),
               pitchingLine(throws[id] ?? List.filled(10, 0), pitcher: id),

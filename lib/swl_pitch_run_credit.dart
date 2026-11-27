@@ -8,6 +8,7 @@ typedef _Play = Map<String, dynamic>;
 
 /// Replays each half with the UUIDs and versions recorded by the server.
 class SwlPitchRunCredit {
+  final firstPitchVersion = <String, int>{};
   final charged = <String, Map<String, int>>{};
   final earned = <String, Map<String, int>>{};
   final teamEarned = <String, int>{};
@@ -27,6 +28,18 @@ class SwlPitchRunCredit {
   int? cleanTotal(String team) =>
       _unknownTeamEarned.contains(team) ? null : teamEarned[team] ?? 0;
 
+  String runsLabel(String team, String id) =>
+      _label(runs(team, id), charged[team]?[id]);
+
+  String cleanLabel(String team, String id) =>
+      _label(cleanRuns(team, id), earned[team]?[id]);
+
+  String cleanTotalLabel(String team) =>
+      _label(cleanTotal(team), teamEarned[team]);
+
+  static String _label(int? total, int? minimum) =>
+      total?.toString() ?? ((minimum ?? 0) > 0 ? '≥$minimum' : '—');
+
   SwlPitchRunCredit(
     _Play game,
     List<_Play> events,
@@ -35,6 +48,17 @@ class SwlPitchRunCredit {
   ) {
     final home = game['home_team_id'];
     final away = game['away_team_id'];
+    for (final row in pitches) {
+      if (row['pitcher_id'] case final String id) {
+        if (row['version'] case final int version) {
+          firstPitchVersion.update(
+            id,
+            (old) => old < version ? old : version,
+            ifAbsent: () => version,
+          );
+        }
+      }
+    }
     final owners = {
       for (final p in pitches)
         if (p['pitcher_id'] case final String id) p['version']: id,
