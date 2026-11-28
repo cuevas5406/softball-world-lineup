@@ -40,6 +40,36 @@ SwlRow game(int away, {int home = 0}) => {
 };
 
 void main() {
+  test('DP con carrera acredita dos outs, un pitcheo, una PA y C/CL', () {
+    final stats = SwlGameBoxData(
+      game(1),
+      [
+        play(1, 'HIT', hit('scorer')),
+        play(2, 'HIT', hit('retired')),
+        play(3, 'DOUBLE_PLAY', {
+          'batter_id': 'batter',
+          'runner_id': 'retired',
+          'outs_added': 2,
+          'runs': 1,
+          'scoring_player_ids': ['scorer'],
+          'plate_appearance_completed': true,
+        }),
+      ],
+      [pitch(1, 'former'), pitch(2, 'current'), pitch(3, 'current', outs: 2)],
+    );
+    expect(stats.batting['away']!['batter']!.take(2), [1, 1]);
+    final current = stats.pitching['home']!['current']!;
+    expect(SwlGameBoxData.ip(current.first), '0.2');
+    expect(
+      current.last,
+      2,
+    ); // Un hit y un DP, un lanzamiento en juego cada uno.
+    expect(stats.runCredit.runs('home', 'former'), 1);
+    expect(stats.runCredit.cleanRuns('home', 'former'), 1);
+    expect(stats.runCredit.runs('home', 'current'), 0);
+    expect(stats.runCredit.cleanTotal('home'), 1);
+  });
+
   test('LAB v28 atribuye el error sin fila y conserva C/CL anteriores', () {
     final stats = SwlGameBoxData(
       game(4),
