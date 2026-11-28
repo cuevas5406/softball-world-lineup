@@ -53,3 +53,30 @@ clave y contenido **todos los snapshots reales** antes y después de
 convertirlos. D01 ensaya la lectura de ese formato en un encuentro temporal,
 sin deshacer una jugada real de SWL-378859. El DDL y la batería completa
 siguen pendientes de ejecución.
+
+## Revisión posterior a INNING_TOTAL_MISMATCH
+
+Los 18 casos de márgenes preparan un desglose coherente para ambos equipos.
+El margen visitante se carga en la alta en juego y la ventaja del local en
+la primera entrada completada. Antes del jonrón, los casos de reducción
+comprueban media entrada, versión, marcador, desglose, outs, conteo,
+ocupación e identidad de bases, turno al bate y pitcher contrario.
+K01 verifica además FINAL con la primera firma y OFFICIAL con la segunda.
+
+Los códigos se asignan por grupo (A01, K01–K22, P01, F01, D01–D05, E01–E09).
+La transacción exige exactamente 39 completados. Un error inesperado conserva
+el SQLSTATE original y reporta código, contador, operación, valor esperado,
+último estado del fixture observado y contexto original, antes de abortar.
+El último estado observado es anterior a la llamada cuando esa llamada falla;
+si falla una comprobación posterior a la llamada, se captura el estado donde
+hay una comparación directa contra el partido. Se omiten identidades de
+mánagers del contexto de diagnóstico.
+
+La auditoría de LAB fue de lectura. Confirmó 6 entradas reglamentarias,
+umbrales 15/10 en el partido de referencia, dos snapshots históricos aún
+compuestos, RLS activo, firma doble como condición de oficialización y los
+triggers de participación de alineaciones/inicio y de identidad de corredores
+por versión. También verificó las claves y permisos de las RPC usadas por
+los escenarios. La lógica de `swl_v53_inning_delta` y los bloques de migración
+y preservación quedan intactos. Los escenarios de juego avanzan por RPC salvo
+el estado inicial sintético requerido para cada condición de borde.

@@ -31,6 +31,16 @@ DECLARE
   dp_defense jsonb;
   positions text[] := ARRAY['P','C','1B','2B','3B','SS','LF','CF','RF'];
   positions_unused text[];
+  completed integer := 0;
+  group_index integer := 0;
+  scenario_code text := 'SETUP';
+  operation text := 'preparar fixtures';
+  expected_state jsonb;
+  observed_state jsonb;
+  error_context text;
+  error_detail text;
+  error_message text;
+  error_state text;
 BEGIN
   BEGIN
     SELECT * INTO STRICT source_game FROM public.swl_live_games WHERE game_pin='SWL-378859';
@@ -61,39 +71,90 @@ BEGIN
     SELECT jsonb_object_agg((CASE WHEN i=1 THEN away_players[10] ELSE away_players[i-1] END)::text,positions[i])
       INTO away_def FROM generate_series(1,9) i;
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+    operation := 'swl_v56_save_lineup';
+    SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+      FROM public.swl_live_games a WHERE a.id=fixture;
     PERFORM public.swl_v56_save_lineup(fixture,source_game.home_team_id,home_players[1:9],0,home_players[1],true,NULL,home_def);
     PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+    scenario_code := 'A01';
+    expected_state := '{"resultado":"PELOTERO_EN_AMBOS_EQUIPOS"}';
     BEGIN
+      operation := 'swl_v53_save_lineup_checked';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v53_save_lineup_checked(fixture,source_game.away_team_id,
         ARRAY[home_players[1]]||away_players[2:9],0);
       RAISE SQLSTATE 'ZX011' USING MESSAGE='Se aceptó el mismo UUID en ambos lados';
     EXCEPTION WHEN raise_exception THEN
       IF SQLERRM<>'PELOTERO_EN_AMBOS_EQUIPOS' THEN RAISE; END IF;
     END;
+    completed := completed+1;
+    operation := 'swl_v56_save_lineup';
+    SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+      FROM public.swl_live_games a WHERE a.id=fixture;
     PERFORM public.swl_v56_save_lineup(fixture,source_game.away_team_id,away_players[1:9],0,away_players[10],false,away_players[9],away_def);
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
 
 
 
+    group_index := 0;
     FOR scenario IN SELECT * FROM (VALUES
       ('AUTO', 'FINAL', false), ('DISABLED', 'IN_PROGRESS', false),
       ('CONSULT', 'IN_PROGRESS', false), ('CONSULT', 'IN_PROGRESS', true)
     ) AS v(mode, expected, finish) LOOP
+      group_index := group_index+1;
+      scenario_code := 'K'||lpad(group_index::text,2,'0');
+      expected_state := to_jsonb(scenario);
       BEGIN
         PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+        operation := 'swl_v57_knockout_decision';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v57_knockout_decision(fixture,0,scenario.mode);
+        operation := 'swl_v56_start_game';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v56_start_game(fixture,1);
         UPDATE public.swl_live_games SET inning=3,is_top=false,outs=2,
           home_runs=1,away_runs=16,home_innings='[1,0,0]',away_innings='[0,0,16]'
           WHERE id=fixture;
+        operation := 'swl_v56_record_plate_action';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v56_record_plate_action(fixture,2,'OUT',home_players[1]);
         SELECT * INTO g FROM public.swl_live_games WHERE id=fixture;
         IF g.status IS DISTINCT FROM scenario.expected
            OR (g.swl_knockout_pending IS NOT NULL)<>(scenario.mode='CONSULT')
         THEN RAISE EXCEPTION 'Modo incorrecto: %',scenario.mode; END IF;
+        IF scenario.mode='AUTO' THEN
+          operation := 'swl_v56_match_decision';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
+          PERFORM public.swl_v56_match_decision(fixture,3,'SIGN');
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
+          IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=4
+            AND status='FINAL' AND swl_home_signed AND NOT swl_away_signed)
+          THEN RAISE EXCEPTION 'La primera firma no conservó FINAL'; END IF;
+          PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+          operation := 'swl_v56_match_decision';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
+          PERFORM public.swl_v56_match_decision(fixture,4,'SIGN');
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
+          IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=5
+            AND status='OFFICIAL' AND swl_home_signed AND swl_away_signed)
+            OR (SELECT count(*) FROM public.swl_v56_match_decisions
+                WHERE game_id=fixture AND action='SIGN' AND version IN (4,5))<>2
+          THEN RAISE EXCEPTION 'No se oficializó con ambas firmas'; END IF;
+        END IF;
         IF scenario.mode='CONSULT' THEN
           PERFORM set_config('request.jwt.claim.sub',gen_random_uuid()::text,true);
           BEGIN
+            operation := 'swl_v57_knockout_decision';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v57_knockout_decision(fixture,3,'CONTINUE');
             RAISE SQLSTATE 'ZX011' USING MESSAGE='Un fanático pudo votar';
           EXCEPTION WHEN insufficient_privilege THEN
@@ -101,12 +162,18 @@ BEGIN
           END;
           PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
           BEGIN
+            operation := 'swl_v56_record_plate_action';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v56_record_plate_action(fixture,3,'OUT',away_players[1]);
             RAISE SQLSTATE 'ZX011' USING MESSAGE='Se pudo anotar durante la consulta';
           EXCEPTION WHEN raise_exception THEN
             IF SQLERRM<>'KNOCKOUT_DECISION_PENDING' THEN RAISE; END IF;
           END;
           IF scenario.finish THEN
+            operation := 'swl_v57_knockout_decision';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v57_knockout_decision(fixture,3,'FINISH');
             IF NOT EXISTS(SELECT FROM public.swl_live_games WHERE id=fixture
               AND status='FINAL' AND swl_knockout_pending IS NULL
@@ -114,27 +181,44 @@ BEGIN
             THEN RAISE EXCEPTION 'La negativa no finalizó el partido'; END IF;
             RAISE SQLSTATE 'ZX012';
           END IF;
+          operation := 'swl_v57_knockout_decision';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_knockout_decision(fixture,3,'CONTINUE');
           BEGIN
+            operation := 'swl_v57_knockout_decision';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v57_knockout_decision(fixture,4,'FINISH');
             RAISE SQLSTATE 'ZX011' USING MESSAGE='Se permitió cambiar el voto';
           EXCEPTION WHEN raise_exception THEN
             IF SQLERRM<>'KNOCKOUT_ALREADY_VOTED' THEN RAISE; END IF;
           END;
           PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+          operation := 'swl_v57_knockout_decision';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_knockout_decision(fixture,4,'CONTINUE');
           IF NOT EXISTS(SELECT FROM public.swl_live_games WHERE id=fixture
             AND status='IN_PROGRESS' AND swl_knockout_pending IS NULL
             AND swl_knockout_waived_through=3 AND version=5)
           THEN RAISE EXCEPTION 'Dos votos no reanudaron el juego'; END IF;
           PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+          operation := 'swl_v56_record_plate_action';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v56_record_plate_action(fixture,5,'OUT',away_players[1]);
           IF EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
                      AND swl_knockout_pending IS NOT NULL)
           THEN RAISE EXCEPTION 'Se reabrió antes de terminar la cuarta'; END IF;
           UPDATE public.swl_live_games SET is_top=false,outs=2 WHERE id=fixture;
           PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+          operation := 'swl_v56_record_plate_action';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v56_record_plate_action(fixture,6,'OUT',home_players[2]);
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
              AND version=7 AND swl_knockout_pending->>'reason'='Knockout')
             OR (SELECT count(*) FROM swl_private.v57_knockout_audit
@@ -142,25 +226,47 @@ BEGIN
           THEN RAISE EXCEPTION 'No se reabrió la consulta al finalizar la cuarta'; END IF;
         END IF;
         RAISE SQLSTATE 'ZX012';
-      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN completed := completed+1;
       END;
     END LOOP;
     FOR scenario IN
       SELECT * FROM (VALUES (3,15,'Súper knockout'),(4,10,'Knockout')) n(inning,margin,reason)
       CROSS JOIN (VALUES ('AUTO'),('CONSULT'),('DISABLED')) m(mode)
       CROSS JOIN (VALUES ('AWAY_REDUCE'),('AWAY_HOLD'),('HOME_LEAD')) s(side)
+      ORDER BY (s.side='HOME_LEAD'),n.inning,
+        array_position(ARRAY['AUTO','CONSULT','DISABLED'],m.mode),s.side DESC
     LOOP
+      group_index := group_index+1;
+      scenario_code := 'K'||lpad(group_index::text,2,'0');
+      expected_state := to_jsonb(scenario);
       BEGIN
         PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+        operation := 'swl_v57_knockout_decision';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v57_knockout_decision(fixture,0,scenario.mode);
+        operation := 'swl_v56_start_game';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v56_start_game(fixture,1);
         UPDATE public.swl_live_games SET inning=scenario.inning,outs=2,
           home_runs=CASE WHEN scenario.side='HOME_LEAD' THEN scenario.margin ELSE 0 END,
-          away_runs=CASE WHEN scenario.side='HOME_LEAD' THEN 0 ELSE scenario.margin END
+          away_runs=CASE WHEN scenario.side='HOME_LEAD' THEN 0 ELSE scenario.margin END,
+          home_innings=(SELECT jsonb_agg(CASE WHEN scenario.side='HOME_LEAD'
+              AND n=1 THEN scenario.margin ELSE 0 END ORDER BY n)
+              FROM generate_series(1,scenario.inning-1) n),
+          away_innings=(SELECT jsonb_agg(CASE WHEN scenario.side<>'HOME_LEAD'
+              AND n=scenario.inning THEN scenario.margin ELSE 0 END ORDER BY n)
+              FROM generate_series(1,scenario.inning) n)
         WHERE id=fixture;
         PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+        operation := 'swl_v56_record_plate_action';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v56_record_plate_action(fixture,2,'OUT',away_players[1]);
         IF scenario.side<>'HOME_LEAD' OR scenario.mode='DISABLED' THEN
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
              AND version=3 AND status='IN_PROGRESS' AND inning=scenario.inning
              AND NOT is_top AND outs=0 AND swl_knockout_pending IS NULL)
@@ -169,12 +275,40 @@ BEGIN
         IF scenario.side<>'HOME_LEAD' THEN
           PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
           IF scenario.side='AWAY_REDUCE' THEN
+            operation := 'validar estado previo al jonrón local';
+            SELECT to_jsonb(a) INTO STRICT observed_state FROM public.swl_live_games a WHERE a.id=fixture;
+            expected_state := jsonb_build_object('inning',scenario.inning,'is_top',false,
+              'status','IN_PROGRESS','outs',0,'balls',0,'strikes',0,'version',3,
+              'home_runs',0,'away_runs',scenario.margin,'next_order',1,'pitcher_id',away_players[10]);
+            SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+            IF g.home_runs<>0 OR g.away_runs<>scenario.margin OR g.balls<>0 OR g.strikes<>0
+              OR g.swl_base_players IS DISTINCT FROM ARRAY[NULL,NULL,NULL]::uuid[]
+              OR public.swl_v56_base_occupancy(g.bases_state) IS DISTINCT FROM ARRAY[false,false,false]
+              OR jsonb_array_length(g.home_innings) NOT BETWEEN scenario.inning-1 AND scenario.inning
+              OR jsonb_array_length(g.away_innings)<>scenario.inning
+              OR coalesce((SELECT sum(x::integer) FROM jsonb_array_elements_text(g.home_innings) x),0)<>g.home_runs
+              OR coalesce((SELECT sum(x::integer) FROM jsonb_array_elements_text(g.away_innings) x),0)<>g.away_runs
+              OR coalesce((SELECT next_order FROM public.swl_game_batting_turns
+                   WHERE game_id=fixture AND team_id=source_game.home_team_id),1)<>1
+              OR NOT EXISTS (SELECT FROM public.swl_game_lineups WHERE game_id=fixture
+                  AND team_id=source_game.away_team_id AND pitcher_id=away_players[10])
+            THEN RAISE EXCEPTION 'Estado previo al jonrón inconsistente'; END IF;
+            operation := 'swl_v56_apply_hit';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v56_apply_hit(fixture,3,home_players[1],4,NULL,NULL,NULL);
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=4
-              AND home_runs=1 AND away_runs-home_runs=scenario.margin-1)
+              AND home_runs=1 AND away_runs-home_runs=scenario.margin-1
+              AND (home_innings->>(scenario.inning-1))::integer=1
+              AND (away_innings->>(scenario.inning-1))::integer=scenario.margin)
             THEN RAISE EXCEPTION 'No se redujo la diferencia: %',scenario; END IF;
           END IF;
           FOR j IN 1..3 LOOP
+            operation := 'swl_v56_record_plate_action';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v56_record_plate_action(fixture,
               2+j+CASE WHEN scenario.side='AWAY_REDUCE' THEN 1 ELSE 0 END,
               'OUT',home_players[j+CASE WHEN scenario.side='AWAY_REDUCE' THEN 1 ELSE 0 END]);
@@ -195,30 +329,58 @@ BEGIN
         THEN RAISE EXCEPTION 'Consulta de knockout incorrecta: %',scenario;
         END IF;
         RAISE SQLSTATE 'ZX012';
-      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN completed := completed+1;
       END;
     END LOOP;
 
+    scenario_code := 'P01';
+    expected_state := '{"home_runs":3,"home_hits":3,"away_errors":2,"outs":1,"version":8}';
     BEGIN
       PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+      operation := 'swl_v56_start_game';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v56_start_game(fixture,0);
       UPDATE public.swl_live_games SET is_top=false WHERE id=fixture;
+      operation := 'swl_v56_apply_hit';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v56_apply_hit(fixture,1,home_players[1],1,NULL,NULL,NULL);
+      operation := 'swl_v57_defensive_error';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v57_defensive_error(fixture,2,'ERROR',home_players[2],
         jsonb_build_object('p_batter_id',home_players[2],'p_batter_base',1,'p_first_to',2));
       PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+      operation := 'swl_v56_change_pitcher';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v56_change_pitcher(p_game_id=>fixture,p_expected_version=>3,
         p_team_id=>source_game.away_team_id,p_player_id=>away_players[11]);
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=4
         AND swl_base_players[1]=home_players[2] AND swl_base_players[2]=home_players[1])
       THEN RAISE EXCEPTION 'El relevo perdió los corredores heredados'; END IF;
       PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+      operation := 'swl_v56_apply_hit';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v56_apply_hit(fixture,4,home_players[3],4,0,0,NULL);
+      operation := 'swl_v56_apply_hit';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v56_apply_hit(fixture,5,home_players[4],1,NULL,NULL,NULL);
+      operation := 'swl_v57_defensive_error';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v57_defensive_error(fixture,6,'ERROR',home_players[5],
         jsonb_build_object('p_batter_id',home_players[5],'p_batter_base',1,'p_first_to',-2));
       SELECT revision INTO STRICT lineup_revision FROM public.swl_game_lineups
         WHERE game_id=fixture AND team_id=source_game.home_team_id;
+      operation := 'swl_v56_substitute_batter';
+      SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+        FROM public.swl_live_games a WHERE a.id=fixture;
       PERFORM public.swl_v56_substitute_batter(fixture,source_game.home_team_id,4,
         home_players[4],home_players[10],lineup_revision,7);
       SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
@@ -293,6 +455,9 @@ BEGIN
       THEN RAISE EXCEPTION 'El bateo público difiere del total oficial'; END IF;
 
       -- Rol efectivo de la Data API con una identidad temporal sin afiliación.
+      completed := completed+1;
+      scenario_code := 'F01';
+      expected_state := '{"lectura":"misma proyección que el mánager","escrituras":"rechazadas"}';
       PERFORM set_config('request.jwt.claim.sub',fan_id::text,true);
       PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',fan_id,'role','authenticated')::text,true);
       EXECUTE 'SET LOCAL ROLE authenticated';
@@ -307,6 +472,7 @@ BEGIN
       THEN RAISE EXCEPTION 'Diferencia de datos o filtración de información privada'; END IF;
 
       FOR admin_action IN SELECT unnest(ARRAY['SCORE','SUBSTITUTE','CANCEL','SIGN','STATS']) LOOP
+        operation := 'probar permisos del fanático: '||admin_action;
         BEGIN
           CASE admin_action
             WHEN 'SCORE' THEN PERFORM public.swl_v56_record_plate_action(fixture,8,'OUT',home_players[6]);
@@ -335,13 +501,20 @@ BEGIN
       END;
       EXECUTE 'RESET ROLE';
       RAISE SQLSTATE 'ZX012';
-    EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+    EXCEPTION WHEN SQLSTATE 'ZX012' THEN completed := completed+1;
     END;
 
     -- D01–D05: esquema histórico, ambas entradas de anotación y knockout.
+    group_index := 0;
     FOR dp_case IN SELECT unnest(ARRAY['HISTORICAL','STANDARD','TIME','AUTO','CONSULT']) LOOP
+      group_index := group_index+1;
+      scenario_code := 'D'||lpad(group_index::text,2,'0');
+      expected_state := jsonb_build_object('caso',dp_case,'snapshot_nuevo',2,'restauración','estado anterior y créditos previos');
       BEGIN
         PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+        operation := 'swl_v56_start_game';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v56_start_game(fixture,0);
         UPDATE public.swl_live_games SET
           inning=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN 3 ELSE 1 END,
@@ -358,9 +531,15 @@ BEGIN
         dp_team:=CASE WHEN g.is_top THEN source_game.away_team_id ELSE source_game.home_team_id END;
         dp_players:=CASE WHEN g.is_top THEN away_players ELSE home_players END;
         PERFORM set_config('request.jwt.claim.sub',dp_actor::text,true);
+        operation := 'swl_v56_apply_hit';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v56_apply_hit(fixture,1,dp_players[1],
           CASE WHEN dp_case='TIME' THEN 3 ELSE 1 END,NULL,NULL,NULL);
         IF dp_case='TIME' THEN
+          operation := 'swl_v57_defensive_error';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_defensive_error(fixture,2,'ERROR',dp_players[2],
             jsonb_build_object('p_batter_id',dp_players[2],'p_batter_base',1,'p_third_to',3));
         END IF;
@@ -372,8 +551,14 @@ BEGIN
         SELECT to_jsonb(l) INTO STRICT dp_defense FROM public.swl_game_lineups l
           WHERE l.game_id=fixture AND l.team_id<>dp_team;
         IF dp_case IN ('HISTORICAL','STANDARD') THEN
+          operation := 'swl_v57_double_play';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_double_play(fixture,dp_version,1);
         ELSE
+          operation := 'swl_v57_double_play_advanced';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_double_play_advanced(fixture,dp_version,1,
             CASE WHEN dp_case='TIME' THEN '{"3":0}'::jsonb ELSE '{}'::jsonb END,
             CASE WHEN dp_case='TIME' THEN 'TIME' ELSE 'FORCE' END);
@@ -400,6 +585,9 @@ BEGIN
 
         PERFORM set_config('request.jwt.claim.sub',dp_rival::text,true);
         BEGIN
+          operation := 'swl_v57_undo_last_out';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
           RAISE SQLSTATE 'ZX011' USING MESSAGE='El rival pudo deshacer el DP';
         EXCEPTION WHEN insufficient_privilege THEN NULL;
@@ -407,20 +595,34 @@ BEGIN
         PERFORM set_config('request.jwt.claim.sub',dp_actor::text,true);
         IF dp_case='CONSULT' THEN
           BEGIN
+            operation := 'swl_v57_undo_last_out';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
             RAISE SQLSTATE 'ZX011' USING MESSAGE='Deshacer borró una consulta pendiente';
           EXCEPTION WHEN raise_exception THEN
             IF SQLERRM<>'KNOCKOUT_DECISION_PENDING' THEN RAISE; END IF;
           END;
+          operation := 'swl_v57_knockout_decision';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_knockout_decision(fixture,dp_version+1,'CONTINUE');
           PERFORM set_config('request.jwt.claim.sub',dp_rival::text,true);
+          operation := 'swl_v57_knockout_decision';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_knockout_decision(fixture,dp_version+2,'CONTINUE');
           BEGIN
+            operation := 'swl_v57_undo_last_out';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
             RAISE SQLSTATE 'ZX011' USING MESSAGE='Deshacer obsoleto borró votos válidos';
           EXCEPTION WHEN raise_exception THEN
             IF SQLERRM<>'GAME_STATE_CHANGED' THEN RAISE; END IF;
           END;
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           IF NOT EXISTS (SELECT FROM public.swl_live_games a WHERE a.id=fixture
             AND a.swl_knockout_mode='CONSULT' AND a.swl_knockout_pending IS NULL
             AND a.swl_knockout_waived_through=3 AND a.version=dp_version+3)
@@ -428,7 +630,12 @@ BEGIN
                 WHERE game_id=fixture AND action='CONTINUE')<>2
           THEN RAISE EXCEPTION 'Se perdieron votos o configuración'; END IF;
         ELSE
+          operation := 'swl_v57_undo_last_out';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           IF NOT EXISTS (SELECT FROM public.swl_live_games a WHERE a.id=fixture
               AND a.version=dp_version+2 AND to_jsonb(a)-ARRAY['updated_at','version']=dp_before)
             OR (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.version,p.pitcher_id)
@@ -444,6 +651,9 @@ BEGIN
                 WHERE game_id=fixture AND version=dp_version+1 AND action='AUTO'))
           THEN RAISE EXCEPTION 'Restauración incompleta del DP: %',dp_case; END IF;
           BEGIN
+            operation := 'swl_v57_undo_last_out';
+            SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+              FROM public.swl_live_games a WHERE a.id=fixture;
             PERFORM public.swl_v57_undo_last_out(fixture,dp_version+2);
             RAISE SQLSTATE 'ZX011' USING MESSAGE='Se deshizo el mismo DP dos veces';
           EXCEPTION WHEN raise_exception THEN
@@ -451,21 +661,36 @@ BEGIN
           END;
         END IF;
         RAISE SQLSTATE 'ZX012';
-      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN completed := completed+1;
       END;
     END LOOP;
 
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+    operation := 'swl_v56_start_game';
+    SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+      FROM public.swl_live_games a WHERE a.id=fixture;
     PERFORM public.swl_v56_start_game(fixture,0);
     PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+    operation := 'swl_v56_apply_hit';
+    SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+      FROM public.swl_live_games a WHERE a.id=fixture;
     PERFORM public.swl_v56_apply_hit(fixture,1,away_players[1],1,NULL,NULL,NULL);
+    group_index := 0;
     FOR scenario IN SELECT * FROM (VALUES
       (-1,0),(-2,0),(-3,0),(-4,0),(-2,2)
     ) AS v(destination, previous_outs) LOOP
+      group_index := group_index+1;
+      scenario_code := 'E'||lpad(group_index::text,2,'0');
+      expected_state := to_jsonb(scenario);
       BEGIN
         UPDATE public.swl_live_games SET outs=scenario.previous_outs WHERE id=fixture;
+        operation := 'swl_v57_defensive_error';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v57_defensive_error(fixture,2,'ERROR',away_players[2],
           jsonb_build_object('p_batter_id',away_players[2],'p_batter_base',1,'p_first_to',scenario.destination));
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
            AND outs=CASE WHEN scenario.previous_outs=2 THEN 0 ELSE 1 END
            AND is_top=(scenario.previous_outs=0) AND home_errors=1 AND away_hits=1
@@ -478,11 +703,17 @@ BEGIN
               AND (event_data->>'out_at_base')::integer=-scenario.destination)
         THEN RAISE EXCEPTION 'Out por error incorrecto: %',scenario.destination; END IF;
         RAISE SQLSTATE 'ZX012';
-      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN completed := completed+1;
       END;
     END LOOP;
 
+    operation := 'swl_v56_apply_hit';
+    SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+      FROM public.swl_live_games a WHERE a.id=fixture;
     PERFORM public.swl_v56_apply_hit(fixture,2,away_players[2],1,2,NULL,NULL);
+    operation := 'swl_v56_apply_hit';
+    SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+      FROM public.swl_live_games a WHERE a.id=fixture;
     PERFORM public.swl_v56_apply_hit(fixture,3,away_players[3],1,2,3,NULL);
     FOR scenario IN SELECT * FROM (VALUES
       (0,-3,-4,0,NULL::integer,false,2,1),
@@ -490,13 +721,21 @@ BEGIN
       (1,-2,-4,0,1,true,2,0),
       (0,-2,-3,-4,3,false,3,0)
     ) AS v(previous_outs,first_to,second_to,third_to,last_out,timing,outs_added,runs) LOOP
+      group_index := group_index+1;
+      scenario_code := 'E'||lpad(group_index::text,2,'0');
+      expected_state := to_jsonb(scenario);
       BEGIN
         UPDATE public.swl_live_games SET outs=scenario.previous_outs WHERE id=fixture;
+        operation := 'swl_v57_defensive_error';
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         PERFORM public.swl_v57_defensive_error(fixture,4,'ERROR',away_players[4],
           jsonb_build_object('p_batter_id',away_players[4],'p_batter_base',1,
            'p_first_to',scenario.first_to,'p_second_to',scenario.second_to,
            'p_third_to',scenario.third_to,'p_last_out_source',scenario.last_out,
            'count_runs_on_third_out',scenario.timing));
+        SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+          FROM public.swl_live_games a WHERE a.id=fixture;
         IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=5
             AND away_runs=scenario.runs AND away_hits=3 AND home_errors=1
             AND is_top=(scenario.previous_outs+scenario.outs_added<3)
@@ -510,6 +749,9 @@ BEGIN
               AND (event_data->>'runs')::int=scenario.runs)
           THEN RAISE EXCEPTION 'Error con múltiples outs incorrecto: %',scenario; END IF;
         BEGIN
+          operation := 'swl_v57_defensive_error';
+          SELECT to_jsonb(a)-ARRAY['home_manager_id','away_manager_id','created_by'] INTO observed_state
+            FROM public.swl_live_games a WHERE a.id=fixture;
           PERFORM public.swl_v57_defensive_error(fixture,4,'ERROR',away_players[4],
             jsonb_build_object('p_batter_id',away_players[4],'p_batter_base',1,
              'p_first_to',scenario.first_to,'p_second_to',scenario.second_to,
@@ -529,9 +771,12 @@ BEGIN
           OR public.swl_v57_spectator_box_source(fixture)->'game' ? 'home_manager_id'
           THEN RAISE EXCEPTION 'Box Score público inconsistente'; END IF;
         RAISE SQLSTATE 'ZX012';
-      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN completed := completed+1;
       END;
     END LOOP;
+    scenario_code := 'F01';
+    operation := 'validar Box Score de partido no iniciado y acceso anónimo';
+    expected_state := '{"programado":null,"anónimo":"sin permiso de ejecución"}';
     IF public.swl_v57_spectator_box_source(other_game) IS NOT NULL THEN
       RAISE EXCEPTION 'Box Score disponible antes de iniciar el partido';
     END IF;
@@ -540,8 +785,20 @@ BEGIN
       OR has_function_privilege('anon','public.swl_v57_spectator_box_source(uuid)','EXECUTE')
 
     THEN RAISE EXCEPTION 'Acceso público indebido al Box Score'; END IF;
+    IF completed<>39 THEN RAISE EXCEPTION 'Se esperaba completar 39 escenarios; completados: %',completed; END IF;
+    RAISE NOTICE 'SWL V5.7: % de 39 escenarios completados',completed;
     RAISE SQLSTATE 'ZX013';
   EXCEPTION WHEN SQLSTATE 'ZX013' THEN NULL;
+  WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS error_state=RETURNED_SQLSTATE,error_message=MESSAGE_TEXT,
+      error_detail=PG_EXCEPTION_DETAIL,error_context=PG_EXCEPTION_CONTEXT;
+    RAISE EXCEPTION USING ERRCODE=error_state,
+      MESSAGE=format('SWL escenario=%s completados=%s operación=%s: %s',scenario_code,completed,operation,error_message),
+      DETAIL=format('Esperado=%s; último estado observado=%s; detalle original=%s',
+        coalesce(expected_state::text,'preparación válida'),coalesce(observed_state::text,'sin fila disponible'),
+        coalesce(error_detail,'')),
+      HINT=error_context;
+
   END;
 END;
 $test$;
