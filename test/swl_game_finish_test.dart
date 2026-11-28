@@ -62,6 +62,11 @@ void main() {
     }
   });
 
+  test('SWL-378859: 16 a 1 espera el tercer out de la tercera baja', () {
+    expect(end(3, 1, 16, complete: false), isNull);
+    expect(end(3, 1, 16), SwlFinishReason.superKnockout);
+  });
+
   test('El knockout de diez carreras sigue vigente después de la cuarta', () {
     expect(end(5, 10, 0, top: true), SwlFinishReason.knockout);
     expect(end(5, 0, 10, top: true), isNull);
