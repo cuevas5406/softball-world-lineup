@@ -1,3 +1,4 @@
+import 'swl_double_play.dart';
 import 'swl_official_box_score.dart';
 import 'swl_history_events.dart';
 import 'swl_roster_repository.dart';
@@ -2771,21 +2772,20 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       await _submitLiveAction('OUT');
       return;
     }
+    final occupied = {
+      for (final base in [1, 2, 3])
+        if (swlBaseOccupied(game.playState, base)) base,
+    };
     final result = await showModalBottomSheet<int>(context: context, builder: (sheet) =>
       SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
         ListTile(title: const Text('Out normal'), onTap: () => Navigator.pop(sheet, 0)),
         if (game.thirdOccupied)
           ListTile(title: const Text('Fly de sacrificio · anota tercera'),
             onTap: () => Navigator.pop(sheet, 4)),
-        // La primera versión transaccional admite exactamente un corredor.
-        // Con varios corredores se necesita definir sus avances antes de
-        // ofrecer esta jugada, para no borrarlos por accidente.
-        if ([game.firstOccupied, game.secondOccupied, game.thirdOccupied]
-            .where((occupied) => occupied).length == 1)
-          for (final base in [1, 2, 3])
-            if (swlBaseOccupied(game.playState, base))
-              ListTile(title: Text('Doble play · bateador y corredor de ${base}B'),
-                onTap: () => Navigator.pop(sheet, base)),
+        if (swlCanDoublePlay(occupied, game.outs))
+          for (final base in occupied)
+            ListTile(title: Text('Doble play · bateador y corredor de ${base}B'),
+              onTap: () => Navigator.pop(sheet, base)),
       ])));
     if (!mounted || result == null || _currentLiveSnapshot?.version != game.version) return;
     if (result == 0) {
@@ -2793,6 +2793,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     } else if (result == 4) {
       await _chooseSacrifice(game);
     } else {
+      if (occupied.length > 1) {
+        await _chooseDoublePlayAdvances(game, occupied, result);
+        return;
+      }
       // La doble matanza retira dos jugadores: confirmar antes de modificar
       // el marcador y comprobar que la versión siga siendo la misma.
       final confirmed = await showDialog<bool>(
@@ -2820,6 +2824,60 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           _currentLiveSnapshot?.version != game.version) return;
       await _sendSpecial('DOUBLE_PLAY', {'source': result});
     }
+  }
+
+  Future<void> _chooseDoublePlayAdvances(
+    SwlLiveScoreboardSnapshot game, Set<int> occupied, int source,
+  ) async {
+    final advances = <int, int>{};
+    var timePlay = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => StatefulBuilder(builder: (context, update) {
+        final error = swlDoublePlayError(occupied, game.outs, source,
+            advances, timePlay: timePlay);
+        return AlertDialog(
+          title: Text('Doble play · bateador y corredor de ${source}B'),
+          content: SingleChildScrollView(child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (game.outs == 1)
+                SwitchListTile(
+                  title: const Text('Tercer out de toque, sin fuerza'),
+                  subtitle: const Text('Marca Home solo si anotó antes del tercer out.'),
+                  value: timePlay,
+                  onChanged: (value) => update(() => timePlay = value),
+                ),
+              for (final base in occupied.where((base) => base != source))
+                ListTile(title: Text('Corredor de ${base}B'),
+                  trailing: DropdownButton<int>(
+                    value: advances[base] ?? base,
+                    items: [
+                      DropdownMenuItem(value: base, child: Text('Sigue en ${base}B')),
+                      for (var dest = base + 1; dest <= 3; dest++)
+                        DropdownMenuItem(value: dest, child: Text('${dest}B')),
+                      const DropdownMenuItem(value: 0, child: Text('Home')),
+                    ],
+                    onChanged: (value) => update(() => advances[base] = value!),
+                  ),
+                ),
+              if (error != null) Text(error),
+            ],
+          )),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancelar')),
+            FilledButton(onPressed: error == null ? () => Navigator.pop(dialog, true) : null,
+                child: const Text('Registrar doble play')),
+          ],
+        );
+      }),
+    );
+    if (!mounted || confirmed != true || _currentLiveSnapshot?.version != game.version) return;
+    await _sendSpecial('DOUBLE_PLAY', {
+      'source': source,
+      'advances': {for (final entry in advances.entries) '${entry.key}': entry.value},
+      'third_out': timePlay ? 'TIME' : 'FORCE',
+    });
   }
 
   Future<void> _chooseSacrifice(SwlLiveScoreboardSnapshot game) async {

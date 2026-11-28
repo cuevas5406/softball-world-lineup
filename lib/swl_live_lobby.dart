@@ -716,6 +716,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         'p_game_id': gameId,
         'p_expected_version': expectedVersion,
         'p_source': hitParams?['source'],
+        if (hitParams?.containsKey('advances') == true) ...{
+          'p_advances': hitParams!['advances'],
+          'p_third_out': hitParams['third_out'],
+        },
       } : extendedBall ? <String, dynamic>{
         'p_game_id': gameId,
         'p_expected_version': expectedVersion,
@@ -732,13 +736,19 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       } : params;
       sent = true;
       try {
-        await _client.rpc(action == 'DOUBLE_PLAY' ? 'swl_v57_double_play' :
+        await _client.rpc(action == 'DOUBLE_PLAY'
+            ? (rpcParams.containsKey('p_advances') ? 'swl_v57_double_play_advanced' : 'swl_v57_double_play') :
             action == 'FOUL' ? 'swl_v56_record_foul' : special ? (extendedBall
               ? (action == 'ERROR' ? 'swl_v57_defensive_error' : 'swl_v57_batted_ball')
               : 'swl_v56_special_play') : isHit ? 'swl_v56_apply_hit' :
             'swl_v56_record_plate_action', params: rpcParams)
             .timeout(const Duration(seconds: 12));
       } on PostgrestException catch (error) {
+        if (action == 'DOUBLE_PLAY' && rpcParams.containsKey('p_advances') &&
+            error.code == 'PGRST202') {
+          sent = false;
+          throw StateError('El doble play con varios corredores aún no está habilitado en el servidor.');
+        }
         // PGRST202 indica que PostgREST no pudo invocar la función nueva.
         // Una respuesta incierta sigue el flujo de reconciliación.
         if (special || action == 'FOUL' || error.code != 'PGRST202' || _savedLineups.any((row) => row['pitcher_id'] != null)) rethrow;
