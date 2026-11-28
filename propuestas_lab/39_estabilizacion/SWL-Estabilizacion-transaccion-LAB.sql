@@ -3,6 +3,7 @@
 -- Verificar el proyecto y el SHA-256 antes de enviar.
 BEGIN;
 SET LOCAL lock_timeout='5s';
+LOCK TABLE public.swl_live_games IN ACCESS EXCLUSIVE MODE;
 SELECT id FROM public.swl_live_games WHERE game_pin='SWL-378859' FOR SHARE;
 CREATE TEMP VIEW swl_v57_integridad AS
 SELECT g.id, md5((to_jsonb(g)-ARRAY['swl_knockout_mode','swl_knockout_pending',
@@ -24,18 +25,62 @@ CREATE TEMP TABLE swl_v57_funciones ON COMMIT DROP AS
 SELECT oid, proowner, proacl, prosecdef, proconfig, pg_get_functiondef(oid) AS definition
 FROM pg_proc WHERE oid IN (
   'public.swl_v56_close_after_play(public.swl_live_games)'::regprocedure,
-  'public.swl_v57_defensive_error(uuid,bigint,text,uuid,jsonb)'::regprocedure
+  'public.swl_v57_defensive_error(uuid,bigint,text,uuid,jsonb)'::regprocedure,
+  'public.swl_v57_double_play(uuid,bigint,integer)'::regprocedure,
+  'public.swl_v57_double_play_advanced(uuid,bigint,integer,jsonb,text)'::regprocedure,
+  'swl_private.v57_undo_dp(public.swl_live_games,public.swl_game_events,uuid)'::regprocedure
 );
 DO $preflight$
 BEGIN
  IF (SELECT count(*) FROM pg_temp.swl_v57_integridad)<>1
-   OR (SELECT count(*) FROM pg_temp.swl_v57_funciones)<>2
+   OR (SELECT count(*) FROM pg_temp.swl_v57_funciones)<>5
    OR NOT EXISTS (SELECT FROM pg_publication_tables
      WHERE pubname='supabase_realtime' AND schemaname='public' AND tablename='swl_live_games')
  THEN RAISE EXCEPTION 'Falta partido, función o publicación de LAB'; END IF;
 END $preflight$;
 
 CREATE TEMP TABLE swl_v57_huellas ON COMMIT DROP AS SELECT * FROM pg_temp.swl_v57_integridad;
+
+-- Desacoplar el almacenamiento histórico del tipo de fila del partido.
+LOCK TABLE swl_private.v57_dp_undo_state IN ACCESS EXCLUSIVE MODE;
+DO $dp_preflight$
+BEGIN
+ IF NOT EXISTS (SELECT FROM pg_attribute
+  WHERE attrelid='swl_private.v57_dp_undo_state'::regclass AND attname='prior'
+    AND atttypid='public.swl_live_games'::regtype AND NOT attisdropped)
+ THEN RAISE EXCEPTION 'Tipo inesperado en el snapshot histórico de DP'; END IF;
+ IF EXISTS (
+   SELECT FROM (VALUES
+     ('public.swl_v57_double_play(uuid,bigint,integer)','e2dd9eeadb775524e4899189b6848c1e'),
+     ('public.swl_v57_double_play_advanced(uuid,bigint,integer,jsonb,text)','ba853729bcdac68139d22816d35191f9'),
+     ('swl_private.v57_undo_dp(public.swl_live_games,public.swl_game_events,uuid)','ad22b39c084a0efb7b88fa725c7247e6')
+   ) x(signature,fingerprint)
+   WHERE md5(pg_get_functiondef(to_regprocedure(x.signature))) IS DISTINCT FROM x.fingerprint
+ ) THEN RAISE EXCEPTION 'Cambió una función de DP desde la auditoría de LAB'; END IF;
+END $dp_preflight$;
+CREATE TEMP TABLE swl_v57_dp_original ON COMMIT DROP AS
+ SELECT game_id,version,to_jsonb(s) AS payload FROM swl_private.v57_dp_undo_state s;
+CREATE TEMP TABLE swl_v57_dp_acl ON COMMIT DROP AS
+ SELECT relowner,relacl,relrowsecurity,relforcerowsecurity
+ FROM pg_class WHERE oid='swl_private.v57_dp_undo_state'::regclass;
+ALTER TABLE swl_private.v57_dp_undo_state
+ ALTER COLUMN prior TYPE jsonb USING to_jsonb(prior),
+ ADD COLUMN snapshot_schema smallint NOT NULL DEFAULT 1,
+ ADD CONSTRAINT v57_dp_snapshot_schema_check CHECK (snapshot_schema IN (1,2)),
+ ADD CONSTRAINT v57_dp_snapshot_shape_check CHECK (jsonb_typeof(prior)='object');
+ALTER TABLE swl_private.v57_dp_undo_state ALTER COLUMN snapshot_schema DROP DEFAULT;
+DO $dp_dependencies$
+BEGIN
+ IF EXISTS (
+   WITH RECURSIVE types(oid) AS (
+     SELECT 'public.swl_live_games'::regtype::oid
+     UNION SELECT t.oid FROM pg_type t JOIN types x ON t.typelem=x.oid OR t.typbasetype=x.oid
+   )
+   SELECT FROM pg_attribute a JOIN types t ON t.oid=a.atttypid
+    JOIN pg_class c ON c.oid=a.attrelid
+   WHERE a.attnum>0 AND NOT a.attisdropped AND c.relkind IN ('r','p','m','f','c')
+ ) THEN RAISE EXCEPTION 'Queda una dependencia material del tipo de partido'; END IF;
+END $dp_dependencies$;
 
 -- Propuesta para LAB. No ejecutar sin autorización.
 ALTER TABLE public.swl_live_games
@@ -416,6 +461,211 @@ $source$;
 REVOKE ALL ON FUNCTION public.swl_v57_spectator_box_source(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.swl_v57_spectator_box_source(uuid) TO authenticated;
 
+CREATE OR REPLACE FUNCTION public.swl_v57_double_play(p_game_id uuid, p_expected_version bigint, p_source integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE g public.swl_live_games%ROWTYPE; team uuid; lineup jsonb; turn_number integer; batter uuid; runner uuid; new_outs integer; new_inning integer; new_top boolean; pitcher uuid; occupied boolean[];
+BEGIN
+ IF p_source IS NULL OR p_source NOT BETWEEN 1 AND 3 THEN RAISE EXCEPTION 'INVALID_RUNNER_SOURCE'; END IF;
+ g:=public.swl_v56_lock_batting_turn(p_game_id,p_expected_version);
+ IF g.outs>1 THEN RAISE EXCEPTION 'DOUBLE_PLAY_REQUIRES_FEWER_THAN_TWO_OUTS'; END IF;
+ occupied:=public.swl_v56_base_occupancy(g.bases_state);
+ IF occupied[p_source] IS DISTINCT FROM true THEN RAISE EXCEPTION 'RUNNER_NOT_ON_BASE'; END IF;
+ IF (SELECT count(*) FROM unnest(occupied) x WHERE x)=1 IS NOT TRUE THEN RAISE EXCEPTION 'DOUBLE_PLAY_OTHER_RUNNERS_NOT_SUPPORTED'; END IF;
+ PERFORM public.swl_v56_validate_base_players(occupied,g.swl_base_players);
+ runner:=g.swl_base_players[p_source];
+ team:=CASE WHEN g.is_top THEN g.away_team_id ELSE g.home_team_id END;
+ SELECT l.lineup INTO lineup FROM public.swl_game_lineups l WHERE l.game_id=g.id AND l.team_id=team;
+ IF lineup IS NULL OR jsonb_typeof(lineup)<>'array' OR jsonb_array_length(lineup) NOT BETWEEN 9 AND 13 THEN RAISE EXCEPTION 'LINEUP_REQUIRED'; END IF;
+ SELECT next_order INTO turn_number FROM public.swl_game_batting_turns WHERE game_id=g.id AND team_id=team FOR UPDATE;
+ IF turn_number IS NULL OR turn_number NOT BETWEEN 1 AND jsonb_array_length(lineup) THEN RAISE EXCEPTION 'INVALID_BATTING_TURN'; END IF;
+ batter:=(lineup->(turn_number-1)->>'player_id')::uuid;
+ IF batter IS NULL OR batter=runner THEN RAISE EXCEPTION 'INVALID_BATTER'; END IF;
+ new_outs:=g.outs+2;new_top:=g.is_top;new_inning:=g.inning;
+ IF new_outs=3 THEN
+   new_outs:=0;
+   IF g.is_top THEN new_top:=false; ELSE new_top:=true;new_inning:=g.inning+1; END IF;
+ END IF;
+ INSERT INTO swl_private.v57_dp_undo_state(game_id,version,prior,cursor_before,runner_identity,snapshot_schema)
+ VALUES(g.id,g.version+1,to_jsonb(g),(SELECT next_order FROM public.swl_game_batting_turns WHERE game_id=g.id AND team_id=team),
+   (SELECT to_jsonb(r) FROM public.swl_v56_runner_identity r WHERE r.game_id=g.id),2);
+ UPDATE public.swl_live_games SET outs=new_outs,balls=0,strikes=0,inning=new_inning,is_top=new_top,
+ bases_state='{"first":false,"second":false,"third":false}'::jsonb,
+ swl_base_players=ARRAY[NULL,NULL,NULL]::uuid[],swl_ghost_player=NULL,
+ version=g.version+1,updated_at=now() WHERE id=g.id;
+ UPDATE public.swl_game_batting_turns SET next_order=CASE WHEN turn_number=jsonb_array_length(lineup) THEN 1 ELSE turn_number+1 END,updated_at=now()
+ WHERE game_id=g.id AND team_id=team;
+ SELECT pitcher_id INTO pitcher FROM public.swl_game_lineups WHERE game_id=g.id AND team_id=(CASE WHEN g.is_top THEN g.home_team_id ELSE g.away_team_id END);
+ INSERT INTO public.swl_game_events(game_id,actor_id,batting_team_id,inning,is_top,event_type,event_data,version)
+ VALUES(g.id,auth.uid(),team,g.inning,g.is_top,'DOUBLE_PLAY',
+ jsonb_build_object('scope','double_play','pitcher_id',pitcher,'previous_version',g.version,'batter_id',batter,'runner_id',runner,
+ 'source',p_source,'outs_added',2,'batting_order',turn_number,'runs',0),g.version+1);
+
+ PERFORM public.swl_v56_accumulate_pitching(g,pitcher,'OUT');
+ PERFORM public.swl_v56_close_after_play(g);
+ RETURN jsonb_build_object('id',g.id,'version',g.version+1,'action','DOUBLE_PLAY','outs_added',2,'half_ended',g.outs=1);
+END $function$;
+
+CREATE OR REPLACE FUNCTION public.swl_v57_double_play_advanced(p_game_id uuid, p_expected_version bigint, p_source integer, p_advances jsonb, p_third_out text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+
+DECLARE g public.swl_live_games%ROWTYPE; team uuid; lineup jsonb; turn_number integer; batter uuid; runner uuid; new_outs integer; new_inning integer; new_top boolean; pitcher uuid; occupied boolean[]; i integer; dest integer; previous integer:=4; normalized integer;
+ moved uuid[]:=array[null,null,null]::uuid[]; scorers uuid[]:=array[]::uuid[]; runs integer; half_ended boolean;
+BEGIN
+ IF p_source IS NULL OR p_source NOT BETWEEN 1 AND 3 THEN RAISE EXCEPTION 'INVALID_RUNNER_SOURCE'; END IF;
+ g:=public.swl_v56_lock_batting_turn(p_game_id,p_expected_version);
+ IF g.outs>1 THEN RAISE EXCEPTION 'DOUBLE_PLAY_REQUIRES_FEWER_THAN_TWO_OUTS'; END IF;
+ occupied:=public.swl_v56_base_occupancy(g.bases_state);
+ IF occupied[p_source] IS DISTINCT FROM true THEN RAISE EXCEPTION 'RUNNER_NOT_ON_BASE'; END IF;
+
+ PERFORM public.swl_v56_validate_base_players(occupied,g.swl_base_players);
+ runner:=g.swl_base_players[p_source];
+ team:=CASE WHEN g.is_top THEN g.away_team_id ELSE g.home_team_id END;
+ SELECT l.lineup INTO lineup FROM public.swl_game_lineups l WHERE l.game_id=g.id AND l.team_id=team;
+ IF lineup IS NULL OR jsonb_typeof(lineup)<>'array' OR jsonb_array_length(lineup) NOT BETWEEN 9 AND 13 THEN RAISE EXCEPTION 'LINEUP_REQUIRED'; END IF;
+ SELECT next_order INTO turn_number FROM public.swl_game_batting_turns WHERE game_id=g.id AND team_id=team FOR UPDATE;
+ turn_number:=coalesce(turn_number,1);
+ IF turn_number NOT BETWEEN 1 AND jsonb_array_length(lineup) THEN RAISE EXCEPTION 'INVALID_BATTING_TURN'; END IF;
+ batter:=(lineup->(turn_number-1)->>'player_id')::uuid;
+ IF batter IS NULL OR batter=ANY(g.swl_base_players) THEN RAISE EXCEPTION 'INVALID_BATTER'; END IF;
+ IF jsonb_typeof(p_advances) IS DISTINCT FROM 'object' THEN
+   RAISE EXCEPTION 'INVALID_DOUBLE_PLAY_ADVANCES';
+ END IF;
+ IF EXISTS (SELECT 1 FROM jsonb_each(p_advances) kv WHERE kv.key NOT IN ('1','2','3')
+     OR jsonb_typeof(kv.value)<>'number' OR kv.value::text !~ '^[0-3]$')
+ OR p_third_out IS NULL OR p_third_out NOT IN ('FORCE','TIME') THEN
+   RAISE EXCEPTION 'INVALID_DOUBLE_PLAY_ADVANCES';
+ END IF;
+ half_ended:=g.outs=1;
+ FOR i IN REVERSE 3..1 LOOP
+   dest:=(p_advances->>i::text)::integer;
+   IF NOT occupied[i] OR i=p_source THEN
+     IF dest IS NOT NULL THEN RAISE EXCEPTION 'INVALID_RUNNER_SOURCE'; END IF;
+     CONTINUE;
+   END IF;
+   IF dest IS NULL THEN dest:=i; END IF;
+   normalized:=CASE WHEN dest=0 THEN 4 ELSE dest END;
+   IF normalized<i OR normalized>previous OR (normalized=previous AND normalized<>4) THEN
+     RAISE EXCEPTION 'INVALID_DOUBLE_PLAY_ADVANCE_ORDER';
+   END IF;
+   previous:=normalized;
+   IF dest=0 THEN
+     IF half_ended AND (p_third_out<>'TIME' OR i<p_source) THEN
+       RAISE EXCEPTION 'DOUBLE_PLAY_RUN_CANNOT_SCORE_ON_THIRD_OUT';
+     END IF;
+     scorers:=array_append(scorers,g.swl_base_players[i]);
+   ELSE
+     moved[dest]:=g.swl_base_players[i];
+   END IF;
+ END LOOP;
+ runs:=cardinality(scorers);
+ IF half_ended THEN moved:=array[null,null,null]::uuid[]; END IF;
+ new_outs:=g.outs+2;new_top:=g.is_top;new_inning:=g.inning;
+ IF new_outs=3 THEN
+   new_outs:=0;
+   IF g.is_top THEN new_top:=false; ELSE new_top:=true;new_inning:=g.inning+1; END IF;
+ END IF;
+ INSERT INTO swl_private.v57_dp_undo_state(game_id,version,prior,cursor_before,runner_identity,snapshot_schema)
+ VALUES(g.id,g.version+1,to_jsonb(g),(SELECT next_order FROM public.swl_game_batting_turns WHERE game_id=g.id AND team_id=team),
+   (SELECT to_jsonb(r) FROM public.swl_v56_runner_identity r WHERE r.game_id=g.id),2);
+ UPDATE public.swl_live_games SET outs=new_outs,balls=0,strikes=0,inning=new_inning,is_top=new_top,
+ bases_state=jsonb_build_object('first',moved[1] is not null,'second',moved[2] is not null,'third',moved[3] is not null),
+ swl_base_players=moved,swl_ghost_player=CASE WHEN g.swl_ghost_player=ANY(moved) THEN g.swl_ghost_player END,
+ away_runs=g.away_runs+CASE WHEN g.is_top THEN runs ELSE 0 END,
+ home_runs=g.home_runs+CASE WHEN g.is_top THEN 0 ELSE runs END,
+ away_innings=CASE WHEN g.is_top THEN public.swl_v56_add_inning_runs(g.away_innings,g.inning,runs) ELSE g.away_innings END,
+ home_innings=CASE WHEN g.is_top THEN g.home_innings ELSE public.swl_v56_add_inning_runs(g.home_innings,g.inning,runs) END,
+ version=g.version+1,updated_at=now() WHERE id=g.id;
+ INSERT INTO public.swl_game_batting_turns(game_id,team_id,next_order,updated_at)
+ VALUES(g.id,team,turn_number%jsonb_array_length(lineup)+1,now())
+ ON CONFLICT(game_id,team_id) DO UPDATE SET next_order=excluded.next_order,updated_at=excluded.updated_at;
+ SELECT pitcher_id INTO pitcher FROM public.swl_game_lineups WHERE game_id=g.id AND team_id=(CASE WHEN g.is_top THEN g.home_team_id ELSE g.away_team_id END);
+ INSERT INTO public.swl_game_events(game_id,actor_id,batting_team_id,inning,is_top,event_type,event_data,version)
+ VALUES(g.id,auth.uid(),team,g.inning,g.is_top,'DOUBLE_PLAY',
+ jsonb_build_object('scope','double_play','pitcher_id',pitcher,'previous_version',g.version,'batter_id',batter,'runner_id',runner,
+ 'source',p_source,'outs_added',2,'batting_order',turn_number,'runs',runs,'rbi',0,'advances',p_advances,
+ 'third_out_type',case when half_ended then p_third_out end,'scoring_player_ids',to_jsonb(scorers),
+ 'plate_appearance_completed',true,'ab',1),g.version+1);
+
+ IF pitcher IS NULL THEN RAISE EXCEPTION 'PITCHER_REQUIRED'; END IF;
+ PERFORM public.swl_v56_accumulate_pitching(g,pitcher,'OUT');
+ PERFORM public.swl_v56_close_after_play(g);
+ RETURN jsonb_build_object('id',g.id,'version',g.version+1,'action','DOUBLE_PLAY','outs_added',2,'half_ended',g.outs=1);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION swl_private.v57_undo_dp(g swl_live_games, e swl_game_events, v_actor uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SET search_path TO ''
+AS $function$
+DECLARE saved swl_private.v57_dp_undo_state%ROWTYPE;
+ prior public.swl_live_games%ROWTYPE;
+ credit public.swl_v56_pitching_events%ROWTYPE;
+ team uuid;
+BEGIN
+ SELECT * INTO saved FROM swl_private.v57_dp_undo_state
+ WHERE game_id=g.id AND version=g.version;
+ IF NOT FOUND THEN RAISE EXCEPTION 'DP_UNDO_SNAPSHOT_UNAVAILABLE'; END IF;
+ IF saved.snapshot_schema NOT IN (1,2)
+  OR NOT (saved.prior ?& ARRAY['id','version','is_top','inning','outs','bases_state',
+    'swl_base_players','home_runs','away_runs','balls','strikes'])
+ THEN RAISE EXCEPTION 'DP_UNDO_SNAPSHOT_INVALID'; END IF;
+ prior:=jsonb_populate_record(NULL::public.swl_live_games,saved.prior);
+ IF prior.id IS DISTINCT FROM g.id OR prior.version IS DISTINCT FROM e.version-1
+ THEN RAISE EXCEPTION 'DP_UNDO_SNAPSHOT_INVALID'; END IF;
+ team:=CASE WHEN prior.is_top THEN prior.away_team_id ELSE prior.home_team_id END;
+ IF v_actor IS NULL OR g.status NOT IN ('IN_PROGRESS','FINAL')
+ OR coalesce(g.swl_home_signed,false) OR coalesce(g.swl_away_signed,false)
+ OR e.batting_team_id IS DISTINCT FROM team
+ OR v_actor IS DISTINCT FROM (CASE WHEN prior.is_top THEN g.away_manager_id ELSE g.home_manager_id END)
+ OR public.swl_can_manage_roster(team) IS DISTINCT FROM true THEN
+   RAISE EXCEPTION 'DP_UNDO_NOT_ALLOWED' USING ERRCODE='42501';
+ END IF;
+ IF g.swl_knockout_pending IS NOT NULL
+ THEN RAISE EXCEPTION 'KNOCKOUT_DECISION_PENDING'; END IF;
+ SELECT * INTO credit FROM public.swl_v56_pitching_events
+ WHERE game_id=g.id AND version=g.version FOR UPDATE;
+ IF NOT FOUND OR credit.outs<>2 OR credit.pitcher_id::text IS DISTINCT FROM e.event_data->>'pitcher_id' THEN
+   RAISE EXCEPTION 'PITCHING_STATS_MISMATCH';
+ END IF;
+ UPDATE public.swl_live_games SET
+   inning=prior.inning,is_top=prior.is_top,status=prior.status,
+   outs=prior.outs,balls=prior.balls,strikes=prior.strikes,
+   bases_state=prior.bases_state,swl_base_players=prior.swl_base_players,
+   swl_ghost_player=prior.swl_ghost_player,home_runs=prior.home_runs,away_runs=prior.away_runs,
+   home_innings=prior.home_innings,away_innings=prior.away_innings,
+   swl_finish_reason=prior.swl_finish_reason,
+   swl_final_half_completed=prior.swl_final_half_completed,
+   version=g.version+1,updated_at=now() WHERE id=g.id;
+ DELETE FROM public.swl_v56_runner_identity WHERE game_id=g.id;
+ IF saved.runner_identity IS NOT NULL THEN
+   INSERT INTO public.swl_v56_runner_identity
+   SELECT * FROM jsonb_populate_record(NULL::public.swl_v56_runner_identity,
+     saved.runner_identity || jsonb_build_object('game_version',g.version+1));
+ END IF;
+ IF saved.cursor_before IS NULL THEN
+   DELETE FROM public.swl_game_batting_turns WHERE game_id=g.id AND team_id=team;
+ ELSE
+   UPDATE public.swl_game_batting_turns SET next_order=saved.cursor_before,updated_at=now()
+   WHERE game_id=g.id AND team_id=team;
+ END IF;
+ DELETE FROM public.swl_v56_pitching_events WHERE game_id=g.id AND version=g.version;
+ INSERT INTO public.swl_game_events(game_id,actor_id,batting_team_id,inning,is_top,event_type,event_data,version)
+ VALUES(g.id,v_actor,team,prior.inning,prior.is_top,'UNDO_OUT',
+   jsonb_build_object('reverts_version',g.version,'previous_version',g.version,
+    'reverts_type','DOUBLE_PLAY','pitching_credit',to_jsonb(credit)),g.version+1);
+ RETURN jsonb_build_object('id',g.id,'version',g.version+1,'action','UNDO_OUT','outs',prior.outs);
+END;
+$function$;
+
 SAVEPOINT swl_v57_pruebas;
 
 -- Fixture reversible. No cambia partidos ni usa la secuencia oficial de jugadores.
@@ -439,6 +689,15 @@ DECLARE
   manager_box jsonb;
   fan_box jsonb;
   admin_action text;
+  dp_case text;
+  dp_actor uuid;
+  dp_rival uuid;
+  dp_team uuid;
+  dp_players uuid[];
+  dp_version bigint;
+  dp_before jsonb;
+  dp_credit jsonb;
+  dp_defense jsonb;
   positions text[] := ARRAY['P','C','1B','2B','3B','SS','LF','CF','RF'];
   positions_unused text[];
 BEGIN
@@ -748,6 +1007,123 @@ BEGIN
     EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
     END;
 
+    -- D01–D05: esquema histórico, ambas entradas de anotación y knockout.
+    FOR dp_case IN SELECT unnest(ARRAY['HISTORICAL','STANDARD','TIME','AUTO','CONSULT']) LOOP
+      BEGIN
+        PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+        PERFORM public.swl_v56_start_game(fixture,0);
+        UPDATE public.swl_live_games SET
+          inning=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN 3 ELSE 1 END,
+          is_top=dp_case NOT IN ('AUTO','CONSULT'),
+          outs=CASE WHEN dp_case='STANDARD' THEN 0 ELSE 1 END,
+          swl_knockout_mode=CASE WHEN dp_case='CONSULT' THEN 'CONSULT'
+                                 WHEN dp_case='AUTO' THEN 'AUTO' ELSE 'DISABLED' END,
+          away_runs=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN 15 ELSE 0 END,
+          away_innings=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN '[0,0,15]'::jsonb ELSE '[]'::jsonb END
+          WHERE id=fixture;
+        SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+        dp_actor:=CASE WHEN g.is_top THEN source_game.away_manager_id ELSE source_game.home_manager_id END;
+        dp_rival:=CASE WHEN g.is_top THEN source_game.home_manager_id ELSE source_game.away_manager_id END;
+        dp_team:=CASE WHEN g.is_top THEN source_game.away_team_id ELSE source_game.home_team_id END;
+        dp_players:=CASE WHEN g.is_top THEN away_players ELSE home_players END;
+        PERFORM set_config('request.jwt.claim.sub',dp_actor::text,true);
+        PERFORM public.swl_v56_apply_hit(fixture,1,dp_players[1],
+          CASE WHEN dp_case='TIME' THEN 3 ELSE 1 END,NULL,NULL,NULL);
+        IF dp_case='TIME' THEN
+          PERFORM public.swl_v57_defensive_error(fixture,2,'ERROR',dp_players[2],
+            jsonb_build_object('p_batter_id',dp_players[2],'p_batter_base',1,'p_third_to',3));
+        END IF;
+        SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+        dp_version:=g.version;
+        dp_before:=to_jsonb(g)-ARRAY['updated_at','version'];
+        SELECT jsonb_agg(to_jsonb(p) ORDER BY p.version,p.pitcher_id) INTO dp_credit
+          FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture;
+        SELECT to_jsonb(l) INTO STRICT dp_defense FROM public.swl_game_lineups l
+          WHERE l.game_id=fixture AND l.team_id<>dp_team;
+        IF dp_case IN ('HISTORICAL','STANDARD') THEN
+          PERFORM public.swl_v57_double_play(fixture,dp_version,1);
+        ELSE
+          PERFORM public.swl_v57_double_play_advanced(fixture,dp_version,1,
+            CASE WHEN dp_case='TIME' THEN '{"3":0}'::jsonb ELSE '{}'::jsonb END,
+            CASE WHEN dp_case='TIME' THEN 'TIME' ELSE 'FORCE' END);
+        END IF;
+        IF NOT EXISTS (SELECT FROM swl_private.v57_dp_undo_state s
+          WHERE s.game_id=fixture AND s.version=dp_version+1 AND s.snapshot_schema=2
+            AND s.prior-ARRAY['updated_at','version']=dp_before)
+        THEN RAISE EXCEPTION 'La RPC no escribió el snapshot v2: %',dp_case; END IF;
+        IF dp_case='HISTORICAL' THEN
+          -- Reproduce la forma exacta anterior al DDL con datos temporales.
+          UPDATE swl_private.v57_dp_undo_state SET snapshot_schema=1,
+            prior=prior-ARRAY['swl_knockout_mode','swl_knockout_waived_through','swl_knockout_pending']
+          WHERE game_id=fixture AND version=dp_version+1;
+        END IF;
+        IF NOT EXISTS (SELECT FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture
+            AND p.version=dp_version+1 AND p.outs=2 AND p.pitcher_id::text=dp_defense->>'pitcher_id')
+        THEN RAISE EXCEPTION 'Crédito DP incorrecto: %',dp_case; END IF;
+        IF dp_case='TIME' AND NOT EXISTS (SELECT FROM public.swl_live_games a
+          WHERE a.id=fixture AND NOT a.is_top AND a.outs=0 AND a.away_runs=1)
+        THEN RAISE EXCEPTION 'No se registró el tercer out y la carrera de tiempo'; END IF;
+        IF dp_case='AUTO' AND NOT EXISTS (SELECT FROM public.swl_v56_match_decisions
+          WHERE game_id=fixture AND version=dp_version+1 AND action='AUTO')
+        THEN RAISE EXCEPTION 'Falta la decisión automática tras DP'; END IF;
+
+        PERFORM set_config('request.jwt.claim.sub',dp_rival::text,true);
+        BEGIN
+          PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+          RAISE SQLSTATE 'ZX011' USING MESSAGE='El rival pudo deshacer el DP';
+        EXCEPTION WHEN insufficient_privilege THEN NULL;
+        END;
+        PERFORM set_config('request.jwt.claim.sub',dp_actor::text,true);
+        IF dp_case='CONSULT' THEN
+          BEGIN
+            PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Deshacer borró una consulta pendiente';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM<>'KNOCKOUT_DECISION_PENDING' THEN RAISE; END IF;
+          END;
+          PERFORM public.swl_v57_knockout_decision(fixture,dp_version+1,'CONTINUE');
+          PERFORM set_config('request.jwt.claim.sub',dp_rival::text,true);
+          PERFORM public.swl_v57_knockout_decision(fixture,dp_version+2,'CONTINUE');
+          BEGIN
+            PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Deshacer obsoleto borró votos válidos';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM<>'GAME_STATE_CHANGED' THEN RAISE; END IF;
+          END;
+          IF NOT EXISTS (SELECT FROM public.swl_live_games a WHERE a.id=fixture
+            AND a.swl_knockout_mode='CONSULT' AND a.swl_knockout_pending IS NULL
+            AND a.swl_knockout_waived_through=3 AND a.version=dp_version+3)
+            OR (SELECT count(*) FROM swl_private.v57_knockout_audit
+                WHERE game_id=fixture AND action='CONTINUE')<>2
+          THEN RAISE EXCEPTION 'Se perdieron votos o configuración'; END IF;
+        ELSE
+          PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+          IF NOT EXISTS (SELECT FROM public.swl_live_games a WHERE a.id=fixture
+              AND a.version=dp_version+2 AND to_jsonb(a)-ARRAY['updated_at','version']=dp_before)
+            OR (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.version,p.pitcher_id)
+                FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture) IS DISTINCT FROM dp_credit
+            OR (SELECT to_jsonb(l) FROM public.swl_game_lineups l
+                WHERE l.game_id=fixture AND l.team_id<>dp_team) IS DISTINCT FROM dp_defense
+            OR NOT EXISTS (SELECT FROM public.swl_game_batting_turns WHERE game_id=fixture
+                AND team_id=dp_team AND next_order=CASE WHEN dp_case='TIME' THEN 3 ELSE 2 END)
+            OR NOT EXISTS (SELECT FROM public.swl_game_events WHERE game_id=fixture
+                AND version=dp_version+2 AND event_type='UNDO_OUT'
+                AND event_data->>'reverts_version'=(dp_version+1)::text)
+            OR (dp_case='AUTO' AND NOT EXISTS (SELECT FROM public.swl_v56_match_decisions
+                WHERE game_id=fixture AND version=dp_version+1 AND action='AUTO'))
+          THEN RAISE EXCEPTION 'Restauración incompleta del DP: %',dp_case; END IF;
+          BEGIN
+            PERFORM public.swl_v57_undo_last_out(fixture,dp_version+2);
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Se deshizo el mismo DP dos veces';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM NOT IN ('ONLY_LAST_SIMPLE_OUT_CAN_BE_UNDONE','GAME_STATE_CHANGED') THEN RAISE; END IF;
+          END;
+        END IF;
+        RAISE SQLSTATE 'ZX012';
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      END;
+    END LOOP;
+
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
     PERFORM public.swl_v56_start_game(fixture,0);
     PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
@@ -844,6 +1220,16 @@ RELEASE SAVEPOINT swl_v57_pruebas;
 
 DO $verificacion$
 BEGIN
+ IF EXISTS (
+   SELECT FROM pg_temp.swl_v57_dp_original o
+   FULL JOIN swl_private.v57_dp_undo_state s USING(game_id,version)
+   WHERE (to_jsonb(s)-'snapshot_schema') IS DISTINCT FROM o.payload
+      OR s.snapshot_schema IS DISTINCT FROM 1
+ ) OR (SELECT to_jsonb(a) FROM pg_temp.swl_v57_dp_acl a) IS DISTINCT FROM (
+   SELECT to_jsonb(a) FROM (SELECT relowner,relacl,relrowsecurity,relforcerowsecurity
+     FROM pg_class WHERE oid='swl_private.v57_dp_undo_state'::regclass) a
+ )
+ THEN RAISE EXCEPTION 'Cambió un snapshot histórico o la seguridad de su tabla'; END IF;
  IF (SELECT to_jsonb(h) FROM pg_temp.swl_v57_huellas h) IS DISTINCT FROM
     (SELECT to_jsonb(v) FROM pg_temp.swl_v57_integridad v)
  THEN RAISE EXCEPTION 'Cambió la huella de SWL-378859'; END IF;

@@ -20,6 +20,15 @@ DECLARE
   manager_box jsonb;
   fan_box jsonb;
   admin_action text;
+  dp_case text;
+  dp_actor uuid;
+  dp_rival uuid;
+  dp_team uuid;
+  dp_players uuid[];
+  dp_version bigint;
+  dp_before jsonb;
+  dp_credit jsonb;
+  dp_defense jsonb;
   positions text[] := ARRAY['P','C','1B','2B','3B','SS','LF','CF','RF'];
   positions_unused text[];
 BEGIN
@@ -328,6 +337,123 @@ BEGIN
       RAISE SQLSTATE 'ZX012';
     EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
     END;
+
+    -- D01–D05: esquema histórico, ambas entradas de anotación y knockout.
+    FOR dp_case IN SELECT unnest(ARRAY['HISTORICAL','STANDARD','TIME','AUTO','CONSULT']) LOOP
+      BEGIN
+        PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+        PERFORM public.swl_v56_start_game(fixture,0);
+        UPDATE public.swl_live_games SET
+          inning=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN 3 ELSE 1 END,
+          is_top=dp_case NOT IN ('AUTO','CONSULT'),
+          outs=CASE WHEN dp_case='STANDARD' THEN 0 ELSE 1 END,
+          swl_knockout_mode=CASE WHEN dp_case='CONSULT' THEN 'CONSULT'
+                                 WHEN dp_case='AUTO' THEN 'AUTO' ELSE 'DISABLED' END,
+          away_runs=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN 15 ELSE 0 END,
+          away_innings=CASE WHEN dp_case IN ('AUTO','CONSULT') THEN '[0,0,15]'::jsonb ELSE '[]'::jsonb END
+          WHERE id=fixture;
+        SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+        dp_actor:=CASE WHEN g.is_top THEN source_game.away_manager_id ELSE source_game.home_manager_id END;
+        dp_rival:=CASE WHEN g.is_top THEN source_game.home_manager_id ELSE source_game.away_manager_id END;
+        dp_team:=CASE WHEN g.is_top THEN source_game.away_team_id ELSE source_game.home_team_id END;
+        dp_players:=CASE WHEN g.is_top THEN away_players ELSE home_players END;
+        PERFORM set_config('request.jwt.claim.sub',dp_actor::text,true);
+        PERFORM public.swl_v56_apply_hit(fixture,1,dp_players[1],
+          CASE WHEN dp_case='TIME' THEN 3 ELSE 1 END,NULL,NULL,NULL);
+        IF dp_case='TIME' THEN
+          PERFORM public.swl_v57_defensive_error(fixture,2,'ERROR',dp_players[2],
+            jsonb_build_object('p_batter_id',dp_players[2],'p_batter_base',1,'p_third_to',3));
+        END IF;
+        SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+        dp_version:=g.version;
+        dp_before:=to_jsonb(g)-ARRAY['updated_at','version'];
+        SELECT jsonb_agg(to_jsonb(p) ORDER BY p.version,p.pitcher_id) INTO dp_credit
+          FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture;
+        SELECT to_jsonb(l) INTO STRICT dp_defense FROM public.swl_game_lineups l
+          WHERE l.game_id=fixture AND l.team_id<>dp_team;
+        IF dp_case IN ('HISTORICAL','STANDARD') THEN
+          PERFORM public.swl_v57_double_play(fixture,dp_version,1);
+        ELSE
+          PERFORM public.swl_v57_double_play_advanced(fixture,dp_version,1,
+            CASE WHEN dp_case='TIME' THEN '{"3":0}'::jsonb ELSE '{}'::jsonb END,
+            CASE WHEN dp_case='TIME' THEN 'TIME' ELSE 'FORCE' END);
+        END IF;
+        IF NOT EXISTS (SELECT FROM swl_private.v57_dp_undo_state s
+          WHERE s.game_id=fixture AND s.version=dp_version+1 AND s.snapshot_schema=2
+            AND s.prior-ARRAY['updated_at','version']=dp_before)
+        THEN RAISE EXCEPTION 'La RPC no escribió el snapshot v2: %',dp_case; END IF;
+        IF dp_case='HISTORICAL' THEN
+          -- Reproduce la forma exacta anterior al DDL con datos temporales.
+          UPDATE swl_private.v57_dp_undo_state SET snapshot_schema=1,
+            prior=prior-ARRAY['swl_knockout_mode','swl_knockout_waived_through','swl_knockout_pending']
+          WHERE game_id=fixture AND version=dp_version+1;
+        END IF;
+        IF NOT EXISTS (SELECT FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture
+            AND p.version=dp_version+1 AND p.outs=2 AND p.pitcher_id::text=dp_defense->>'pitcher_id')
+        THEN RAISE EXCEPTION 'Crédito DP incorrecto: %',dp_case; END IF;
+        IF dp_case='TIME' AND NOT EXISTS (SELECT FROM public.swl_live_games a
+          WHERE a.id=fixture AND NOT a.is_top AND a.outs=0 AND a.away_runs=1)
+        THEN RAISE EXCEPTION 'No se registró el tercer out y la carrera de tiempo'; END IF;
+        IF dp_case='AUTO' AND NOT EXISTS (SELECT FROM public.swl_v56_match_decisions
+          WHERE game_id=fixture AND version=dp_version+1 AND action='AUTO')
+        THEN RAISE EXCEPTION 'Falta la decisión automática tras DP'; END IF;
+
+        PERFORM set_config('request.jwt.claim.sub',dp_rival::text,true);
+        BEGIN
+          PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+          RAISE SQLSTATE 'ZX011' USING MESSAGE='El rival pudo deshacer el DP';
+        EXCEPTION WHEN insufficient_privilege THEN NULL;
+        END;
+        PERFORM set_config('request.jwt.claim.sub',dp_actor::text,true);
+        IF dp_case='CONSULT' THEN
+          BEGIN
+            PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Deshacer borró una consulta pendiente';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM<>'KNOCKOUT_DECISION_PENDING' THEN RAISE; END IF;
+          END;
+          PERFORM public.swl_v57_knockout_decision(fixture,dp_version+1,'CONTINUE');
+          PERFORM set_config('request.jwt.claim.sub',dp_rival::text,true);
+          PERFORM public.swl_v57_knockout_decision(fixture,dp_version+2,'CONTINUE');
+          BEGIN
+            PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Deshacer obsoleto borró votos válidos';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM<>'GAME_STATE_CHANGED' THEN RAISE; END IF;
+          END;
+          IF NOT EXISTS (SELECT FROM public.swl_live_games a WHERE a.id=fixture
+            AND a.swl_knockout_mode='CONSULT' AND a.swl_knockout_pending IS NULL
+            AND a.swl_knockout_waived_through=3 AND a.version=dp_version+3)
+            OR (SELECT count(*) FROM swl_private.v57_knockout_audit
+                WHERE game_id=fixture AND action='CONTINUE')<>2
+          THEN RAISE EXCEPTION 'Se perdieron votos o configuración'; END IF;
+        ELSE
+          PERFORM public.swl_v57_undo_last_out(fixture,dp_version+1);
+          IF NOT EXISTS (SELECT FROM public.swl_live_games a WHERE a.id=fixture
+              AND a.version=dp_version+2 AND to_jsonb(a)-ARRAY['updated_at','version']=dp_before)
+            OR (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.version,p.pitcher_id)
+                FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture) IS DISTINCT FROM dp_credit
+            OR (SELECT to_jsonb(l) FROM public.swl_game_lineups l
+                WHERE l.game_id=fixture AND l.team_id<>dp_team) IS DISTINCT FROM dp_defense
+            OR NOT EXISTS (SELECT FROM public.swl_game_batting_turns WHERE game_id=fixture
+                AND team_id=dp_team AND next_order=CASE WHEN dp_case='TIME' THEN 3 ELSE 2 END)
+            OR NOT EXISTS (SELECT FROM public.swl_game_events WHERE game_id=fixture
+                AND version=dp_version+2 AND event_type='UNDO_OUT'
+                AND event_data->>'reverts_version'=(dp_version+1)::text)
+            OR (dp_case='AUTO' AND NOT EXISTS (SELECT FROM public.swl_v56_match_decisions
+                WHERE game_id=fixture AND version=dp_version+1 AND action='AUTO'))
+          THEN RAISE EXCEPTION 'Restauración incompleta del DP: %',dp_case; END IF;
+          BEGIN
+            PERFORM public.swl_v57_undo_last_out(fixture,dp_version+2);
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Se deshizo el mismo DP dos veces';
+          EXCEPTION WHEN raise_exception THEN
+            IF SQLERRM NOT IN ('ONLY_LAST_SIMPLE_OUT_CAN_BE_UNDONE','GAME_STATE_CHANGED') THEN RAISE; END IF;
+          END;
+        END IF;
+        RAISE SQLSTATE 'ZX012';
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      END;
+    END LOOP;
 
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
     PERFORM public.swl_v56_start_game(fixture,0);

@@ -33,3 +33,23 @@ escenarios deportivos.
 - Un caso crítico fallido aborta la transacción. La reversión del savepoint
   elimina los datos de prueba antes de comparar las huellas del partido
   protegido y las propiedades y permisos de las funciones.
+
+## Regresión estructural de doble play
+
+La transacción conserva los 34 casos de arriba y agrega cinco, para un total
+de **39 escenarios deportivos y de permisos**, además de los controles de DDL.
+
+| Caso | Comprobaciones |
+|---|---|
+| D01 | Reversión con un snapshot temporal que reproduce las claves del esquema histórico. Restaura la mitad y el turno sin recuperar configuraciones desde el snapshot |
+| D02 | RPC clásica registra JSONB v2. Deshacer restituye outs, corredor, bateador y estadísticas previas |
+| D03 | RPC avanzada anota una carrera de tiempo con el tercer out y cambia la mitad. Deshacer revierte carrera y transición, conserva al pitcher activo y retira solo el crédito del DP |
+| D04 | DP cierra por súper knockout automático. Deshacer reabre el estado previo y conserva el modo y el registro de auditoría del cierre |
+| D05 | DP abre consulta. Deshacer queda bloqueado durante la votación; tras los dos votos el intento con versión anterior se rechaza y los votos y la exención permanecen vigentes |
+
+En todos los casos se rechaza deshacer por el mánager rival. En los cuatro
+casos de reversión exitosa se rechaza repetirla. La migración compara por
+clave y contenido **todos los snapshots reales** antes y después de
+convertirlos. D01 ensaya la lectura de ese formato en un encuentro temporal,
+sin deshacer una jugada real de SWL-378859. El DDL y la batería completa
+siguen pendientes de ejecución.
