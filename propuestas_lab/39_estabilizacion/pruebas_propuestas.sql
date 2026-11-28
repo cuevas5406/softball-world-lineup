@@ -15,7 +15,11 @@ DECLARE
   game_pin_two text;
   scenario record;
   batter uuid;
-  active_pitcher uuid;
+  fan_id uuid := gen_random_uuid();
+  lineup_revision bigint;
+  manager_box jsonb;
+  fan_box jsonb;
+  admin_action text;
   positions text[] := ARRAY['P','C','1B','2B','3B','SS','LF','CF','RF'];
   positions_unused text[];
 BEGIN
@@ -132,6 +136,199 @@ BEGIN
       EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
       END;
     END LOOP;
+    FOR scenario IN
+      SELECT * FROM (VALUES (3,15,'Súper knockout'),(4,10,'Knockout')) n(inning,margin,reason)
+      CROSS JOIN (VALUES ('AUTO'),('CONSULT'),('DISABLED')) m(mode)
+      CROSS JOIN (VALUES ('AWAY_REDUCE'),('AWAY_HOLD'),('HOME_LEAD')) s(side)
+    LOOP
+      BEGIN
+        PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+        PERFORM public.swl_v57_knockout_decision(fixture,0,scenario.mode);
+        PERFORM public.swl_v56_start_game(fixture,1);
+        UPDATE public.swl_live_games SET inning=scenario.inning,outs=2,
+          home_runs=CASE WHEN scenario.side='HOME_LEAD' THEN scenario.margin ELSE 0 END,
+          away_runs=CASE WHEN scenario.side='HOME_LEAD' THEN 0 ELSE scenario.margin END
+        WHERE id=fixture;
+        PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+        PERFORM public.swl_v56_record_plate_action(fixture,2,'OUT',away_players[1]);
+        IF scenario.side<>'HOME_LEAD' OR scenario.mode='DISABLED' THEN
+          IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
+             AND version=3 AND status='IN_PROGRESS' AND inning=scenario.inning
+             AND NOT is_top AND outs=0 AND swl_knockout_pending IS NULL)
+          THEN RAISE EXCEPTION 'Se omitió el derecho al bate: %',scenario; END IF;
+        END IF;
+        IF scenario.side<>'HOME_LEAD' THEN
+          PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+          IF scenario.side='AWAY_REDUCE' THEN
+            PERFORM public.swl_v56_apply_hit(fixture,3,home_players[1],4,NULL,NULL,NULL);
+            IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=4
+              AND home_runs=1 AND away_runs-home_runs=scenario.margin-1)
+            THEN RAISE EXCEPTION 'No se redujo la diferencia: %',scenario; END IF;
+          END IF;
+          FOR j IN 1..3 LOOP
+            PERFORM public.swl_v56_record_plate_action(fixture,
+              2+j+CASE WHEN scenario.side='AWAY_REDUCE' THEN 1 ELSE 0 END,
+              'OUT',home_players[j+CASE WHEN scenario.side='AWAY_REDUCE' THEN 1 ELSE 0 END]);
+          END LOOP;
+        END IF;
+        SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+        IF scenario.side='AWAY_REDUCE' OR scenario.mode='DISABLED' THEN
+          IF g.status<>'IN_PROGRESS' OR g.swl_knockout_pending IS NOT NULL
+             OR (scenario.side<>'HOME_LEAD' AND (g.inning<>scenario.inning+1 OR NOT g.is_top))
+          THEN RAISE EXCEPTION 'El encuentro debía continuar: %',scenario; END IF;
+        ELSIF scenario.mode='AUTO' THEN
+          IF g.status<>'FINAL' OR g.swl_finish_reason IS DISTINCT FROM scenario.reason
+            OR g.inning<>scenario.inning OR g.is_top IS DISTINCT FROM (scenario.side='HOME_LEAD')
+          THEN RAISE EXCEPTION 'Cierre automático incorrecto: %',scenario; END IF;
+        ELSIF g.status<>'IN_PROGRESS'
+          OR g.swl_knockout_pending->>'reason' IS DISTINCT FROM scenario.reason
+          OR (g.swl_knockout_pending->>'top')::boolean IS DISTINCT FROM (scenario.side='HOME_LEAD')
+        THEN RAISE EXCEPTION 'Consulta de knockout incorrecta: %',scenario;
+        END IF;
+        RAISE SQLSTATE 'ZX012';
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      END;
+    END LOOP;
+
+    BEGIN
+      PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+      PERFORM public.swl_v56_start_game(fixture,0);
+      UPDATE public.swl_live_games SET is_top=false WHERE id=fixture;
+      PERFORM public.swl_v56_apply_hit(fixture,1,home_players[1],1,NULL,NULL,NULL);
+      PERFORM public.swl_v57_defensive_error(fixture,2,'ERROR',home_players[2],
+        jsonb_build_object('p_batter_id',home_players[2],'p_batter_base',1,'p_first_to',2));
+      PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+      PERFORM public.swl_v56_change_pitcher(p_game_id=>fixture,p_expected_version=>3,
+        p_team_id=>source_game.away_team_id,p_player_id=>away_players[11]);
+      IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=4
+        AND swl_base_players[1]=home_players[2] AND swl_base_players[2]=home_players[1])
+      THEN RAISE EXCEPTION 'El relevo perdió los corredores heredados'; END IF;
+      PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+      PERFORM public.swl_v56_apply_hit(fixture,4,home_players[3],4,0,0,NULL);
+      PERFORM public.swl_v56_apply_hit(fixture,5,home_players[4],1,NULL,NULL,NULL);
+      PERFORM public.swl_v57_defensive_error(fixture,6,'ERROR',home_players[5],
+        jsonb_build_object('p_batter_id',home_players[5],'p_batter_base',1,'p_first_to',-2));
+      SELECT revision INTO STRICT lineup_revision FROM public.swl_game_lineups
+        WHERE game_id=fixture AND team_id=source_game.home_team_id;
+      PERFORM public.swl_v56_substitute_batter(fixture,source_game.home_team_id,4,
+        home_players[4],home_players[10],lineup_revision,7);
+      SELECT * INTO STRICT g FROM public.swl_live_games WHERE id=fixture;
+      IF g.version<>8 OR g.home_runs<>3 OR g.home_hits<>3 OR g.away_errors<>2 OR g.outs<>1
+      THEN RAISE EXCEPTION 'Totales colectivos inesperados tras el relevo'; END IF;
+
+      -- Oráculo de este caso: relaciona a los anotadores del HR con su
+      -- aparición de llegada a base y el crédito de pitcheo de esa versión.
+      IF EXISTS (
+        WITH scorers AS (
+          SELECT jsonb_array_elements_text(e.event_data->'scoring_player_ids') AS player
+          FROM public.swl_game_events e WHERE e.game_id=fixture AND e.version=5 AND e.event_type='HIT'
+        ), charges AS (
+          SELECT p.pitcher_id,count(*)::int AS runs,
+                 count(*) FILTER (WHERE e.event_type='HIT')::int AS earned
+          FROM scorers s JOIN public.swl_game_events e
+            ON e.game_id=fixture AND e.version IN (2,3,5) AND e.event_data->>'batter_id'=s.player
+          JOIN public.swl_v56_pitching_events p ON p.game_id=e.game_id AND p.version=e.version
+          GROUP BY p.pitcher_id
+        ), expected AS (
+          SELECT * FROM (VALUES (away_players[10],2,1),(away_players[11],1,1))
+            AS x(pitcher_id,runs,earned)
+        )
+        SELECT FROM ((SELECT * FROM expected EXCEPT ALL SELECT * FROM charges)
+          UNION ALL (SELECT * FROM charges EXCEPT ALL SELECT * FROM expected)) diffs
+      ) THEN RAISE EXCEPTION 'Créditos C/CL inesperados en la secuencia de prueba'; END IF;
+      IF EXISTS (
+        SELECT FROM (VALUES (away_players[10],2,1,0),(away_players[11],3,2,1))
+          AS expected(id,contacts,hits,outs)
+        WHERE (SELECT ROW(count(*)::int,coalesce(sum(p.hits),0)::int,coalesce(sum(p.outs),0)::int)
+          FROM public.swl_v56_pitching_events p WHERE p.game_id=fixture AND p.pitcher_id=expected.id)
+          IS DISTINCT FROM ROW(expected.contacts,expected.hits,expected.outs)
+      ) OR NOT EXISTS (SELECT FROM public.swl_game_events e
+         WHERE e.game_id=fixture AND e.version=7 AND e.event_type='ERROR'
+           AND e.event_data->'out_runner_ids'=jsonb_build_array(home_players[4]))
+        OR NOT EXISTS (SELECT FROM public.swl_v56_pitcher_changes c
+           WHERE c.game_id=fixture AND c.version=4 AND c.old_pitcher_id=away_players[10]
+             AND c.new_pitcher_id=away_players[11])
+      THEN RAISE EXCEPTION 'No se conservaron los lanzamientos, outs o cambios individuales'; END IF;
+
+      manager_box := public.swl_v57_spectator_box_source(fixture);
+      IF manager_box IS NULL OR jsonb_array_length(manager_box->'lineups')<>2
+        OR jsonb_array_length(manager_box->'events')<>6 OR jsonb_array_length(manager_box->'pitches')<>5
+        OR (manager_box->'game'->>'home_runs')::integer IS DISTINCT FROM g.home_runs
+        OR NOT EXISTS (SELECT FROM jsonb_array_elements(manager_box->'lineups') l
+          WHERE l->>'team_id'=source_game.home_team_id::text
+            AND l->'defensive_positions' ? home_players[10]::text
+            AND EXISTS (SELECT FROM jsonb_array_elements(l->'lineup') slot
+              WHERE slot->>'player_id'=home_players[10]::text))
+        OR NOT EXISTS (SELECT FROM jsonb_array_elements(manager_box->'events') e
+          WHERE e->>'event_type'='SUBSTITUTION'
+            AND e->'event_data'->>'outgoing_player_id'=home_players[4]::text)
+        OR NOT EXISTS (SELECT FROM jsonb_array_elements(manager_box->'players') p
+          WHERE p->>'id'=home_players[4]::text)
+      THEN RAISE EXCEPTION 'La fuente del Box Score está incompleta'; END IF;
+      IF EXISTS (
+        (SELECT (r->>'version')::bigint, r->>'pitcher_id', (r->>'hits')::int, (r->>'outs')::int
+         FROM jsonb_array_elements(manager_box->'pitches') r
+         EXCEPT ALL
+         SELECT version, pitcher_id::text, hits, outs
+         FROM public.swl_v56_pitching_events WHERE game_id=fixture)
+        UNION ALL
+        (SELECT version, pitcher_id::text, hits, outs
+         FROM public.swl_v56_pitching_events WHERE game_id=fixture
+         EXCEPT ALL
+         SELECT (r->>'version')::bigint, r->>'pitcher_id', (r->>'hits')::int, (r->>'outs')::int
+         FROM jsonb_array_elements(manager_box->'pitches') r)
+      ) THEN RAISE EXCEPTION 'El pitcheo público difiere de los créditos oficiales'; END IF;
+      IF (SELECT count(*) FROM jsonb_array_elements(manager_box->'events') e
+            WHERE e->>'event_type'='HIT' AND e->>'batting_team_id'=source_game.home_team_id::text)
+          IS DISTINCT FROM g.home_hits::bigint
+      THEN RAISE EXCEPTION 'El bateo público difiere del total oficial'; END IF;
+
+      -- Rol efectivo de la Data API con una identidad temporal sin afiliación.
+      PERFORM set_config('request.jwt.claim.sub',fan_id::text,true);
+      PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',fan_id,'role','authenticated')::text,true);
+      EXECUTE 'SET LOCAL ROLE authenticated';
+      IF current_user<>'authenticated' OR auth.uid() IS DISTINCT FROM fan_id
+      THEN RAISE EXCEPTION 'No se aplicó la identidad del fanático'; END IF;
+      fan_box := public.swl_v57_spectator_box_source(fixture);
+      IF fan_box IS DISTINCT FROM manager_box
+        OR fan_box->'game' ?| ARRAY['home_manager_id','away_manager_id','created_by']
+        OR EXISTS (SELECT FROM jsonb_array_elements(fan_box->'players') p
+          WHERE p ?| ARRAY['email','phone','account_id','universal_id'])
+        OR EXISTS (SELECT FROM jsonb_array_elements(fan_box->'events') e WHERE e ? 'actor_id')
+      THEN RAISE EXCEPTION 'Diferencia de datos o filtración de información privada'; END IF;
+
+      FOR admin_action IN SELECT unnest(ARRAY['SCORE','SUBSTITUTE','CANCEL','SIGN','STATS']) LOOP
+        BEGIN
+          CASE admin_action
+            WHEN 'SCORE' THEN PERFORM public.swl_v56_record_plate_action(fixture,8,'OUT',home_players[6]);
+            WHEN 'SUBSTITUTE' THEN PERFORM public.swl_v56_substitute_batter(fixture,source_game.home_team_id,6,
+              home_players[6],home_players[11],lineup_revision+1,8);
+            WHEN 'CANCEL' THEN PERFORM public.swl_v57_cancel_game(fixture,8,'CANCEL_REQUEST');
+            WHEN 'SIGN' THEN PERFORM public.swl_v56_match_decision(fixture,8,'SIGN');
+            WHEN 'STATS' THEN
+              UPDATE public.swl_v56_pitching_events SET hits=999 WHERE game_id=fixture;
+              IF NOT FOUND THEN CONTINUE; END IF;
+          END CASE;
+          RAISE SQLSTATE 'ZX011' USING MESSAGE='El fanático pudo ejecutar: '||admin_action;
+        EXCEPTION WHEN insufficient_privilege THEN NULL;
+        END;
+      END LOOP;
+      IF public.swl_v57_spectator_box_source(fixture) IS DISTINCT FROM manager_box
+      THEN RAISE EXCEPTION 'El fanático alteró el partido'; END IF;
+      EXECUTE 'RESET ROLE';
+      PERFORM set_config('request.jwt.claim.sub','',true);
+      PERFORM set_config('request.jwt.claims','{}',true);
+      EXECUTE 'SET LOCAL ROLE anon';
+      BEGIN
+        PERFORM public.swl_v57_spectator_box_source(fixture);
+        RAISE SQLSTATE 'ZX011' USING MESSAGE='Anónimo obtuvo acceso a la RPC';
+      EXCEPTION WHEN insufficient_privilege THEN NULL;
+      END;
+      EXECUTE 'RESET ROLE';
+      RAISE SQLSTATE 'ZX012';
+    EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+    END;
+
     PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
     PERFORM public.swl_v56_start_game(fixture,0);
     PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);

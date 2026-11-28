@@ -40,6 +40,56 @@ SwlRow game(int away, {int home = 0}) => {
 };
 
 void main() {
+  test('fixture LAB: titular y relevista, HR heredado y out por error', () {
+    final stats = SwlGameBoxData(
+      {...game(0, home: 3), 'version': 8, 'inning': 1, 'is_top': false},
+      [
+        play(2, 'HIT', hit('h1'), team: 'home'),
+        play(3, 'ERROR', {...hit('h2'), 'outs_added': 0}, team: 'home'),
+        play(5, 'HIT', hit('h3', scoring: ['h1', 'h2', 'h3']), team: 'home'),
+        play(6, 'HIT', hit('h4'), team: 'home'),
+        play(7, 'ERROR', {
+          ...hit('h5'),
+          'outs_added': 1,
+          'out_runner_ids': ['h4'],
+        }, team: 'home'),
+        play(8, 'SUBSTITUTION', {
+          'outgoing_player_id': 'h4',
+          'incoming_player_id': 'h10',
+        }, team: 'home'),
+      ],
+      [
+        {...pitch(2, 'starter'), 'hits': 1},
+        pitch(3, 'starter'),
+        {...pitch(5, 'relief'), 'hits': 1},
+        {...pitch(6, 'relief'), 'hits': 1},
+        pitch(7, 'relief', outs: 1),
+      ],
+      changes: [
+        {
+          'team_id': 'away',
+          'version': 4,
+          'old_pitcher_id': 'starter',
+          'new_pitcher_id': 'relief',
+        },
+      ],
+    );
+    final credit = stats.runCredit;
+    expect(
+      [credit.runs('away', 'starter'), credit.cleanRuns('away', 'starter')],
+      [2, 1],
+    );
+    expect(
+      [credit.runs('away', 'relief'), credit.cleanRuns('away', 'relief')],
+      [1, 1],
+    );
+    expect(credit.cleanTotal('away'), 2);
+    expect(stats.pitching['away']!['starter']!.last, 2);
+    expect(stats.pitching['away']!['relief']!.last, 3);
+    expect(SwlGameBoxData.ip(stats.pitching['away']!['relief']!.first), '0.1');
+    expect(stats.batting['home']!['h4']![3], 1);
+  });
+
   test('un avance desconocido no afecta a otro corredor que anota', () {
     final stats = SwlGameBoxData(
       game(2),
