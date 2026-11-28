@@ -52,6 +52,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
   Map<String, dynamic>? _away;
   final Map<String, String> _teamNames = {};
   final Map<String, String> _teamLogos = {};
+  final Map<String, String> _teamColors = {};
   Map<String, dynamic>? _game;
   final _scoreboard = ValueNotifier<SwlLiveScoreboardSnapshot?>(null);
   List<Map<String, dynamic>> _savedLineups = [];
@@ -744,6 +745,10 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
             'swl_v56_record_plate_action', params: rpcParams)
             .timeout(const Duration(seconds: 12));
       } on PostgrestException catch (error) {
+        if (action == 'ERROR' && error.message == 'V57_ERROR_OUT_NOT_ENABLED') {
+          sent = false;
+          throw StateError('Los outs en errores defensivos requieren habilitación en LAB.');
+        }
         if (action == 'DOUBLE_PLAY' && rpcParams.containsKey('p_advances') &&
             error.code == 'PGRST202') {
           sent = false;
@@ -934,6 +939,9 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
           final id = row['id']?.toString();
           final name = row['name']?.toString();
           if (id != null && name != null) _teamNames[id] = name;
+          if (id != null) {
+            if (row['primary_color'] case final String color) _teamColors[id] = color;
+          }
           final logo = swlTeamLogo(row);
           if (id != null && logo != null) _teamLogos[id] = logo;
           if (row['id'] == game['away_team_id']) {
@@ -953,25 +961,6 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
     _pin.dispose();
     _teamSearch.dispose();
     super.dispose();
-  }
-
-  Widget _baseLabel(String base, bool occupied) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Icon(occupied ? Icons.sports_baseball : Icons.circle_outlined,
-          size: 15, color: occupied ? Colors.amber : Colors.white54),
-      const SizedBox(width: 4),
-      Text('$base ${occupied ? "OCUPADA" : "LIBRE"}',
-          style: TextStyle(fontSize: 11,
-              color: occupied ? Colors.amber : Colors.white70)),
-    ],
-  );
-
-  // Solo lectura: interpreta el estado JSONB existente sin escribir datos.
-  bool _baseOccupied(Map<String, dynamic> game, String base) {
-    final state = game['bases_state'];
-    if (state is! Map) return false;
-    return state[base] == true;
   }
 
   Future<void> _showActiveRoster(String teamId, String teamName) async {
@@ -1523,7 +1512,8 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       _savedLineups.any((row) {
         if (row['team_id']?.toString() != teamId) return false;
         final count = swlConfirmedBattingSlots(row['lineup']).length;
-        return count >= 9 && count <= 13;
+        final defense = row['defensive_positions'];
+        return count >= 9 && count <= 13 && defense is Map && swlDefenseIssue(defense) == null;
       });
 
   bool _canStartGame(Map<String, dynamic> game) {
@@ -1791,9 +1781,11 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       throw StateError('El partido ya no está disponible para este mánager.');
     }
     final cancel = action.startsWith('CANCEL_');
+    final knockout = action.startsWith('KO_');
     try {
-      await _client.rpc(cancel ? 'swl_v57_cancel_game' : 'swl_v56_match_decision', params: {
-        'p_game_id': gameId, 'p_expected_version': version, 'p_action': action,
+      await _client.rpc(knockout ? 'swl_v57_knockout_decision' :
+          cancel ? 'swl_v57_cancel_game' : 'swl_v56_match_decision', params: {
+        'p_game_id': gameId, 'p_expected_version': version, 'p_action': knockout ? action.substring(3) : action,
       }).timeout(const Duration(seconds: 12));
       await _refreshGame(afterCurrent: true);
     } on PostgrestException catch (error) {
@@ -1861,6 +1853,34 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       if (rivalId != null)
         OutlinedButton(onPressed: () => _showRivalLineup(rivalId),
           child: const Text('VER ALINEACIÓN RIVAL')),
+      if (game['status'] == 'SCHEDULED')
+        for (final row in _savedLineups)
+          if (row['defensive_positions'] case final Map defense)
+            if (swlDefenseIssue(defense) case final String issue)
+              Text('${_name(row['team_id'])} · $issue',
+                style: const TextStyle(color: Colors.amber)),
+      if (game['status'] == 'SCHEDULED' && myTeamId == homeId &&
+          game['swl_knockout_mode'] is String)
+        ListTile(
+          title: const Text('Regla de knockout'),
+          trailing: DropdownButton<String>(
+            value: game['swl_knockout_mode'] as String,
+            items: const [
+              DropdownMenuItem(value: 'AUTO', child: Text('Automático')),
+              DropdownMenuItem(value: 'CONSULT', child: Text('Consultar a ambos')),
+              DropdownMenuItem(value: 'DISABLED', child: Text('Sin knockout')),
+            ],
+            onChanged: (mode) async {
+              if (mode == null) return;
+              try {
+                await _sendDecision(game['id'].toString(), (game['version'] as num).toInt(), 'KO_$mode');
+              } catch (error) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('No se guardó la regla: $error')));
+              }
+            },
+          ),
+        ),
       if (game['status'] == 'SCHEDULED' && myTeamId == homeId)
         FilledButton(
           onPressed: _startingGame || _savingLineup || !_canStartGame(game)
@@ -1933,6 +1953,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
       _away = null;
       _teamNames.clear();
       _teamLogos.clear();
+      _teamColors.clear();
       _error = null;
       _connectionWarning = null;
       _savedLineups = [];
@@ -1965,6 +1986,7 @@ class _SwlLiveLobbyState extends State<SwlLiveLobby> {
         boxScore: boxScore,
         teamName: _name,
         teamLogo: (team) => _teamLogos[team],
+        teamColor: (team) => _teamColors[team],
         substitute: (page, team) => _substituteFromScoreboard(page, team),
         changePitcher: (team) async {
           if (_uncertainSubstitutionVersion != null) {

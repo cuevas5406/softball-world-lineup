@@ -40,7 +40,7 @@ Future<Map<String, dynamic>> swlReadSpectatorGame(String id) async {
         'away_team_id,away_runs,away_hits,away_errors,away_innings',
       )
       .eq('id', id)
-      .inFilter('status', ['IN_PROGRESS', 'OFFICIAL'])
+      .inFilter('status', ['IN_PROGRESS', 'FINAL', 'OFFICIAL', 'CANCELLED'])
       .single()
       .timeout(const Duration(seconds: 12));
   final teams = await swlQueryTeams(
@@ -128,14 +128,20 @@ String swlBattingAverage(Map<String, dynamic> row) {
   return (hits / ab).toStringAsFixed(3).replaceFirst('0.', '.');
 }
 
+typedef SwlReportTable = ({
+  String title,
+  List<String> labels,
+  List<(String, List<String>)> rows,
+});
 
 class SwlOfficialBoxScore {
-  SwlOfficialBoxScore(this.data) {
+  SwlOfficialBoxScore(this.data, {this.reports = const {}}) {
     if (data['status'] != 'OFFICIAL')
       throw StateError('El resultado aún requiere las dos firmas.');
   }
 
   final Map<String, dynamic> data;
+  final Map<String, List<SwlReportTable>> reports;
   Map<String, dynamic> side(String key) =>
       Map<String, dynamic>.from(data[key] as Map);
   String get code => _display(data['code']);
@@ -182,7 +188,45 @@ class SwlOfficialBoxScore {
   String get detail =>
       '$code · $date · ${data['finish'] ?? 'Resultado oficial'}';
 
-  Future<Uint8List> pdf() async {
+  Iterable<(String, SwlReportTable)> reportSections(String? teamId) sync* {
+    for (final key in ['away', 'home']) {
+      final team = side(key);
+      if (teamId != null && team['id'] != teamId) continue;
+      for (final report in reports[team['id']] ?? const <SwlReportTable>[]) {
+        yield (_display(team['name']), report);
+      }
+    }
+  }
+
+  Future<Map<String, Uint8List>> _teamLogos() async {
+    final entries = await Future.wait(
+      ['away', 'home'].map((key) async {
+        final url = Uri.tryParse(swlTeamLogo(side(key)) ?? '');
+        if (url == null || url.scheme != 'https' || url.host.isEmpty)
+          return null;
+        try {
+          final bytes = await NetworkAssetBundle(url)
+              .load(url.toString())
+              .timeout(const Duration(seconds: 4));
+          if (bytes.lengthInBytes <= 2 * 1024 * 1024) {
+            return MapEntry(
+              key,
+              bytes.buffer.asUint8List(
+                bytes.offsetInBytes,
+                bytes.lengthInBytes,
+              ),
+            );
+          }
+        } catch (_) {
+          // El nombre del equipo sigue disponible.
+        }
+        return null;
+      }),
+    );
+    return Map.fromEntries(entries.whereType<MapEntry<String, Uint8List>>());
+  }
+
+  Future<Uint8List> pdf({String? teamId}) async {
     final doc = pw.Document(
       title: 'Box Score $code',
       author: 'Softball World Lineup',
@@ -190,9 +234,20 @@ class SwlOfficialBoxScore {
     final branding = pw.MemoryImage(
       (await rootBundle.load(_brandAsset)).buffer.asUint8List(),
     );
+    final teamLogos = await _teamLogos();
     pw.Widget table(List<List<String>> rows) => pw.TableHelper.fromTextArray(
       headers: rows.first,
-      data: rows.skip(1).toList(),
+      data: rows
+          .skip(1)
+          .map(
+            (row) => row
+                .map(
+                  (cell) =>
+                      cell.startsWith('≥') ? 'mín. ${cell.substring(1)}' : cell,
+                )
+                .toList(),
+          )
+          .toList(),
       headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
       cellStyle: const pw.TextStyle(fontSize: 9),
       cellAlignment: pw.Alignment.center,
@@ -205,9 +260,16 @@ class SwlOfficialBoxScore {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
         theme: pw.ThemeData.withFont(
-          base: pw.Font.ttf(await rootBundle.load('assets/fonts/NotoSans-Regular.ttf')),
-          bold: pw.Font.ttf(await rootBundle.load('assets/fonts/NotoSans-Bold.ttf')),
+          base: pw.Font.ttf(
+            await rootBundle.load('assets/fonts/NotoSans-Regular.ttf'),
+          ),
+          bold: pw.Font.ttf(
+            await rootBundle.load('assets/fonts/NotoSans-Bold.ttf'),
+          ),
         ),
+        margin: const pw.EdgeInsets.all(28),
+        header: (_) =>
+            pw.Text('SWL · $code', style: const pw.TextStyle(fontSize: 9)),
         footer: (context) =>
             pw.Text('Softball World Lineup · ${context.pageNumber}'),
         build: (_) => [
@@ -224,65 +286,157 @@ class SwlOfficialBoxScore {
               ),
             ],
           ),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              for (final key in ['away', 'home'])
+                if (teamLogos[key] case final Uint8List bytes)
+                  pw.Image(
+                    pw.MemoryImage(bytes),
+                    width: 40,
+                    height: 40,
+                    fit: pw.BoxFit.contain,
+                  ),
+            ],
+          ),
           pw.Header(level: 0, text: headline),
           pw.Text(detail),
+          if (reports.isNotEmpty)
+            pw.Text(
+              'mín. = mínimo confirmado',
+              style: const pw.TextStyle(fontSize: 8),
+            ),
           pw.SizedBox(height: 15),
           for (final block in tables) ...[
             table(block),
             pw.SizedBox(height: 10),
           ],
-          for (final key in ['away', 'home']) ...[
-            pw.Header(level: 1, text: 'Bateo · ${side(key)['name']}'),
-            if (!batting.any((row) => row['team_id'] == side(key)['id']))
+          for (final (team, report) in reportSections(teamId)) ...[
+            pw.Header(level: 1, text: '${report.title} · $team'),
+            table([
+              ['Pelotero', ...report.labels],
+              for (final (name, values) in report.rows) [name, ...values],
+            ]),
+          ],
+          if (reports.isEmpty) ...[
+            for (final key in ['away', 'home']) ...[
+              pw.Header(level: 1, text: 'Bateo · ${side(key)['name']}'),
+              if (!batting.any((row) => row['team_id'] == side(key)['id']))
+                pw.Text('Estadísticas disponibles insuficientes.')
+              else
+                table([
+                  [
+                    'Pelotero',
+                    'AB',
+                    'R',
+                    'H',
+                    '2B',
+                    '3B',
+                    'HR',
+                    'RBI',
+                    'BB',
+                    'K',
+                    'AVG',
+                  ],
+                  for (final row in batting.where(
+                    (row) => row['team_id'] == side(key)['id'],
+                  ))
+                    [
+                      for (final col in [
+                        'name',
+                        'ab',
+                        'r',
+                        'h',
+                        'doubles',
+                        'triples',
+                        'hr',
+                        'rbi',
+                        'bb',
+                        'k',
+                      ])
+                        _display(row[col]),
+                      swlBattingAverage(row),
+                    ],
+                ]),
+            ],
+            pw.Header(level: 1, text: 'Pitcheo'),
+            pw.Text(
+              'Los registros de pitcheo se muestran sin atribución de equipo '
+              'cuando el origen no la proporciona.',
+              style: const pw.TextStyle(fontSize: 8),
+            ),
+            if (pitching.isEmpty)
               pw.Text('Estadísticas disponibles insuficientes.')
             else
               table([
-                ['Pelotero', 'AB', 'R', 'H', '2B', '3B', 'HR', 'RBI', 'BB', 'K', 'AVG'],
-                for (final row in batting.where(
-                  (row) => row['team_id'] == side(key)['id'],
-                ))
+                ['Pitcher', 'Equipo', 'IP', 'H', 'BB', 'K'],
+                for (final row in pitching)
                   [
-                    for (final col in [
-                      'name', 'ab', 'r', 'h', 'doubles', 'triples',
-                      'hr', 'rbi', 'bb', 'k',
-                    ])
-                      _display(row[col]),
-                    swlBattingAverage(row),
+                    _display(row['name']),
+                    _display(row['team_name']),
+                    if (row['outs'] case final num outs)
+                      '${outs ~/ 3}.${outs % 3}'
+                    else
+                      '-',
+                    for (final col in ['h', 'bb', 'k']) _display(row[col]),
                   ],
               ]),
           ],
-          pw.Header(level: 1, text: 'Pitcheo'),
-          pw.Text(
-            'Los registros de pitcheo se muestran sin atribución de equipo '
-            'cuando el origen no la proporciona.',
-            style: const pw.TextStyle(fontSize: 8),
-          ),
-          if (pitching.isEmpty)
-            pw.Text('Estadísticas disponibles insuficientes.')
-          else
-            table([
-              ['Pitcher', 'Equipo', 'IP', 'H', 'BB', 'K'],
-              for (final row in pitching)
-                [
-                  _display(row['name']),
-                  _display(row['team_name']),
-                  if (row['outs'] case final num outs)
-                    '${outs ~/ 3}.${outs % 3}'
-                  else
-                    '-',
-                  for (final col in ['h', 'bb', 'k']) _display(row[col]),
-                ],
-            ]),
         ],
       ),
     );
     return doc.save();
   }
 
-  Future<Uint8List> png() async {
-    const width = 1080;
+  Future<List<Uint8List>> images({
+    String? teamId,
+    bool scoreboardOnly = false,
+  }) async {
+    final logos = await _teamLogos();
     final blocks = tables;
-    final height = 355 + blocks.length * 184;
+    final pages = <(String, List<List<String>>, bool)>[
+      for (final block in blocks) ('Pizarra', block, true),
+      if (!scoreboardOnly)
+        for (final (team, report) in reportSections(teamId))
+          for (var start = 0; start < report.rows.length; start += 20)
+            (
+              '${report.title} · $team',
+              [
+                ['Pelotero', ...report.labels],
+                for (final (name, values) in report.rows.skip(start).take(20))
+                  [name, ...values],
+              ],
+              false,
+            ),
+    ];
+    return [
+      for (final (index, page) in pages.indexed)
+        await _pngPage(
+          page.$1,
+          page.$2,
+          index + 1,
+          pages.length,
+          logos,
+          [
+            side('away'),
+            side('home'),
+          ].where((side) => side['id'] == teamId).firstOrNull,
+        ),
+    ];
+  }
+
+  Future<Uint8List> png() async => (await images(scoreboardOnly: true)).first;
+
+  Future<Uint8List> _pngPage(
+    String title,
+    List<List<String>> block,
+    int index,
+    int total,
+    Map<String, Uint8List> logos,
+    Map<String, dynamic>? selected,
+  ) async {
+    const width = 1080;
+    const height = 1920;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawColor(const Color(0xff111b2a), BlendMode.src);
@@ -345,51 +499,67 @@ class SwlOfficialBoxScore {
       (await rootBundle.load(_brandAsset)).buffer.asUint8List(),
       const Rect.fromLTWH(492, 22, 96, 96),
     );
-    await Future.wait([
-      for (final (key, x) in [('away', 84.0), ('home', 900.0)])
-        () async {
-          final url = Uri.tryParse(swlTeamLogo(side(key)) ?? '');
-          if (url == null || url.scheme != 'https' || url.host.isEmpty) return;
-          try {
-            final bytes = await NetworkAssetBundle(url)
-                .load(url.toString())
-                .timeout(const Duration(seconds: 4));
-            if (bytes.lengthInBytes <= 2 * 1024 * 1024) {
-              await logo(
-                bytes.buffer.asUint8List(
-                  bytes.offsetInBytes,
-                  bytes.lengthInBytes,
-                ),
-                Rect.fromLTWH(x, 22, 96, 96),
-              );
-            }
-          } catch (_) {
-            // El equipo sigue identificado por su nombre.
-          }
-        }(),
-    ]);
-    text('SOFTBALL WORLD LINEUP', 80, 126, 920, 40, color: Colors.amber);
-    text('RESULTADO OFICIAL', 80, 180, 920, 31);
-    text(headline, 40, 226, 1000, 40);
-    text(detail, 40, 282, 1000, 25);
-    for (var blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-      final block = blocks[blockIndex];
-      final cell = 734 / (block.first.length - 1);
-      for (var row = 0; row < block.length; row++) {
-        final y = 334.0 + blockIndex * 184 + row * 52;
-        canvas.drawRect(
-          Rect.fromLTWH(24, y, 1032, 49),
-          Paint()
-            ..color = row == 0
-                ? const Color(0xff36516b)
-                : const Color(0xff1f3147),
-        );
-        text(block[row].first, 25, y + 9, 288, 25);
-        for (var index = 1; index < block[row].length; index++) {
-          text(block[row][index], 315 + (index - 1) * cell, y + 9, cell, 25);
+    for (final (key, x) in [('away', 84.0), ('home', 900.0)]) {
+      if (logos[key] case final Uint8List bytes) {
+        try {
+          await logo(bytes, Rect.fromLTWH(x, 22, 96, 96));
+        } catch (_) {
+          // El nombre sigue visible si el archivo no es decodificable.
         }
       }
     }
+    final hex =
+        selected?['primary_color']?.toString().replaceFirst('#', '') ?? '';
+    final accentValue = hex.length == 6 ? int.tryParse(hex, radix: 16) : null;
+    final accent = accentValue == null
+        ? Colors.amber
+        : Color(0xff000000 | accentValue);
+    canvas.drawRect(
+      const Rect.fromLTWH(24, 157, 1032, 8),
+      Paint()..color = accent,
+    );
+    text('SOFTBALL WORLD LINEUP', 80, 118, 920, 38, color: Colors.amber);
+    text('RESULTADO OFICIAL', 80, 193, 920, 31);
+    text(headline, 40, 248, 1000, 40);
+    text(detail, 40, 314, 1000, 25);
+    final caption = selected == null ? title : '${selected['name']} · $title';
+    text(caption, 40, 398, 1000, 32, color: Colors.amber);
+    final nameWidth = block.first.length > 8 ? 370.0 : 420.0;
+    final cell = (1032 - nameWidth) / (block.first.length - 1);
+    for (var row = 0; row < block.length; row++) {
+      final y = 454.0 + row * 61;
+      canvas.drawRect(
+        Rect.fromLTWH(24, y, 1032, 58),
+        Paint()
+          ..color = row == 0
+              ? const Color(0xff36516b)
+              : row.isEven
+              ? const Color(0xff1f3147)
+              : const Color(0xff19293c),
+      );
+      final name = block[row].first;
+      final split = name.lastIndexOf(' · #');
+      text(
+        split < 0
+            ? name
+            : '${name.substring(split + 3)} · ${name.substring(0, split)}',
+        27,
+        y + 13,
+        nameWidth - 6,
+        24,
+      );
+      for (var column = 1; column < block[row].length; column++) {
+        text(
+          block[row][column],
+          24 + nameWidth + (column - 1) * cell,
+          y + 13,
+          cell,
+          block.first.length > 8 ? 21 : 24,
+        );
+      }
+    }
+    text('≥ Mínimo confirmado · — Dato no disponible', 40, 1800, 1000, 24);
+    text('$code · $index/$total', 40, 1850, 1000, 28, color: Colors.amber);
     final picture = recorder.endRecording();
     try {
       final image = await picture.toImage(width, height);
@@ -407,7 +577,14 @@ class SwlOfficialBoxScore {
 }
 
 class SwlShareBoxScoreButton extends StatefulWidget {
-  const SwlShareBoxScoreButton({super.key, required this.gameId});
+  const SwlShareBoxScoreButton({
+    super.key,
+    required this.gameId,
+    this.loadScore,
+    this.ownTeam,
+  });
+  final Future<SwlOfficialBoxScore> Function()? loadScore;
+  final String? ownTeam;
   final String gameId;
 
   @override
@@ -426,39 +603,51 @@ class _SwlShareBoxScoreButtonState extends State<SwlShareBoxScoreButton> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                leading: const Icon(Icons.image_outlined),
-                title: const Text('Imagen PNG'),
-                onTap: () => Navigator.pop(sheet, 'png'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.picture_as_pdf_outlined),
-                title: const Text('Documento PDF'),
-                onTap: () => Navigator.pop(sheet, 'pdf'),
-              ),
+              for (final (code, label) in [
+                if (widget.ownTeam != null && widget.loadScore != null)
+                  ('png-team', 'Imagen de mi equipo'),
+                if (widget.loadScore != null) ('png-global', 'Imagen global'),
+                ('png-score', 'Imagen del marcador'),
+                if (widget.ownTeam != null && widget.loadScore != null)
+                  ('pdf-team', 'PDF de mi equipo'),
+                ('pdf-global', 'PDF global'),
+              ])
+                ListTile(
+                  title: Text(label),
+                  onTap: () => Navigator.pop(sheet, code),
+                ),
             ],
           ),
         ),
       );
       if (format == null || !mounted) return;
-      final game = SwlOfficialBoxScore(
-        await swlReadSpectatorGame(widget.gameId),
-      );
-      final bytes = format == 'png' ? await game.png() : await game.pdf();
+      final game = widget.loadScore != null
+          ? await widget.loadScore!()
+          : SwlOfficialBoxScore(await swlReadSpectatorGame(widget.gameId));
+      final team = format.endsWith('-team') ? widget.ownTeam : null;
+      final png = format.startsWith('png');
+      final pages = png
+          ? await game.images(
+              teamId: team,
+              scoreboardOnly: format == 'png-score',
+            )
+          : [await game.pdf(teamId: team)];
       final cache = await getTemporaryDirectory();
       final directory = await cache.createTemp('swl-box-score-');
       final safeCode = game.code.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-      final file = await File('${directory.path}/Box-Score-$safeCode.$format')
-          .writeAsBytes(bytes);
+      final files = [
+        for (final (index, bytes) in pages.indexed)
+          await File(
+            '${directory.path}/Box-Score-$safeCode-${index + 1}.${png ? "png" : "pdf"}',
+          ).writeAsBytes(bytes),
+      ];
       if (!mounted) return;
       await SharePlus.instance.share(
         ShareParams(
           title: 'Box Score ${game.code}',
           files: [
-            XFile(
-              file.path,
-              mimeType: format == 'png' ? 'image/png' : 'application/pdf',
-            ),
+            for (final file in files)
+              XFile(file.path, mimeType: png ? 'image/png' : 'application/pdf'),
           ],
         ),
       );

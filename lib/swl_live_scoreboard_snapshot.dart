@@ -13,6 +13,7 @@ class SwlLiveScoreboardSnapshot {
   final int regulationInnings;
   final bool finalHalfCompleted;
   final bool rosterGhostAllowed;
+  final Map? knockoutPending;
   final String? finishReason;
   final String? finishRequestedBy;
   final String? cancelRequestedBy;
@@ -48,6 +49,7 @@ class SwlLiveScoreboardSnapshot {
     this.regulationInnings = 6,
     this.finalHalfCompleted = false,
     this.rosterGhostAllowed = false,
+    this.knockoutPending,
     this.finishReason,
     this.finishRequestedBy,
     this.cancelRequestedBy,
@@ -94,6 +96,7 @@ class SwlLiveScoreboardSnapshot {
       regulationInnings: (game['swl_regulation_innings'] as num?)?.toInt() ?? 6,
       finalHalfCompleted: game['swl_final_half_completed'] == true,
       rosterGhostAllowed: game['swl_allow_roster_ghost'] == true,
+      knockoutPending: game['swl_knockout_pending'] is Map ? game['swl_knockout_pending'] as Map : null,
       finishReason: game['swl_finish_reason']?.toString(),
       finishRequestedBy: game['swl_finish_requested_by']?.toString(),
       cancelRequestedBy: game['swl_cancel_requested_by']?.toString(),
@@ -130,6 +133,7 @@ class SwlLiveScoreboardSnapshot {
   String? get battingManagerId => isTop ? awayManagerId : homeManagerId;
   String get battingTeamId => isTop ? awayTeamId : homeTeamId;
   String? scoringBlock(String? userId, {bool authorized = true}) {
+    if (knockoutPending != null) return 'Esperando decisión de knockout.';
     if (!authorized || userId == null || userId.isEmpty) return 'Modo de solo lectura.';
     if (homeManagerId == null || homeManagerId!.isEmpty ||
         awayManagerId == null || awayManagerId!.isEmpty ||
@@ -144,6 +148,14 @@ class SwlLiveScoreboardSnapshot {
     if (!hasKnownHalf) return 'No se pudo confirmar qué equipo está al bate.';
     if (userId != battingManagerId) return 'Solo anota el mánager del equipo al bate.';
     return null;
+  }
+
+  bool canVoteKnockout(String? userId) {
+    final pending = knockoutPending;
+    if (pending == null || status != 'IN_PROGRESS' || userId == null ||
+        homeManagerId == awayManagerId) return false;
+    if (userId == homeManagerId) return pending['home_continue'] != true;
+    return userId == awayManagerId && pending['away_continue'] != true;
   }
 
   Set<String> cancellationActions(String? userId) {
@@ -164,7 +176,7 @@ class SwlLiveScoreboardSnapshot {
       final signed = userId == homeManagerId ? homeSigned : awaySigned;
       return signed ? const {} : const {'SIGN'};
     }
-    if (status != 'IN_PROGRESS' || inning < 5 || homeRuns == awayRuns) return const {};
+    if (knockoutPending != null || status != 'IN_PROGRESS' || inning < 5 || homeRuns == awayRuns) return const {};
     if (finishRequestedBy == null) return const {'REQUEST'};
     if (finishRequestedBy == userId ||
         (finishRequestedBy != homeManagerId && finishRequestedBy != awayManagerId)) return const {};

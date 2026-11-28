@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import '../lib/swl_official_box_score.dart';
@@ -73,6 +76,73 @@ void main() {
     final bytes = await SwlOfficialBoxScore(result()).pdf();
     expect(String.fromCharCodes(bytes.take(5)), '%PDF-');
     expect(bytes.length, greaterThan(1000));
+  });
+
+  testWidgets('exporta equipo y global con páginas de 1080 × 1920', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      final sample = result()..['code'] = 'SWL-DEMO';
+      sample['finish'] = 'Datos sintéticos de verificación';
+      final report = SwlOfficialBoxScore(
+        sample,
+        reports: {
+          for (final team in ['a', 'h'])
+            team: [
+              (
+                title: 'Bateo',
+                labels: const ['PA', 'VB', 'H', 'AVG'],
+                rows: [
+                  for (var i = 0; i < 9; i++)
+                    (
+                      'Pelotero de muestra ${i + 1} · #${10 + i}',
+                      ['3', '3', '1', '.333'],
+                    ),
+                  ('Total', ['27', '27', '9', '.333']),
+                ],
+              ),
+              (
+                title: 'Pitcheo',
+                labels: const ['IP', 'H', 'C', 'CL', 'P'],
+                rows: [
+                  ('Lanzador de muestra · #1', ['6.0', '4', '3', '≥2', '28']),
+                  ('Total', ['6.0', '4', '3', '≥2', '28']),
+                ],
+              ),
+              (
+                title: 'Defensa registrada',
+                labels: const ['POS', 'Participación'],
+                rows: [
+                  ('Pelotero de muestra 1 · #10', ['C', 'Titular']),
+                ],
+              ),
+            ],
+        },
+      );
+      expect(report.reportSections('h').map((e) => e.$1).toSet(), {'Local'});
+      expect(report.reportSections(null).map((e) => e.$1).toSet(), {
+        'Local',
+        'Visitante',
+      });
+      final folder = Platform.environment['SWL_EXPORT_SAMPLE_DIR'];
+      for (final (label, team, pageCount) in [
+        ('equipo', 'h', 4),
+        ('global', null, 7),
+      ]) {
+        final pdf = await report.pdf(teamId: team);
+        expect(String.fromCharCodes(pdf.take(5)), '%PDF-');
+        final pages = await report.images(teamId: team);
+        expect(pages.length, pageCount);
+        for (final (index, png) in pages.indexed) {
+          final size = ByteData.sublistView(png);
+          expect([size.getUint32(16), size.getUint32(20)], [1080, 1920]);
+          if (folder != null) {
+            await File('$folder/$label-${index + 1}.png').writeAsBytes(png);
+          }
+        }
+        if (folder != null) await File('$folder/$label.pdf').writeAsBytes(pdf);
+      }
+    });
   });
 
   testWidgets('Renderiza PNG con la firma del formato', (tester) async {

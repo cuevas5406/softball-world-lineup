@@ -18,7 +18,8 @@ class ThirdOutHistoryContract(unittest.TestCase):
         self.assertIn("players[data['out_runner_id']?.toString()]", SCOREBOARD)
 
     def test_single_runner_out_can_be_confirmed_but_multiple_outs_stay_blocked(self):
-        self.assertIn("(outCount > 1 || (defensiveError && outCount > 0))", SCOREBOARD)
+        self.assertIn("outCount > 1 ? null", SCOREBOARD)
+        self.assertIn("defensiveError && dest == -origin", SCOREBOARD)
         self.assertNotIn("outCount != 1 || live.outs >= 2", SCOREBOARD)
         self.assertIn("'count_runs_on_third_out': timePlay && countRunsOnThirdOut", SCOREBOARD)
 

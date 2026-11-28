@@ -17,6 +17,19 @@ void main() {
         extended: extended,
       );
 
+  test('SF adicional no sustituye a C y se identifican duplicados', () {
+    final positions = {
+      for (final p in swlDefensivePositions.where((p) => p != 'C')) p: p,
+    };
+    expect(swlDefenseIssue(positions), contains('C.'));
+    positions['C'] = 'C';
+    expect(swlDefenseIssue(positions), isNull);
+    expect(
+      swlDefenseIssue({...positions, 'otro': 'C'}),
+      'Posición duplicada: C.',
+    );
+  });
+
   test('V5.6 save requires a pitcher and a complete defense', () {
     final draft = SwlLineupDraft([...ids], {});
     expect(draft.validate(), contains('pitcher titular'));
@@ -25,7 +38,7 @@ void main() {
 
   test('extended lineup cannot save an incomplete defense', () {
     final draft = SwlLineupDraft([...ids], {'b1': 'P'});
-    expect(draft.validate(), contains('9 y 10 posiciones'));
+    expect(draft.validate(), contains('Faltan posiciones defensivas'));
     expect(() => payload(draft), throwsStateError);
   });
 

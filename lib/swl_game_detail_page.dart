@@ -17,6 +17,7 @@ class SwlGameDetailPage extends StatefulWidget {
     required this.boxScore,
     required this.teamName,
     required this.teamLogo,
+    this.teamColor,
     this.substitute,
     this.changePitcher,
   });
@@ -25,6 +26,7 @@ class SwlGameDetailPage extends StatefulWidget {
   final bool boxScore;
   final String Function(String) teamName;
   final String? Function(String) teamLogo;
+  final String? Function(String)? teamColor;
   final Future<void> Function(BuildContext, String)? substitute;
   final Future<void> Function(String)? changePitcher;
 
@@ -41,6 +43,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
   SwlGameBoxData? _stats;
   Timer? _timer;
   RealtimeChannel? _channel;
+  bool _showLandscapeScore = false;
   int _failedReads = 0;
   bool _loading = false, _queued = false, _failed = false, _changing = false;
 
@@ -351,6 +354,13 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     );
   }
 
+  String _jerseyFirst(String name) {
+    final split = name.lastIndexOf(' · #');
+    return split < 0
+        ? name
+        : '${name.substring(split + 3)} · ${name.substring(0, split)}';
+  }
+
   Widget _statRow(
     String team,
     String name,
@@ -378,7 +388,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
                 child: Tooltip(
                   message: name,
                   child: Text(
-                    name,
+                    _jerseyFirst(name),
                     style: style,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -441,7 +451,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     );
   }
 
-  Widget _box(SwlRow game, String team) {
+  List<SwlReportTable> _reportTables(SwlRow game, String team) {
     final stats = _stats!;
     final lineup = _lineup(team);
     final bats = stats.batting[team] ?? {};
@@ -509,6 +519,104 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
           : stats.runCredit.cleanLabel(team, pitcher),
       for (final n in row.skip(4)) '$n',
     ];
+    final positions = lineup['defensive_positions'];
+    final substitutions = _substitutions(team);
+    final entrants = _byId(substitutions, 'incoming_player_id');
+    final departed = _byId(substitutions, 'outgoing_player_id');
+    String role(String id) =>
+        departed.contains(id) && !swlLineupParticipantIds(lineup).contains(id)
+        ? 'Retirado'
+        : entrants.contains(id)
+        ? 'Sustituto'
+        : 'Titular';
+    return [
+      (
+        title: 'Bateo',
+        labels: SwlGameBoxData.battingLabels,
+        rows: [
+          for (final id in batters)
+            (_name(id), battingLine(bats[id] ?? List.filled(11, 0))),
+          ('Total', battingLine(bTotal, total: true)),
+        ],
+      ),
+      (
+        title: 'Pitcheo',
+        labels: SwlGameBoxData.pitchingLabels,
+        rows: [
+          for (final id in orderedPitchers)
+            (
+              _name(id),
+              pitchingLine(throws[id] ?? List.filled(10, 0), pitcher: id),
+            ),
+          ('Total', pitchingLine(pTotal)),
+        ],
+      ),
+      (
+        title: 'Defensa registrada',
+        labels: const ['POS', 'Participación'],
+        rows: [
+          if (positions is Map)
+            for (final entry in positions.entries)
+              (
+                _name(entry.key.toString()),
+                [entry.value.toString(), role(entry.key.toString())],
+              ),
+          for (final id in departed.difference(swlLineupParticipantIds(lineup)))
+            (_name(id), ['—', 'Retirado']),
+          (
+            'Equipo',
+            ['—', 'E: ${game[isHome ? 'home_errors' : 'away_errors'] ?? '—'}'],
+          ),
+        ],
+      ),
+    ];
+  }
+
+  SwlOfficialBoxScore _export(SwlRow game) {
+    SwlRow side(String side) {
+      final id = game['${side}_team_id'] as String;
+      return {
+        'id': id,
+        'name': widget.teamName(id),
+        'logo_url': widget.teamLogo(id),
+        'primary_color': widget.teamColor?.call(id),
+        'innings': _stats!.innings[id],
+        for (final field in ['runs', 'hits', 'errors'])
+          field: game['${side}_$field'],
+      };
+    }
+
+    return SwlOfficialBoxScore(
+      {
+        'code': game['game_pin'],
+        'date': game['created_at'],
+        'status': game['status'],
+        'finish': game['swl_finish_reason'],
+        'inning': game['inning'],
+        'away': side('away'),
+        'home': side('home'),
+      },
+      reports: {
+        for (final id in [
+          game['away_team_id'] as String,
+          game['home_team_id'] as String,
+        ])
+          id: _reportTables(game, id),
+      },
+    );
+  }
+
+  Widget _box(SwlRow game, String team) {
+    final stats = _stats!;
+    final reports = _reportTables(game, team);
+    final uid = _client.auth.currentUser?.id;
+    final ownTeam = uid == null
+        ? null
+        : uid == game['home_manager_id']
+        ? game['home_team_id'] as String
+        : uid == game['away_manager_id']
+        ? game['away_team_id'] as String
+        : null;
     Widget table(
       String title,
       List<String> labels,
@@ -530,23 +638,20 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
       slivers: [
         if (stats.incompleteRuns.contains(team) ||
             stats.incompleteRbi.contains(team) ||
-            bTotal[3] != game[isHome ? 'home_hits' : 'away_hits'])
+            reports.first.rows.last.$2[3] !=
+                '${game[team == game['home_team_id'] ? 'home_hits' : 'away_hits'] ?? 0}')
           const SliverToBoxAdapter(
             child: Text(
               'El historial no permite atribuir todos los resultados a peloteros individuales.',
             ),
           ),
-        table('Bateo', SwlGameBoxData.battingLabels, [
-          for (final id in batters)
-            (_name(id), battingLine(bats[id] ?? List.filled(11, 0))),
-          ('Total', battingLine(bTotal, total: true)),
-        ]),
+        table(reports.first.title, reports.first.labels, reports.first.rows),
         if (stats.incompletePitching.contains(team))
           const SliverToBoxAdapter(
             child: Text('Conteo parcial · hay jugadas sin pitcher acreditado.'),
           ),
         if (stats.runCredit.cleanTotal(team) == null ||
-            orderedPitchers.any(
+            (stats.pitching[team]?.keys ?? const <String>[]).any(
               (id) => stats.runCredit.cleanRuns(team, id) == null,
             ))
           const SliverToBoxAdapter(
@@ -554,17 +659,15 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
               'CL parcial · ≥ indica el mínimo confirmado por el historial.',
             ),
           ),
-        table('Pitcheo', SwlGameBoxData.pitchingLabels, [
-          for (final id in orderedPitchers)
-            (
-              _name(id),
-              pitchingLine(throws[id] ?? List.filled(10, 0), pitcher: id),
-            ),
-          ('Total', pitchingLine(pTotal)),
-        ]),
+        for (final report in reports.skip(1))
+          table(report.title, report.labels, report.rows),
         if (game['status'] == 'OFFICIAL')
           SliverToBoxAdapter(
-            child: SwlShareBoxScoreButton(gameId: widget.gameId),
+            child: SwlShareBoxScoreButton(
+              gameId: widget.gameId,
+              loadScore: () async => _export(game),
+              ownTeam: ownTeam,
+            ),
           ),
       ],
     );
@@ -642,11 +745,15 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
       game['away_team_id'] as String,
       game['home_team_id'] as String,
     ];
+    final size = MediaQuery.sizeOf(context);
+    final compact =
+        widget.boxScore && size.width > size.height && size.height < 500;
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         backgroundColor: const Color(0xFF080D14),
         appBar: AppBar(
+          toolbarHeight: compact ? 44 : null,
           title: Text('$title · ${game['game_pin']}'),
           actions: [
             IconButton(
@@ -659,7 +766,9 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
             tabs: [
               for (final team in teams)
                 Tab(
-                  icon: SwlTeamBadge(url: widget.teamLogo(team)),
+                  icon: compact
+                      ? null
+                      : SwlTeamBadge(url: widget.teamLogo(team)),
                   text: widget.teamName(team),
                 ),
             ],
@@ -673,7 +782,16 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
               ),
             if (game['status'] == 'CANCELLED')
               const Text('Partido cancelado · registro para consulta'),
-            if (widget.boxScore) ...[
+            if (compact)
+              TextButton(
+                onPressed: () =>
+                    setState(() => _showLandscapeScore = !_showLandscapeScore),
+                child: Text(
+                  '${game['away_runs']} – ${game['home_runs']} · '
+                  '${_showLandscapeScore ? "Ocultar pizarra" : "Ver pizarra por entradas"}',
+                ),
+              ),
+            if (widget.boxScore && (!compact || _showLandscapeScore)) ...[
               _score(game, teams),
               const Text('· Sin jugar   0* En curso   ? Sin desglose'),
             ],

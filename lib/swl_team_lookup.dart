@@ -18,6 +18,7 @@ Future<List<Map<String, dynamic>>> swlQueryTeams(
   Future<List<Map<String, dynamic>>> Function(String) read,
 ) async {
   for (final columns in [
+    'id,name,province,team_code,logo_path,logo_url,primary_color',
     'id,name,province,team_code,logo_path,logo_url',
     'id,name,province,logo_path,logo_url',
     'id,name,province,logo_url',

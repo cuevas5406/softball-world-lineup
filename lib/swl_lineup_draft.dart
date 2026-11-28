@@ -11,6 +11,20 @@ const swlDefensivePositions = [
   'SF',
 ];
 
+String? swlDefenseIssue(Map positions) {
+  final seen = <Object?>{};
+  for (final entry in positions.entries) {
+    if (!swlDefensivePositions.contains(entry.value)) {
+      return 'Posición inválida: ${entry.value}.';
+    }
+    if (!seen.add(entry.value)) return 'Posición duplicada: ${entry.value}.';
+  }
+  final missing = swlDefensivePositions.take(9).where((p) => !seen.contains(p));
+  if (missing.isNotEmpty)
+    return 'Faltan posiciones defensivas: ${missing.join(", ")}.';
+  return null;
+}
+
 class SwlLineupDraft {
   /// Batting candidates in order; defensive-only players live in [positions].
   final List<String> selected;
@@ -93,7 +107,8 @@ class SwlLineupDraft {
 
   bool replaceParticipant(String outgoing, String incoming) {
     if (selected.contains(incoming) ||
-        positions.containsKey(incoming) || designatedId == incoming) {
+        positions.containsKey(incoming) ||
+        designatedId == incoming) {
       return false;
     }
     final index = selected.indexOf(outgoing);
@@ -163,8 +178,9 @@ class SwlLineupDraft {
     if (selected.toSet().length != selected.length) {
       return 'Hay un pelotero repetido en la alineación.';
     }
-    if (positions.values.any((pos) => !swlDefensivePositions.contains(pos)) ||
-        positions.values.toSet().length != positions.length) {
+    if (!requireDefense &&
+        (positions.values.any((pos) => !swlDefensivePositions.contains(pos)) ||
+            positions.values.toSet().length != positions.length)) {
       return 'Cada posición defensiva debe ser válida y tener un solo pelotero seleccionado.';
     }
     // LAB swl_v56_save_lineup requires a pitcher and 9-10 defensive
@@ -172,8 +188,9 @@ class SwlLineupDraft {
     if (requireDefense && pitcherId == null) {
       return 'Asigna un pitcher titular en la posición P.';
     }
-    if (requireDefense && (positions.length < 9 || positions.length > 10)) {
-      return 'Asigna entre 9 y 10 posiciones defensivas antes de guardar.';
+    if (requireDefense) {
+      final issue = swlDefenseIssue(positions);
+      if (issue != null) return issue;
     }
     // LAB only accepts batting players and the pitcher as defenders.
     if (requireDefense &&

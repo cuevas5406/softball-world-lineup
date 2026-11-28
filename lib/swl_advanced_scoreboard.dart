@@ -3156,7 +3156,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             // El motor local de vista previa puede rechazar destinos negativos
             // aunque LAB admita un único corredor retirado durante un hit.
             // Solo habilitar ese caso si la ocupación y el orden son coherentes.
-            if (!defensiveError && outCount == 1 &&
+            if (outCount == 1 &&
                 batterBase >= 1 && batterBase <= 3) {
               final origins = <int>[if (first) 1, if (second) 2, if (third) 3];
               final moves = <int?>[firstTo, secondTo, thirdTo];
@@ -3172,7 +3172,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   2 => const [0, 3, -3, -4],
                   _ => const [0, -4],
                 };
-                if (!allowed.contains(dest)) { valid = false; break; }
+                if (!allowed.contains(dest) && !(defensiveError && dest == -origin)) { valid = false; break; }
                 if (dest < 0) continue;
                 final target = dest == 0 ? 4 : dest;
                 if (target < lastTarget || (target == lastTarget && target != 4)) {
@@ -3208,11 +3208,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   if (second) secondTo = destination(2, n);
                   if (third) thirdTo = destination(3, n);
                 }, batter: true),
-                if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, if (!defensiveError) ...[-2, -3, -4]],
+                if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, if (defensiveError) -1, -2, -3, -4],
                     (n) => firstTo = n),
-                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [3, 0, if (!defensiveError) ...[-3, -4]],
+                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [3, 0, if (defensiveError) -2, -3, -4],
                     (n) => secondTo = n),
-                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [0, if (!defensiveError) -4],
+                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [0, if (defensiveError) -3, -4],
                     (n) => thirdTo = n),
                 if (outCount > 1)
                   DropdownButtonFormField<int>(
@@ -3236,19 +3236,17 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     value: countRunsOnThirdOut,
                     onChanged: (value) => update(() => countRunsOnThirdOut = value == true),
                   ),
-                if (outCount > 1 || (defensiveError && outCount > 0))
+                if (outCount > 1)
                   const Text(
-                    'Los outs múltiples y los corredores retirados por error defensivo '
-                    'todavía no están habilitados. Esta jugada no se enviará.',
+                    'Esta jugada admite un solo out de corredor.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
                 if (defensiveError)
-                  const Text('Se sumará 1 error al equipo a la defensa y 0 hits. '
-                    'Los outs de corredores durante un error todavía no están habilitados.',
+                  const Text('Se sumará 1 error al equipo a la defensa y 0 hits.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
                 if (outCount == 1)
                   Text(
                     'Retirado: corredor de ${retired == 0 ? 'primera' : retired == 1 ? 'segunda' : 'tercera'} '
-                    '· out en ${destinations[retired] == -4 ? 'HOME' : destinations[retired] == -3 ? 'TERCERA' : 'SEGUNDA'}',
+                    '· out en ${destinations[retired] == -4 ? 'HOME' : destinations[retired] == -3 ? 'TERCERA' : destinations[retired] == -2 ? 'SEGUNDA' : 'PRIMERA'}',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                 if (runs != null) Text('Carreras de la jugada: $runs'),
@@ -3261,7 +3259,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   child: const Text('CANCELAR')),
               FilledButton(onPressed: runs == null ||
                   (outCount > 1 && lastOutSource == null) ||
-                  (outCount > 1 || (defensiveError && outCount > 0)) ? null : () =>
+                  outCount > 1 ? null : () =>
                   Navigator.pop(dialogContext, {
                     'p_batter_id': batterId,
                     'p_batter_base': batterBase,
@@ -3489,6 +3487,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             ],
           ),
         ),
+        if (snapshot?.knockoutPending case final Map pending)
+          Text('${pending['reason']} · diferencia ${pending['difference']} · '
+              '${snapshot!.awayRuns}–${snapshot.homeRuns}'),
         SwlSecondaryActions(
           children: [
             if (allowed)
@@ -3497,11 +3498,31 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               _secondaryAction(undoDp
                   ? 'Deshacer doble play' : 'Deshacer último OUT',
                   _liveActionInFlight ? null : _undoLastLiveOut),
-            if (snapshot != null) ..._cancellationButtons(snapshot, userId),
+            if (snapshot != null && snapshot.canVoteKnockout(userId) &&
+                widget.onMatchDecision != null)
+              for (final (action, label) in const [
+                ('KO_FINISH', 'Finalizar partido'), ('KO_CONTINUE', 'Continuar jugando'),
+              ])
+                _secondaryAction(label, _liveActionInFlight ? null : () async {
+                  final accepted = await showDialog<bool>(context: context, builder: (dialog) =>
+                    AlertDialog(title: Text(label), actions: [
+                      TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Volver')),
+                      FilledButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Confirmar')),
+                    ]));
+                  if (mounted && accepted == true && _currentLiveSnapshot?.version == snapshot.version) {
+                    await _sendMatchDecision(snapshot, action);
+                  }
+                }),
+            if (snapshot?.knockoutPending == null && snapshot != null)
+              ..._cancellationButtons(snapshot, userId),
             if (snapshot != null) ..._matchDecisionButtons(snapshot, userId, labels: false),
           ],
         ),
-        if (snapshot?.status == 'OFFICIAL') SwlShareBoxScoreButton(gameId: snapshot!.gameId),
+        if (snapshot?.status == 'OFFICIAL')
+          if (widget.onLiveDetails case final VoidCallback open)
+            _secondaryAction('Compartir Box Score', open)
+          else
+            SwlShareBoxScoreButton(gameId: snapshot!.gameId),
         if (snapshot != null) ..._matchDecisionButtons(snapshot, userId, labels: true),
         if (snapshot?.status == 'CANCELLED')
           const Text('Partido cancelado por ambos mánagers'),

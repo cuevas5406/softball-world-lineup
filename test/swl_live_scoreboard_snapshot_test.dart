@@ -91,43 +91,73 @@ void main() {
     );
   });
 
-  test('Ambos mánagers pueden solicitar la cancelación y solo el otro responde', () {
-    final row = game(status: 'SCHEDULED');
-    final scheduled = SwlLiveScoreboardSnapshot.fromGame(row);
-    expect(scheduled.cancellationActions('home-manager'), {'CANCEL_REQUEST'});
-    expect(scheduled.cancellationActions('away-manager'), {'CANCEL_REQUEST'});
-    row['swl_cancel_requested_by'] = 'away-manager';
-    final requested = SwlLiveScoreboardSnapshot.fromGame(row);
-    expect(requested.cancellationActions('away-manager'), isEmpty);
-    expect(requested.cancellationActions('home-manager'), {'CANCEL_ACCEPT', 'CANCEL_REJECT'});
-    expect(requested.cancellationActions('fan'), isEmpty);
-    row['status'] = 'CANCELLED';
-    final cancelled = SwlLiveScoreboardSnapshot.fromGame(row);
-    expect(cancelled.cancellationActions('home-manager'), isEmpty);
-    expect(cancelled.canScore('away-manager'), isFalse);
-  });
+  test(
+    'Ambos mánagers pueden solicitar la cancelación y solo el otro responde',
+    () {
+      final row = game(status: 'SCHEDULED');
+      final scheduled = SwlLiveScoreboardSnapshot.fromGame(row);
+      expect(scheduled.cancellationActions('home-manager'), {'CANCEL_REQUEST'});
+      expect(scheduled.cancellationActions('away-manager'), {'CANCEL_REQUEST'});
+      row['swl_cancel_requested_by'] = 'away-manager';
+      final requested = SwlLiveScoreboardSnapshot.fromGame(row);
+      expect(requested.cancellationActions('away-manager'), isEmpty);
+      expect(requested.cancellationActions('home-manager'), {
+        'CANCEL_ACCEPT',
+        'CANCEL_REJECT',
+      });
+      expect(requested.cancellationActions('fan'), isEmpty);
+      row['status'] = 'CANCELLED';
+      final cancelled = SwlLiveScoreboardSnapshot.fromGame(row);
+      expect(cancelled.cancellationActions('home-manager'), isEmpty);
+      expect(cancelled.canScore('away-manager'), isFalse);
+    },
+  );
 
-  test('Cancelación local permite responder solo al visitante durante el juego', () {
-    final row = game()..['swl_cancel_requested_by'] = 'home-manager';
-    final pending = SwlLiveScoreboardSnapshot.fromGame(row);
-    expect(pending.cancellationActions('home-manager'), isEmpty);
-    expect(pending.cancellationActions('away-manager'), {'CANCEL_ACCEPT', 'CANCEL_REJECT'});
-    expect(pending.canScore('away-manager'), isTrue);
+  test(
+    'Cancelación local permite responder solo al visitante durante el juego',
+    () {
+      final row = game()..['swl_cancel_requested_by'] = 'home-manager';
+      final pending = SwlLiveScoreboardSnapshot.fromGame(row);
+      expect(pending.cancellationActions('home-manager'), isEmpty);
+      expect(pending.cancellationActions('away-manager'), {
+        'CANCEL_ACCEPT',
+        'CANCEL_REJECT',
+      });
+      expect(pending.canScore('away-manager'), isTrue);
 
-    final rejected = SwlLiveScoreboardSnapshot.fromGame(
-      {...row, 'swl_cancel_requested_by': null},
-    );
-    expect(rejected.cancellationActions('away-manager'), {'CANCEL_REQUEST'});
-    expect(rejected.canScore('away-manager'), isTrue);
+      final rejected = SwlLiveScoreboardSnapshot.fromGame({
+        ...row,
+        'swl_cancel_requested_by': null,
+      });
+      expect(rejected.cancellationActions('away-manager'), {'CANCEL_REQUEST'});
+      expect(rejected.canScore('away-manager'), isTrue);
 
-    final cancelled = SwlLiveScoreboardSnapshot.fromGame(
-      {...row, 'status': 'CANCELLED', 'swl_cancel_requested_by': null},
-    );
-    expect(cancelled.cancellationActions('away-manager'), isEmpty);
-    expect(cancelled.cancellationActions('home-manager'), isEmpty);
-    expect(cancelled.scoringBlock('away-manager'),
-        'Partido cancelado. No se pueden registrar jugadas.');
-  });
+      final cancelled = SwlLiveScoreboardSnapshot.fromGame({
+        ...row,
+        'status': 'CANCELLED',
+        'swl_cancel_requested_by': null,
+      });
+      expect(cancelled.cancellationActions('away-manager'), isEmpty);
+      expect(cancelled.cancellationActions('home-manager'), isEmpty);
+      expect(
+        cancelled.scoringBlock('away-manager'),
+        'Partido cancelado. No se pueden registrar jugadas.',
+      );
+    },
+  );
+
+  test(
+    'la consulta de knockout congela anotación y registra un voto por lado',
+    () {
+      final row = game()..['swl_knockout_pending'] = {'away_continue': true};
+      final pending = SwlLiveScoreboardSnapshot.fromGame(row);
+      expect(pending.canScore('away-manager'), isFalse);
+      expect(pending.canVoteKnockout('away-manager'), isFalse);
+      expect(pending.canVoteKnockout('home-manager'), isTrue);
+      expect(pending.canVoteKnockout('fan'), isFalse);
+      expect(pending.matchActions('home-manager'), isEmpty);
+    },
+  );
 
   test('En FINAL se bloquea la anotación y la firma es individual', () {
     final row = {...game(status: 'FINAL'), 'swl_home_signed': true};
