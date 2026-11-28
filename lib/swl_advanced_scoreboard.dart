@@ -1,3 +1,4 @@
+import 'swl_secondary_actions.dart';
 import 'swl_double_play.dart';
 import 'swl_official_box_score.dart';
 import 'swl_history_events.dart';
@@ -452,6 +453,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   final _historyScroll = ScrollController();
   final _historyPlayers = <String, Map<String, dynamic>>{};
+  String? _reversibleDpGame;
+  int? _reversibleDpVersion;
+  String? _reversibleDpManager;
   bool _historyLoading = false;
   bool _historyQueued = false;
   Completer<void>? _historyIdleCompleter;
@@ -524,12 +528,37 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       });
       final seen = <String>{};
       events.removeWhere((event) => event['id'] != null && !seen.add(event['id'].toString()));
+      final dp = events.where((e) => e['event_type'] == 'DOUBLE_PLAY').toList();
+      final dpPitchers = <Object?, String>{};
+      for (var start = 0; start < dp.length; start += 40) {
+        try {
+          final rows = await client.from('swl_v56_pitching_events')
+              .select('version,pitcher_id').eq('game_id', live.gameId)
+              .inFilter('version', dp.skip(start).take(40)
+                  .map((e) => e['version']).whereType<int>().toList())
+              .timeout(const Duration(seconds: 4));
+          for (final row in rows) {
+            if (row['pitcher_id'] case final String id) dpPitchers[row['version']] = id;
+          }
+        } catch (_) {
+          // El historial puede estar disponible sin permiso a la bitácora.
+          break;
+        }
+      }
+      final reversed = {
+        for (final e in events)
+          if (e['event_type'] == 'UNDO_OUT' && e['event_data'] is Map)
+            e['event_data']['reverts_version'],
+      };
+      final latestDp = dp.where((e) => e['version'] == live.version &&
+          e['event_data'] is Map && e['event_data']['pitcher_id'] is String).firstOrNull;
       final ids = <String>{
+        ...dpPitchers.values,
         for (final event in events)
           if (event['event_data'] case final Map data) ...{
             for (final key in ['batter_id', 'runner_id', 'last_out_player_id', 'out_runner_id'])
               if (data[key] case final Object id) id.toString(),
-            for (final key in ['outgoing_player_id', 'incoming_player_id'])
+            for (final key in ['outgoing_player_id', 'incoming_player_id', 'pitcher_id'])
               if (data[key] case final Object id) id.toString(),
           },
       };
@@ -556,6 +585,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             if (row['id'] != null && row['name'] != null)
               row['id'].toString(): row['name'].toString(),
       };
+      _reversibleDpGame = live.gameId;
+      _reversibleDpVersion = latestDp?['version'] as int?;
+      _reversibleDpManager = latestDp == null ? null :
+          latestDp['is_top'] == true ? live.awayManagerId : live.homeManagerId;
       final history = events.map((event) {
         final raw = event['event_data'];
         final data = raw is Map ? raw : const {};
@@ -593,9 +626,15 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         // retirado y el bateador. Mostrar ambos sin atribuir el out a uno solo.
         final dpBatter = players[data['batter_id']?.toString()];
         final dpBatterName = '${dpBatter?['first_name'] ?? ''} ${dpBatter?['last_name'] ?? ''}'.trim();
-        final dpDescription = action == 'DOUBLE_PLAY' && dpBatterName.isNotEmpty
-            ? 'Doble play · bateador: $dpBatterName'
-            : 'Doble play';
+        final pitcherId = data['pitcher_id'] ?? dpPitchers[event['version']];
+        final pitcher = players[pitcherId?.toString()];
+        final pitcherName = '${pitcher?['first_name'] ?? ''} ${pitcher?['last_name'] ?? ''}'.trim();
+        final historicalPitcher = pitcherName.isNotEmpty ? pitcherName : publicNames[pitcherId];
+        final dpDescription = [
+          if (dpBatterName.isNotEmpty) 'Doble play · bateador: $dpBatterName' else 'Doble play',
+          if (historicalPitcher != null) 'pitcher: $historicalPitcher',
+          if (reversed.contains(event['version'])) 'anulado',
+        ].join(' · ');
         final hitBase = int.tryParse('${data['batter_base']}');
         final (notation, description) = switch (action) {
           'HIT' => switch (hitBase) {
@@ -3222,18 +3261,36 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
 
   // Reversión segura: solo el último OUT simple y con confirmación.
   // El servidor valida la versión, los permisos y el turno antes de modificar datos.
+  bool _canUndoDp(SwlLiveScoreboardSnapshot game, String? uid) =>
+      uid != null && uid == _reversibleDpManager &&
+      game.gameId == _reversibleDpGame && game.version == _reversibleDpVersion &&
+      (game.status == 'IN_PROGRESS' || game.status == 'FINAL') &&
+      !game.homeSigned && !game.awaySigned && widget.onLiveAction != null;
+
+  Widget _secondaryAction(String label, VoidCallback? action) => OutlinedButton(
+    style: OutlinedButton.styleFrom(
+      foregroundColor: Colors.amber,
+      side: const BorderSide(color: Colors.amber),
+      minimumSize: const Size(48, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+    ),
+    onPressed: action,
+    child: Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11)),
+  );
+
   Future<void> _undoLastLiveOut() async {
     final snapshot = _currentLiveSnapshot;
     final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (_liveActionInFlight || snapshot == null || !snapshot.canScore(uid)) return;
+    if (_liveActionInFlight || snapshot == null ||
+        (!snapshot.canScore(uid) && !_canUndoDp(snapshot, uid))) return;
+    final undoDp = _canUndoDp(snapshot, uid);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialog) => AlertDialog(
-        title: const Text('Deshacer último out'),
-        content: const Text(
-          'Solo se puede revertir el último OUT sencillo. '
-          'Se restaurarán el turno al bate y las estadísticas del lanzador. '
-          'La corrección quedará registrada en el historial.'),
+        title: Text(undoDp ? 'Deshacer doble play' : 'Deshacer último out'),
+        content: Text(undoDp
+            ? 'Se restaurarán los corredores, el marcador, los outs y el turno anteriores. La corrección quedará registrada.'
+            : 'Se restaurarán el turno al bate y las estadísticas del lanzador del último OUT sencillo. La corrección quedará registrada.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialog, false),
               child: const Text('CANCELAR')),
@@ -3336,59 +3393,47 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     }
   }
 
-  List<Widget> _matchDecisionButtons(SwlLiveScoreboardSnapshot game, String? userId) {
+  List<Widget> _matchDecisionButtons(SwlLiveScoreboardSnapshot game, String? userId, {required bool labels}) {
     if (widget.onMatchDecision == null || userId == null ||
         (userId != game.homeManagerId && userId != game.awayManagerId)) return [];
     final actions = game.matchActions(userId);
-    Widget decision(String text, String action) => TextButton(
-      onPressed: _liveActionInFlight || !actions.contains(action) ? null : () => _sendMatchDecision(game, action),
-      child: Text(text),
-    );
+    Widget decision(String text, String action) => _secondaryAction(text,
+      _liveActionInFlight || !actions.contains(action) ? null : () => _sendMatchDecision(game, action));
     if (game.status == 'IN_PROGRESS') {
       final requestedBy = game.finishRequestedBy;
-      if (requestedBy == userId) return [const Text('Cierre solicitado · esperando al otro mánager')];
+      if (requestedBy == userId) return [if (labels) const Text('Cierre solicitado · esperando al otro mánager')];
       if (actions.contains('ACCEPT')) return [
-        const Text('El otro mánager solicita terminar el partido.'),
-        Wrap(children: [decision('Aceptar cierre', 'ACCEPT'), decision('Rechazar cierre', 'REJECT')]),
+        if (labels) const Text('El otro mánager solicita terminar el partido.')
+        else ...[decision('Aceptar cierre', 'ACCEPT'), decision('Rechazar cierre', 'REJECT')],
       ];
       if (actions.contains('REQUEST')) {
-        return [decision('Terminar partido', 'REQUEST')];
+        return [if (!labels) decision('Terminar partido', 'REQUEST')];
       }
     }
     if (game.status == 'FINAL') {
       final signed = userId == game.homeManagerId ? game.homeSigned : game.awaySigned;
-      return [Text(game.finishReason ?? 'Partido finalizado'),
-        if (signed) const Text('Firma registrada · esperando la otra firma')
-        else decision('Firmar resultado', 'SIGN')];
+      return [
+        if (labels) ...[
+          Text(game.finishReason ?? 'Partido finalizado'),
+          if (signed) const Text('Firma registrada · esperando la otra firma'),
+        ] else if (!signed) decision('Firmar resultado', 'SIGN'),
+      ];
     }
-    if (game.status == 'OFFICIAL') return [const Text('Resultado oficial · dos firmas')];
+    if (game.status == 'OFFICIAL') return [if (labels) const Text('Resultado oficial · dos firmas')];
     return [];
   }
 
   List<Widget> _cancellationButtons(SwlLiveScoreboardSnapshot game, String? userId) {
-    if (game.status == 'CANCELLED') return [const Text('Partido cancelado por ambos mánagers')];
-    if (widget.onMatchDecision == null || userId == null) return [];
+    if (widget.onMatchDecision == null) return [];
     final actions = game.cancellationActions(userId);
-    if (actions.isEmpty && game.cancelRequestedBy == userId &&
-        (game.status == 'SCHEDULED' || game.status == 'IN_PROGRESS')) {
-      return [const Text('Cancelación solicitada · esperando al otro mánager')];
-    }
-    if (actions.isEmpty) return [];
     return [
-      if (actions.contains('CANCEL_ACCEPT'))
-        const Text('El otro mánager solicitó cancelar el partido.'),
-      Wrap(children: [
-        for (final (action, label) in const [
-          ('CANCEL_REQUEST', 'Solicitar cancelación'),
-          ('CANCEL_ACCEPT', 'Confirmar cancelación'),
-          ('CANCEL_REJECT', 'Rechazar cancelación'),
-        ])
-          if (actions.contains(action))
-            TextButton(
-              onPressed: _liveActionInFlight ? null : () => _sendMatchDecision(game, action),
-              child: Text(label),
-            ),
-      ]),
+      for (final (action, label) in const [
+        ('CANCEL_REQUEST', 'Solicitar cancelación'),
+        ('CANCEL_ACCEPT', 'Confirmar cancelación'),
+        ('CANCEL_REJECT', 'Rechazar cancelación'),
+      ])
+        if (actions.contains(action))
+          _secondaryAction(label, _liveActionInFlight ? null : () => _sendMatchDecision(game, action)),
     ];
   }
 
@@ -3415,6 +3460,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
         ),
       ),
     );
+    final undoDp = snapshot != null && _canUndoDp(snapshot, userId);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -3429,17 +3475,29 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           liveButton('OUT', 'OUT', const Color(0xFFF59E0B)),
           liveButton('BATAZO / HIT', 'HIT', const Color(0xFF8B5CF6)),
         ]),
-        if (allowed)
-          TextButton.icon(
-            onPressed: _liveActionInFlight ? null : () => _submitLiveAction('ERROR'),
-            icon: const Icon(Icons.error_outline, size: 18),
-            label: const Text('ERROR DEFENSIVO (E)'),
-          ),
-        if (allowed)
-          TextButton(onPressed: _undoLastLiveOut, child: const Text('Deshacer último OUT')),
+        SwlSecondaryActions(
+          children: [
+            if (allowed)
+              _secondaryAction('Error defensivo (E)', () => _submitLiveAction('ERROR')),
+            if (allowed || undoDp)
+              _secondaryAction(undoDp
+                  ? 'Deshacer doble play' : 'Deshacer último OUT',
+                  _liveActionInFlight ? null : _undoLastLiveOut),
+            if (snapshot != null) ..._cancellationButtons(snapshot, userId),
+            if (snapshot != null) ..._matchDecisionButtons(snapshot, userId, labels: false),
+          ],
+        ),
         if (snapshot?.status == 'OFFICIAL') SwlShareBoxScoreButton(gameId: snapshot!.gameId),
-        if (snapshot != null) ..._matchDecisionButtons(snapshot, userId),
-        if (snapshot != null) ..._cancellationButtons(snapshot, userId),
+        if (snapshot != null) ..._matchDecisionButtons(snapshot, userId, labels: true),
+        if (snapshot?.status == 'CANCELLED')
+          const Text('Partido cancelado por ambos mánagers'),
+        if (widget.onMatchDecision != null &&
+            (snapshot?.status == 'SCHEDULED' || snapshot?.status == 'IN_PROGRESS') &&
+            snapshot?.cancelRequestedBy != null && snapshot!.cancelRequestedBy == userId)
+          const Text('Cancelación solicitada · esperando al otro mánager'),
+        if (widget.onMatchDecision != null &&
+            snapshot?.cancellationActions(userId).contains('CANCEL_ACCEPT') == true)
+          const Text('El otro mánager solicitó cancelar el partido.'),
       ]),
     );
   }

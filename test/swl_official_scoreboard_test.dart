@@ -138,6 +138,19 @@ void main() {
         if (request.url.path.endsWith('/swl_game_events')) {
           return jsonResponse([
             {
+              'id': 'dp',
+              'version': 2,
+              'inning': 2,
+              'is_top': true,
+              'batting_team_id': 'visitante',
+              'event_type': 'DOUBLE_PLAY',
+              'event_data': {
+                'batter_id': 'in',
+                'runner_id': 'out',
+                'outs_added': 2,
+              },
+            },
+            {
               'id': 'sust',
               'version': 3,
               'inning': 2,
@@ -150,6 +163,11 @@ void main() {
                 'batting_order': 6,
               },
             },
+          ]);
+        }
+        if (request.url.path.endsWith('/swl_v56_pitching_events')) {
+          return jsonResponse([
+            {'version': 2, 'pitcher_id': 'p1'},
           ]);
         }
         if (request.url.path.endsWith('/swl_v56_pitcher_changes')) {
@@ -201,6 +219,12 @@ void main() {
       expect(
         find.textContaining(
           'Locales: Cambio de pitcher · posición P · sale Lanzador A · entra Lanzador B',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'Doble play · bateador: Entrante · pitcher: Lanzador A',
         ),
         findsOneWidget,
       );
