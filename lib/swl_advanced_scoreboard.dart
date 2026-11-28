@@ -3267,16 +3267,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       (game.status == 'IN_PROGRESS' || game.status == 'FINAL') &&
       !game.homeSigned && !game.awaySigned && widget.onLiveAction != null;
 
-  Widget _secondaryAction(String label, VoidCallback? action) => OutlinedButton(
-    style: OutlinedButton.styleFrom(
-      foregroundColor: Colors.amber,
-      side: const BorderSide(color: Colors.amber),
-      minimumSize: const Size(48, 48),
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-    ),
-    onPressed: action,
-    child: Text(label, textAlign: TextAlign.center, style: const TextStyle(fontSize: 11)),
-  );
+  Widget _secondaryAction(String label, VoidCallback? action) =>
+      SwlSecondaryAction(label: label, onPressed: action);
 
   Future<void> _undoLastLiveOut() async {
     final snapshot = _currentLiveSnapshot;
@@ -3443,9 +3435,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
     final block = snapshot?.scoringBlock(userId, authorized: widget.onLiveAction != null);
     final allowed = snapshot != null && block == null && !_liveActionInFlight;
     Widget liveButton(String label, String action, Color color) => Expanded(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 3),
-        child: ElevatedButton(
+      child: ElevatedButton(
           style: ElevatedButton.styleFrom(backgroundColor: color,
             disabledBackgroundColor: const Color(0xFF26313C),
             padding: const EdgeInsets.symmetric(vertical: 15)),
@@ -3457,7 +3447,6 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           onLongPress: allowed && action == 'STRIKE' ? () => _submitLiveAction('FOUL') : null,
           child: Text(label, style: const TextStyle(fontSize: 12,
             fontWeight: FontWeight.w900, color: Colors.white)),
-        ),
       ),
     );
     final undoDp = snapshot != null && _canUndoDp(snapshot, userId);
@@ -3469,12 +3458,18 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             style: const TextStyle(color: Colors.amber, fontSize: 11)),
         if (_liveActionError != null)
           Text(_liveActionError!, style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
-        Row(children: [
-          liveButton('BOLA', 'BALL', const Color(0xFF10B981)),
-          liveButton('STRIKE', 'STRIKE', const Color(0xFFEF4444)),
-          liveButton('OUT', 'OUT', const Color(0xFFF59E0B)),
-          liveButton('BATAZO / HIT', 'HIT', const Color(0xFF8B5CF6)),
-        ]),
+        IntrinsicHeight(
+          child: Row(
+            spacing: 6,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              liveButton('BOLA', 'BALL', const Color(0xFF10B981)),
+              liveButton('STRIKE', 'STRIKE', const Color(0xFFEF4444)),
+              liveButton('OUT', 'OUT', const Color(0xFFF59E0B)),
+              liveButton('BATAZO / HIT', 'HIT', const Color(0xFF8B5CF6)),
+            ],
+          ),
+        ),
         SwlSecondaryActions(
           children: [
             if (allowed)
