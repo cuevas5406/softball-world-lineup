@@ -2758,7 +2758,26 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       await _sendSpecial('RUNNER_OUT', {'source': base, 'destination': outAt});
       return;
     }
-    await _sendSpecial('RUNNER_MOVE', {'source': base, 'destination': choice});
+    final cause = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheet) => SafeArea(child: SingleChildScrollView(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const ListTile(title: Text('Motivo del avance')),
+          for (final (code, label) in const [
+            ('STEAL', 'Base robada'),
+            ('WILD_PITCH', 'Lanzamiento descontrolado'),
+            ('PASSED_BALL', 'Bola pasada del receptor'),
+            ('UNKNOWN', 'Otro motivo o sin determinar'),
+          ])
+            ListTile(title: Text(label), onTap: () => Navigator.pop(sheet, code)),
+        ],
+      ))),
+    );
+    if (!mounted || cause == null || _currentLiveSnapshot?.version != game.version) return;
+    await _sendSpecial('RUNNER_MOVE', {
+      'source': base, 'destination': choice, 'advance_cause': cause,
+    });
   }
 
   Future<void> _chooseRunnerReplacement(SwlLiveScoreboardSnapshot game, int base) async {

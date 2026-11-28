@@ -108,7 +108,9 @@ class SwlPitchRunCredit {
     var missedOuts = 0;
     var unknownOuts = 0;
     var recorded = 0;
-    var uncertainAdvance = false;
+    var uncertainErrorAdvance = false;
+    final uncertainRunners = <String>{};
+    var unidentifiedAdvance = false;
     String? activePitcher;
     for (final play in plays) {
       final data = play['event_data'];
@@ -123,13 +125,23 @@ class SwlPitchRunCredit {
       if (type == 'SUBSTITUTION') {
         final runner = bases.remove(data['outgoing_player_id']);
         final incoming = data['incoming_player_id'];
-        if (runner != null && incoming is String) bases[incoming] = runner;
+        if (runner != null && incoming is String) {
+          bases[incoming] = runner;
+          if (uncertainRunners.remove(data['outgoing_player_id'])) {
+            uncertainRunners.add(incoming);
+          }
+        }
         continue;
       }
       if (type == 'RUNNER_REPLACE' && data['outgoing_player_id'] is String) {
         final runner = bases.remove(data['outgoing_player_id']);
         final incoming = data['incoming_player_id'] ?? data['runner_id'];
-        if (runner != null && incoming is String) bases[incoming] = runner;
+        if (runner != null && incoming is String) {
+          bases[incoming] = runner;
+          if (uncertainRunners.remove(data['outgoing_player_id'])) {
+            uncertainRunners.add(incoming);
+          }
+        }
         continue;
       }
       if (type == 'GHOST_RUNNER') {
@@ -153,6 +165,7 @@ class SwlPitchRunCredit {
           (error && (data['batter_base'] as num? ?? 0) > 0) ||
           (type == 'BALL' && completed);
       if (reached && batter is String) {
+        uncertainRunners.remove(batter);
         bases[batter] = (
           pitcher: pitcher,
           stint: stint,
@@ -166,9 +179,16 @@ class SwlPitchRunCredit {
         } else {
           unknownOuts++;
         }
-        uncertainAdvance = true;
+        uncertainErrorAdvance = true;
       }
-      if (type == 'RUNNER_MOVE') uncertainAdvance = true;
+      if (type == 'RUNNER_MOVE' &&
+          !const {'STEAL', 'WILD_PITCH'}.contains(data['advance_cause'])) {
+        if (data['runner_id'] case final String id) {
+          uncertainRunners.add(id);
+        } else {
+          unidentifiedAdvance = true;
+        }
+      }
       final scorers = data['scoring_player_ids'];
       final ids = scorers is List
           ? scorers.whereType<String>().toSet()
@@ -182,6 +202,10 @@ class SwlPitchRunCredit {
       }
       for (final id in ids) {
         final runner = bases.remove(id);
+        final uncertainAdvance =
+            uncertainRunners.remove(id) ||
+            unidentifiedAdvance ||
+            uncertainErrorAdvance;
         final owner = runner?.pitcher;
         if (runner == null || (owner == null && !runner.ghost)) {
           _unknownCharge.add(team);
@@ -221,6 +245,8 @@ class SwlPitchRunCredit {
       if (type == 'RUNNER_OUT' || type == 'DOUBLE_PLAY' || type == 'HIT') {
         if (type != 'HIT' || data['runner_id'] != null)
           bases.remove(data['runner_id']);
+        uncertainRunners.remove(data['runner_id']);
+
         // Legacy hit events may encode outs by destination without an ID.
         // The runner cannot score unless a later official play identifies them.
       }

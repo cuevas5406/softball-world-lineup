@@ -43,3 +43,15 @@ La lectura confirma las carreras permitidas. La clasificación de esa
 carrera de la versión 47 queda pendiente: el historial no dice cómo
 se produjo el avance ni reconstruye toda la jugada sin ese avance.
 Cambiar un mínimo por una cifra exacta requeriría evidencia adicional.
+
+## Corrección Flutter de avances futuros
+
+La pizarra permite registrar el motivo al mover un corredor: robo, wild pitch,
+bola pasada u otro motivo. La RPC de jugadas especiales instalada acepta
+`p_data` y conserva ese JSON en el historial. Para este campo no hace falta
+migración. Robo y wild pitch documentados no generan incertidumbre por sí
+solos. Para bola pasada o causa desconocida se conserva la incertidumbre
+cuando afecta al anotador y no puede resolverse con una jugada posterior
+como el jonrón. El agregador conserva esa marca al sustituir al corredor.
+El Box Score explica el símbolo ≥. El avance existente de la versión 46
+queda sin causa registrada.

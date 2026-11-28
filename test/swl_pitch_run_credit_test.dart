@@ -40,6 +40,52 @@ SwlRow game(int away, {int home = 0}) => {
 };
 
 void main() {
+  test('un avance desconocido no afecta a otro corredor que anota', () {
+    final stats = SwlGameBoxData(
+      game(2),
+      [
+        play(1, 'HIT', hit('known')),
+        play(2, 'HIT', hit('uncertain')),
+        play(3, 'RUNNER_MOVE', {'runner_id': 'uncertain'}),
+        play(4, 'HIT', {
+          'batter_id': 'b',
+          'batter_base': 1,
+          'runs': 2,
+          'scoring_player_ids': ['known', 'uncertain'],
+        }),
+      ],
+      [pitch(1, 'p'), pitch(2, 'p'), pitch(4, 'p')],
+    );
+    expect(stats.runCredit.cleanLabel('home', 'p'), '≥1');
+    expect(stats.runCredit.cleanTotalLabel('home'), '≥1');
+  });
+
+  test(
+    'la causa registrada distingue robo, wild pitch y avance no clasificable',
+    () {
+      for (final cause in ['STEAL', 'WILD_PITCH', 'PASSED_BALL', 'UNKNOWN']) {
+        final stats = SwlGameBoxData(
+          game(1),
+          [
+            play(1, 'HIT', hit('runner')),
+            play(2, 'RUNNER_MOVE', {
+              'runner_id': 'runner',
+              'advance_cause': cause,
+              'runs': 1,
+              'scoring_player_ids': ['runner'],
+            }),
+          ],
+          [pitch(1, 'p')],
+        );
+        expect(stats.runCredit.runs('home', 'p'), 1);
+        expect(
+          stats.runCredit.cleanRuns('home', 'p'),
+          ['STEAL', 'WILD_PITCH'].contains(cause) ? 1 : null,
+        );
+      }
+    },
+  );
+
   test('DP con carrera acredita dos outs, un pitcheo, una PA y C/CL', () {
     final stats = SwlGameBoxData(
       game(1),

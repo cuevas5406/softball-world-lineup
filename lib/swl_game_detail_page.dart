@@ -545,6 +545,15 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
           const SliverToBoxAdapter(
             child: Text('Conteo parcial · hay jugadas sin pitcher acreditado.'),
           ),
+        if (stats.runCredit.cleanTotal(team) == null ||
+            orderedPitchers.any(
+              (id) => stats.runCredit.cleanRuns(team, id) == null,
+            ))
+          const SliverToBoxAdapter(
+            child: Text(
+              'CL parcial · ≥ indica el mínimo confirmado por el historial.',
+            ),
+          ),
         table('Pitcheo', SwlGameBoxData.pitchingLabels, [
           for (final id in orderedPitchers)
             (
