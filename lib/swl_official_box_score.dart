@@ -251,6 +251,12 @@ class SwlOfficialBoxScore {
       headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
       cellStyle: const pw.TextStyle(fontSize: 9),
       cellAlignment: pw.Alignment.center,
+      cellPadding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+      columnWidths: {
+        0: pw.FlexColumnWidth(rows.first.length > 7 ? 4 : 2),
+        for (var column = 1; column < rows.first.length; column++)
+          column: const pw.FlexColumnWidth(),
+      },
     );
     final batting = swlRows(data['batting'])
         .where((row) => row['name'] != null);
@@ -267,7 +273,7 @@ class SwlOfficialBoxScore {
             await rootBundle.load('assets/fonts/NotoSans-Bold.ttf'),
           ),
         ),
-        margin: const pw.EdgeInsets.all(28),
+        margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 18),
         header: (_) =>
             pw.Text('SWL · $code', style: const pw.TextStyle(fontSize: 9)),
         footer: (context) =>
@@ -299,20 +305,25 @@ class SwlOfficialBoxScore {
                   ),
             ],
           ),
-          pw.Header(level: 0, text: headline),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            headline,
+            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+          ),
           pw.Text(detail),
           if (reports.isNotEmpty)
             pw.Text(
               'mín. = mínimo confirmado',
               style: const pw.TextStyle(fontSize: 8),
             ),
-          pw.SizedBox(height: 15),
-          for (final block in tables) ...[
-            table(block),
-            pw.SizedBox(height: 10),
-          ],
+          pw.SizedBox(height: 8),
+          for (final block in tables) ...[table(block), pw.SizedBox(height: 5)],
           for (final (team, report) in reportSections(teamId)) ...[
-            pw.Header(level: 1, text: '${report.title} · $team'),
+            pw.SizedBox(height: 7),
+            pw.Text(
+              '${report.title} · $team',
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+            ),
             table([
               ['Pelotero', ...report.labels],
               for (final (name, values) in report.rows) [name, ...values],
@@ -447,22 +458,27 @@ class SwlOfficialBoxScore {
       double w,
       double size, {
       Color color = Colors.white,
+      int lines = 1,
     }) {
       final layout = TextPainter(
         text: TextSpan(
           text: value,
           style: TextStyle(
             color: color,
+            fontFamily: 'SwlReport',
             fontSize: size,
             fontWeight: FontWeight.w700,
           ),
         ),
-        maxLines: 1,
+        maxLines: lines,
         ellipsis: '…',
         textDirection: ui.TextDirection.ltr,
         textAlign: TextAlign.center,
       )..layout(minWidth: w, maxWidth: w);
-      layout.paint(canvas, Offset(x, y));
+      layout.paint(
+        canvas,
+        Offset(x, y + (lines == 2 ? (56 - layout.height) / 2 : 0)),
+      );
       layout.dispose();
     }
 
@@ -515,7 +531,7 @@ class SwlOfficialBoxScore {
         ? Colors.amber
         : Color(0xff000000 | accentValue);
     canvas.drawRect(
-      const Rect.fromLTWH(24, 157, 1032, 8),
+      const Rect.fromLTWH(24, 171, 1032, 8),
       Paint()..color = accent,
     );
     text('SOFTBALL WORLD LINEUP', 80, 118, 920, 38, color: Colors.amber);
@@ -544,13 +560,15 @@ class SwlOfficialBoxScore {
             ? name
             : '${name.substring(split + 3)} · ${name.substring(0, split)}',
         27,
-        y + 13,
+        y,
         nameWidth - 6,
-        24,
+        22,
+        lines: 2,
       );
       for (var column = 1; column < block[row].length; column++) {
+        final value = block[row][column];
         text(
-          block[row][column],
+          value.startsWith('≥') ? 'm${value.substring(1)}' : value,
           24 + nameWidth + (column - 1) * cell,
           y + 13,
           cell,
@@ -558,7 +576,7 @@ class SwlOfficialBoxScore {
         );
       }
     }
-    text('≥ Mínimo confirmado · — Dato no disponible', 40, 1800, 1000, 24);
+    text('m = mínimo confirmado · — Dato no disponible', 40, 1800, 1000, 24);
     text('$code · $index/$total', 40, 1850, 1000, 28, color: Colors.amber);
     final picture = recorder.endRecording();
     try {

@@ -18,12 +18,14 @@ class SwlGameDetailPage extends StatefulWidget {
     required this.teamName,
     required this.teamLogo,
     this.teamColor,
+    this.spectator = false,
     this.substitute,
     this.changePitcher,
   });
 
   final String gameId;
   final bool boxScore;
+  final bool spectator;
   final String Function(String) teamName;
   final String? Function(String) teamLogo;
   final String? Function(String)? teamColor;
@@ -111,30 +113,52 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     _loading = true;
     final failuresBefore = _failedReads;
     try {
-      final game = await _client
-          .from('swl_live_games')
-          .select()
-          .eq('id', widget.gameId)
-          .single()
-          .timeout(const Duration(seconds: 10));
-      final version = swlStat(game['version']);
-      final rows = await Future.wait<List<SwlRow>>([
-        _client
-            .from('swl_game_lineups')
+      final SwlRow game;
+      final List<List<SwlRow>> rows;
+      final SwlRow? publicSnapshot;
+      if (widget.spectator) {
+        final snapshot = await _client
+            .rpc(
+              'swl_v57_spectator_box_source',
+              params: {'p_game_id': widget.gameId},
+            )
+            .timeout(const Duration(seconds: 10));
+        if (snapshot is! Map || snapshot['game'] is! Map) {
+          throw StateError('El Box Score no está disponible.');
+        }
+        publicSnapshot = Map<String, dynamic>.from(snapshot);
+        game = Map<String, dynamic>.from(snapshot['game'] as Map);
+        rows = [
+          for (final key in ['lineups', 'events', 'changes', 'pitches'])
+            swlRows(snapshot[key]),
+        ];
+      } else {
+        publicSnapshot = null;
+        game = await _client
+            .from('swl_live_games')
             .select()
-            .eq('game_id', widget.gameId)
-            .timeout(const Duration(seconds: 10)),
-        _versionedRows('swl_game_events', version, 'id'),
-        _versionedRows('swl_v56_pitcher_changes', version, 'team_id'),
-        if (widget.boxScore)
-          _versionedRows('swl_v56_pitching_events', version, 'pitcher_id')
-        else
+            .eq('id', widget.gameId)
+            .single()
+            .timeout(const Duration(seconds: 10));
+        final version = swlStat(game['version']);
+        rows = await Future.wait<List<SwlRow>>([
           _client
-              .from('swl_game_batting_turns')
+              .from('swl_game_lineups')
               .select()
               .eq('game_id', widget.gameId)
               .timeout(const Duration(seconds: 10)),
-      ]);
+          _versionedRows('swl_game_events', version, 'id'),
+          _versionedRows('swl_v56_pitcher_changes', version, 'team_id'),
+          if (widget.boxScore)
+            _versionedRows('swl_v56_pitching_events', version, 'pitcher_id')
+          else
+            _client
+                .from('swl_game_batting_turns')
+                .select()
+                .eq('game_id', widget.gameId)
+                .timeout(const Duration(seconds: 10)),
+        ]);
+      }
       final stats = widget.boxScore
           ? SwlGameBoxData(
               game,
@@ -144,40 +168,51 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
               lineups: rows[0],
             )
           : null;
-      final ids = <String>{
-        for (final row in rows[0]) ...swlLineupParticipantIds(row),
-        for (final row in rows[1])
-          if (row['event_data'] case final Map event)
-            ...[
-              event['incoming_player_id'],
-              event['outgoing_player_id'],
-            ].whereType<String>(),
-        for (final row in rows[2])
-          ...[row['old_pitcher_id'], row['new_pitcher_id']].whereType<String>(),
-        for (final team in stats?.batting.values ?? <Map<String, List<int>>>[])
-          ...team.keys,
-        for (final team in stats?.pitching.values ?? <Map<String, List<int>>>[])
-          ...team.keys,
-      }.where((id) => !_players.containsKey(id)).toList();
-      for (var start = 0; start < ids.length; start += 50) {
-        final people = await _client
-            .from('players')
-            .select('id,first_name,last_name,jersey_number,universal_id')
-            .inFilter('id', ids.skip(start).take(50).toList())
-            .timeout(const Duration(seconds: 10));
-        for (final person in people) {
-          _players[person['id'] as String] = person;
+      if (publicSnapshot != null) {
+        for (final player in swlRows(publicSnapshot['players'])) {
+          _players[player['id'] as String] = player;
         }
-      }
-      final latest = await _client
-          .from('swl_live_games')
-          .select('version')
-          .eq('id', widget.gameId)
-          .single()
-          .timeout(const Duration(seconds: 10));
-      if (latest['version'] != game['version']) {
-        _queued = true;
-        return;
+      } else {
+        final ids = <String>{
+          for (final row in rows[0]) ...swlLineupParticipantIds(row),
+          for (final row in rows[1])
+            if (row['event_data'] case final Map event)
+              ...[
+                event['incoming_player_id'],
+                event['outgoing_player_id'],
+              ].whereType<String>(),
+          for (final row in rows[2])
+            ...[
+              row['old_pitcher_id'],
+              row['new_pitcher_id'],
+            ].whereType<String>(),
+          for (final team
+              in stats?.batting.values ?? <Map<String, List<int>>>[])
+            ...team.keys,
+          for (final team
+              in stats?.pitching.values ?? <Map<String, List<int>>>[])
+            ...team.keys,
+        }.where((id) => !_players.containsKey(id)).toList();
+        for (var start = 0; start < ids.length; start += 50) {
+          final people = await _client
+              .from('players')
+              .select('id,first_name,last_name,jersey_number,universal_id')
+              .inFilter('id', ids.skip(start).take(50).toList())
+              .timeout(const Duration(seconds: 10));
+          for (final person in people) {
+            _players[person['id'] as String] = person;
+          }
+        }
+        final latest = await _client
+            .from('swl_live_games')
+            .select('version')
+            .eq('id', widget.gameId)
+            .single()
+            .timeout(const Duration(seconds: 10));
+        if (latest['version'] != game['version']) {
+          _queued = true;
+          return;
+        }
       }
       if (!mounted) return;
       _failedReads = 0;
@@ -610,7 +645,7 @@ class _SwlGameDetailPageState extends State<SwlGameDetailPage> {
     final stats = _stats!;
     final reports = _reportTables(game, team);
     final uid = _client.auth.currentUser?.id;
-    final ownTeam = uid == null
+    final ownTeam = widget.spectator || uid == null
         ? null
         : uid == game['home_manager_id']
         ? game['home_team_id'] as String

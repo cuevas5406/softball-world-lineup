@@ -15,11 +15,13 @@ class ThirdOutHistoryContract(unittest.TestCase):
 
     def test_runner_out_identity_is_loaded(self):
         self.assertIn("'out_runner_id'", SCOREBOARD)
-        self.assertIn("players[data['out_runner_id']?.toString()]", SCOREBOARD)
+        self.assertIn("players[runnerIds[index]?.toString()]", SCOREBOARD)
+        self.assertIn("data['out_runner_ids']", SCOREBOARD)
 
-    def test_single_runner_out_can_be_confirmed_but_multiple_outs_stay_blocked(self):
-        self.assertIn("outCount > 1 ? null", SCOREBOARD)
-        self.assertIn("defensiveError && dest == -origin", SCOREBOARD)
+    def test_multiple_runner_outs_are_only_enabled_for_defensive_error(self):
+        self.assertIn("(!defensiveError && outCount > 1)", SCOREBOARD)
+        self.assertIn("defensiveError && (dest == -origin || dest == origin)", SCOREBOARD)
+        self.assertIn("outCount > 1 && live.outs + outCount == 3 && lastOutSource == null", SCOREBOARD)
         self.assertNotIn("outCount != 1 || live.outs >= 2", SCOREBOARD)
         self.assertIn("'count_runs_on_third_out': timePlay && countRunsOnThirdOut", SCOREBOARD)
 

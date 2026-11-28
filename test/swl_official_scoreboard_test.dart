@@ -239,6 +239,42 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       methods.clear();
       respond = (request) async {
+        if (request.url.path.endsWith('/rpc/swl_v57_spectator_box_source')) {
+          return jsonResponse({
+            'game': {
+              'game_pin': 'SWL-TEST',
+              'status': 'OFFICIAL',
+              'version': 2,
+              'inning': 1,
+              'is_top': false,
+              'away_team_id': 'away',
+              'home_team_id': 'home',
+              'away_runs': 0,
+              'home_runs': 0,
+              'away_hits': 1,
+            },
+            'events': [
+              {
+                'event_type': 'HIT',
+                'batting_team_id': 'away',
+                'inning': 1,
+                'version': 1,
+                'event_data': {'batter_id': 'away-player', 'batter_base': 2},
+              },
+            ],
+            'pitches': [
+              {'version': 1, 'pitcher_id': 'home-player', 'hits': 1, 'outs': 0},
+            ],
+            'players': [
+              {
+                'id': 'away-player',
+                'first_name': 'Visitante',
+                'last_name': 'Uno',
+                'jersey_number': 12,
+              },
+            ],
+          });
+        }
         if (request.url.path.endsWith('/swl_game_lineups')) {
           return jsonResponse([
             {
@@ -361,7 +397,16 @@ void main() {
       expect(find.textContaining('AB 1 · H 1'), findsOneWidget);
       expect(scoringCalls, 0);
       expect(methods.every((method) => method == 'GET'), isTrue);
+      await tester.tap(find.text('Box Score'));
+      await tester.pumpAndSettle();
+      expect(find.text('Box Score · SWL-TEST'), findsOneWidget);
+      expect(find.textContaining('Visitante Uno'), findsOneWidget);
+      expect(find.text('VB'), findsOneWidget);
+      expect(find.byTooltip('Cambios de jugadores'), findsNothing);
+      expect(methods.where((method) => method != 'GET'), ['POST']);
       await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 8));
+      methods.clear();
     },
   );
 

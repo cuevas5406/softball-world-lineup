@@ -32,6 +32,33 @@ SwlRow pitch(int version, String id, {int outs = 0, int hits = 0, int k = 0}) =>
     };
 
 void main() {
+  test('error con dos outs acredita el contacto a un pitcher y una PA', () {
+    final stats = SwlGameBoxData(
+      game(),
+      [
+        play(1, 'HIT', {'batter_id': 'runner', 'batter_base': 1}),
+        play(2, 'HIT', {'batter_id': 'runner2', 'batter_base': 1}),
+        play(3, 'ERROR', {
+          'batter_id': 'batter',
+          'batter_base': 1,
+          'plate_appearance_completed': true,
+          'runs': 0,
+          'outs_added': 2,
+          'out_runner_ids': ['runner', 'runner2'],
+        }),
+      ],
+      [
+        pitch(1, 'starter', hits: 1),
+        pitch(2, 'active', hits: 1),
+        pitch(3, 'active', outs: 2),
+      ],
+    );
+    expect(stats.batting['away']!['batter']!.take(4), [1, 1, 0, 0]);
+    expect(stats.pitching['home']!['active']!.first, 2);
+    expect(stats.pitching['home']!['active']!.last, 2);
+    expect(stats.incompletePitching, isEmpty);
+  });
+
   test('atribuye el hit del suplente y el relevo por versión de LAB', () {
     final stats = SwlGameBoxData(
       game(),

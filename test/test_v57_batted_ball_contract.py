@@ -36,7 +36,7 @@ class BattedBallContract(unittest.TestCase):
         ui = (ROOT / 'lib/swl_advanced_scoreboard.dart').read_text()
         assert '¿Cuál corredor fue el último out?' in ui
         assert "'p_last_out_source': lastOutSource" in ui
-        assert '(outCount > 1 && lastOutSource == null)' in ui
+        assert '(outCount > 1 && live.outs + outCount == 3 && lastOutSource == null)' in ui
 
     def test_homerun_and_routing(self):
         assert 'or batter_base not between 1 and 4' in SQL

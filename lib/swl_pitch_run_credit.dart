@@ -242,6 +242,16 @@ class SwlPitchRunCredit {
           }
         }
       }
+      if (type == 'ERROR') {
+        final retired = data['out_runner_ids'];
+        final ids = retired is List
+            ? retired.whereType<String>()
+            : [data['out_runner_id']].whereType<String>();
+        for (final id in ids) {
+          bases.remove(id);
+          uncertainRunners.remove(id);
+        }
+      }
       if (type == 'RUNNER_OUT' || type == 'DOUBLE_PLAY' || type == 'HIT') {
         if (type != 'HIT' || data['runner_id'] != null)
           bases.remove(data['runner_id']);

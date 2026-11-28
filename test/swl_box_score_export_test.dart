@@ -1,9 +1,10 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../lib/swl_official_box_score.dart';
+import '../lib/swl_game_box_data.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -82,6 +83,9 @@ void main() {
     tester,
   ) async {
     await tester.runAsync(() async {
+      await (FontLoader(
+        'SwlReport',
+      )..addFont(rootBundle.load('assets/fonts/NotoSans-Bold.ttf'))).load();
       final sample = result()..['code'] = 'SWL-DEMO';
       sample['finish'] = 'Datos sintéticos de verificación';
       final report = SwlOfficialBoxScore(
@@ -91,22 +95,57 @@ void main() {
             team: [
               (
                 title: 'Bateo',
-                labels: const ['PA', 'VB', 'H', 'AVG'],
+                labels: SwlGameBoxData.battingLabels,
                 rows: [
                   for (var i = 0; i < 9; i++)
                     (
-                      'Pelotero de muestra ${i + 1} · #${10 + i}',
-                      ['3', '3', '1', '.333'],
+                      '${team == 'h' ? 'Local' : 'Visitante'} Gabriel de los Santos Rodríguez ${i + 1} · #${10 + i}',
+                      [
+                        '3',
+                        '3',
+                        '0',
+                        '1',
+                        '0',
+                        '0',
+                        '0',
+                        '0',
+                        '0',
+                        '0',
+                        '0',
+                        '.333',
+                      ],
                     ),
-                  ('Total', ['27', '27', '9', '.333']),
+                  (
+                    'Total',
+                    [
+                      '27',
+                      '27',
+                      '0',
+                      '9',
+                      '0',
+                      '0',
+                      '0',
+                      '0',
+                      '0',
+                      '0',
+                      '0',
+                      '.333',
+                    ],
+                  ),
                 ],
               ),
               (
                 title: 'Pitcheo',
-                labels: const ['IP', 'H', 'C', 'CL', 'P'],
+                labels: SwlGameBoxData.pitchingLabels,
                 rows: [
-                  ('Lanzador de muestra · #1', ['6.0', '4', '3', '≥2', '28']),
-                  ('Total', ['6.0', '4', '3', '≥2', '28']),
+                  (
+                    'Lanzador de muestra · #1',
+                    ['6.0', '4', '3', '≥2', '0', '2', '1', '5', '11', '28'],
+                  ),
+                  (
+                    'Total',
+                    ['6.0', '4', '3', '≥2', '0', '2', '1', '5', '11', '28'],
+                  ),
                 ],
               ),
               (
@@ -125,6 +164,7 @@ void main() {
         'Visitante',
       });
       final folder = Platform.environment['SWL_EXPORT_SAMPLE_DIR'];
+      if (folder != null) await Directory(folder).create(recursive: true);
       for (final (label, team, pageCount) in [
         ('equipo', 'h', 4),
         ('global', null, 7),

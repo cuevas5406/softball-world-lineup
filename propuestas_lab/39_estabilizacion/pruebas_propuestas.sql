@@ -79,6 +79,13 @@ BEGIN
            OR (g.swl_knockout_pending IS NOT NULL)<>(scenario.mode='CONSULT')
         THEN RAISE EXCEPTION 'Modo incorrecto: %',scenario.mode; END IF;
         IF scenario.mode='CONSULT' THEN
+          PERFORM set_config('request.jwt.claim.sub',gen_random_uuid()::text,true);
+          BEGIN
+            PERFORM public.swl_v57_knockout_decision(fixture,3,'CONTINUE');
+            RAISE SQLSTATE 'ZX011' USING MESSAGE='Un fanático pudo votar';
+          EXCEPTION WHEN insufficient_privilege THEN
+            IF SQLERRM<>'KNOCKOUT_MANAGER_REQUIRED' THEN RAISE; END IF;
+          END;
           PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
           BEGIN
             PERFORM public.swl_v56_record_plate_action(fixture,3,'OUT',away_players[1]);
@@ -107,6 +114,19 @@ BEGIN
             AND status='IN_PROGRESS' AND swl_knockout_pending IS NULL
             AND swl_knockout_waived_through=3 AND version=5)
           THEN RAISE EXCEPTION 'Dos votos no reanudaron el juego'; END IF;
+          PERFORM set_config('request.jwt.claim.sub',source_game.away_manager_id::text,true);
+          PERFORM public.swl_v56_record_plate_action(fixture,5,'OUT',away_players[1]);
+          IF EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
+                     AND swl_knockout_pending IS NOT NULL)
+          THEN RAISE EXCEPTION 'Se reabrió antes de terminar la cuarta'; END IF;
+          UPDATE public.swl_live_games SET is_top=false,outs=2 WHERE id=fixture;
+          PERFORM set_config('request.jwt.claim.sub',source_game.home_manager_id::text,true);
+          PERFORM public.swl_v56_record_plate_action(fixture,6,'OUT',home_players[2]);
+          IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture
+             AND version=7 AND swl_knockout_pending->>'reason'='Knockout')
+            OR (SELECT count(*) FROM swl_private.v57_knockout_audit
+                WHERE game_id=fixture AND action='PENDING')<>2
+          THEN RAISE EXCEPTION 'No se reabrió la consulta al finalizar la cuarta'; END IF;
         END IF;
         RAISE SQLSTATE 'ZX012';
       EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
@@ -138,6 +158,65 @@ BEGIN
       EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
       END;
     END LOOP;
+
+    PERFORM public.swl_v56_apply_hit(fixture,2,away_players[2],1,2,NULL,NULL);
+    PERFORM public.swl_v56_apply_hit(fixture,3,away_players[3],1,2,3,NULL);
+    FOR scenario IN SELECT * FROM (VALUES
+      (0,-3,-4,0,NULL::integer,false,2,1),
+      (1,-3,-4,0,1,true,2,1),
+      (1,-2,-4,0,1,true,2,0),
+      (0,-2,-3,-4,3,false,3,0)
+    ) AS v(previous_outs,first_to,second_to,third_to,last_out,timing,outs_added,runs) LOOP
+      BEGIN
+        UPDATE public.swl_live_games SET outs=scenario.previous_outs WHERE id=fixture;
+        PERFORM public.swl_v57_defensive_error(fixture,4,'ERROR',away_players[4],
+          jsonb_build_object('p_batter_id',away_players[4],'p_batter_base',1,
+           'p_first_to',scenario.first_to,'p_second_to',scenario.second_to,
+           'p_third_to',scenario.third_to,'p_last_out_source',scenario.last_out,
+           'count_runs_on_third_out',scenario.timing));
+        IF NOT EXISTS (SELECT FROM public.swl_live_games WHERE id=fixture AND version=5
+            AND away_runs=scenario.runs AND away_hits=3 AND home_errors=1
+            AND is_top=(scenario.previous_outs+scenario.outs_added<3)
+            AND outs=(scenario.previous_outs+scenario.outs_added)%3)
+          OR NOT EXISTS (SELECT FROM public.swl_v56_pitching_events WHERE game_id=fixture
+              AND version=5 AND pitcher_id=home_players[1] AND outs=scenario.outs_added AND hits=0)
+          OR NOT EXISTS (SELECT FROM public.swl_game_events WHERE game_id=fixture
+              AND version=5 AND event_type='ERROR' AND event_data->>'batter_id'=away_players[4]::text
+              AND event_data->>'pitcher_id'=home_players[1]::text
+              AND jsonb_array_length(event_data->'out_runner_ids')=scenario.outs_added
+              AND (event_data->>'runs')::int=scenario.runs)
+          THEN RAISE EXCEPTION 'Error con múltiples outs incorrecto: %',scenario; END IF;
+        BEGIN
+          PERFORM public.swl_v57_defensive_error(fixture,4,'ERROR',away_players[4],
+            jsonb_build_object('p_batter_id',away_players[4],'p_batter_base',1,
+             'p_first_to',scenario.first_to,'p_second_to',scenario.second_to,
+             'p_third_to',scenario.third_to,'p_last_out_source',scenario.last_out));
+          RAISE SQLSTATE 'ZX011' USING MESSAGE='Se aceptó repetir un error';
+        EXCEPTION WHEN raise_exception OR insufficient_privilege THEN
+          IF SQLERRM NOT IN ('El partido o la versión cambió antes de anotar.',
+                               'Solo anota el mánager del equipo al bate.') THEN RAISE; END IF;
+        END;
+        IF (SELECT count(*) FROM public.swl_game_events
+              WHERE game_id=fixture AND event_type='ERROR')<>1
+          THEN RAISE EXCEPTION 'Se duplicó el evento de error'; END IF;
+        IF NOT EXISTS (
+          SELECT FROM jsonb_array_elements(
+            public.swl_v57_spectator_box_source(fixture)->'pitches') p
+            WHERE (p->>'version')::int=5 AND p->>'pitcher_id'=home_players[1]::text)
+          OR public.swl_v57_spectator_box_source(fixture)->'game' ? 'home_manager_id'
+          THEN RAISE EXCEPTION 'Box Score público inconsistente'; END IF;
+        RAISE SQLSTATE 'ZX012';
+      EXCEPTION WHEN SQLSTATE 'ZX012' THEN NULL;
+      END;
+    END LOOP;
+    IF public.swl_v57_spectator_box_source(other_game) IS NOT NULL THEN
+      RAISE EXCEPTION 'Box Score disponible antes de iniciar el partido';
+    END IF;
+    PERFORM set_config('request.jwt.claim.sub','',true);
+    IF public.swl_v57_spectator_box_source(fixture) IS NOT NULL
+      OR has_function_privilege('anon','public.swl_v57_spectator_box_source(uuid)','EXECUTE')
+
+    THEN RAISE EXCEPTION 'Acceso público indebido al Box Score'; END IF;
     RAISE SQLSTATE 'ZX013';
   EXCEPTION WHEN SQLSTATE 'ZX013' THEN NULL;
   END;

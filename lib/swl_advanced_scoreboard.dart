@@ -1,6 +1,7 @@
 import 'swl_secondary_actions.dart';
 import 'swl_double_play.dart';
 import 'swl_official_box_score.dart';
+import 'swl_game_detail_page.dart';
 import 'swl_history_events.dart';
 import 'swl_roster_repository.dart';
 import 'swl_special_play.dart';
@@ -558,6 +559,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           if (event['event_data'] case final Map data) ...{
             for (final key in ['batter_id', 'runner_id', 'last_out_player_id', 'out_runner_id'])
               if (data[key] case final Object id) id.toString(),
+            if (data['out_runner_ids'] case final List retired)
+              ...retired.whereType<String>(),
             for (final key in ['outgoing_player_id', 'incoming_player_id', 'pitcher_id'])
               if (data[key] case final Object id) id.toString(),
           },
@@ -670,18 +673,28 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
           for (final destination in runnerDestinations)
             if (int.tryParse('$destination') case final int base when base < 0)
               switch (base) {
+                -1 => 'primera',
                 -2 => 'segunda',
                 -3 => 'tercera',
                 -4 => 'home',
                 _ => 'base desconocida',
               },
         ];
-        final outRunner = players[data['out_runner_id']?.toString()];
-        final outRunnerName =
-            '${outRunner?['first_name'] ?? ''} ${outRunner?['last_name'] ?? ''}'.trim();
-        final outDetail = outLocations.isEmpty
-            ? ''
-            : ' · ${outRunnerName.isEmpty ? 'out' : '$outRunnerName: out'} en ${outLocations.join(' y ')}';
+        final retired = data['out_runner_ids'];
+        final runnerIds = retired is List && retired.length == outLocations.length
+            ? retired
+            : outLocations.length == 1
+            ? [data['out_runner_id']]
+            : List.filled(outLocations.length, null);
+        final outDetail = [
+          for (final (index, location) in outLocations.indexed)
+            () {
+              final runner = players[runnerIds[index]?.toString()];
+              final name =
+                  '${runner?['first_name'] ?? ''} ${runner?['last_name'] ?? ''}'.trim();
+              return ' · ${name.isEmpty ? 'out' : '$name: out'} en $location';
+            }(),
+        ].join();
         // En un error defensivo no hubo hit. Describir el destino del
         // bateador y los avances reales, sin confundirlo con un sencillo.
         final errorAdvances = <String>[];
@@ -2488,8 +2501,22 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
       return name.isEmpty ? 'Pelotero' : name;
     }
     return ListView(children: [
-      if (_currentLiveSnapshot?.status == 'OFFICIAL')
-        Padding(padding: const EdgeInsets.all(12), child: SwlShareBoxScoreButton(gameId: _currentLiveSnapshot!.gameId)),
+      if (_currentLiveSnapshot case final snapshot? when
+          const {'IN_PROGRESS', 'FINAL', 'OFFICIAL'}.contains(snapshot.status))
+        ListTile(
+          leading: const Icon(Icons.table_chart_outlined),
+          title: const Text('Box Score'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => SwlGameDetailPage(
+              gameId: snapshot.gameId,
+              boxScore: true,
+              spectator: true,
+              teamName: (id) => id == snapshot.homeTeamId ? homeName : visitorName,
+              teamLogo: (id) => id == snapshot.homeTeamId ? widget.homeLogo : widget.awayLogo,
+            ),
+          )),
+        ),
       if (batting.isNotEmpty || _spectatorBatting.isNotEmpty) const ListTile(title: Text('Bateo')),
       if (batting.isNotEmpty)
         for (final row in batting)
@@ -3135,28 +3162,36 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
             for (var i = 0; i < destinations.length; i++)
               if (destinations[i] != null && destinations[i]! < 0) i + 1,
           ];
-          if (outCount > 1 && !outSources.contains(lastOutSource)) {
+          if (lastOutSource != null && !outSources.contains(lastOutSource)) {
             lastOutSource = null;
           }
 
-          final forced = firstTo == -2 || (first && secondTo == -3) ||
-              (first && second && thirdTo == -4);
-          final timePlay = live.outs + outCount == 3 && outCount == 1 && !forced &&
-              destinations.skip(retired + 1).contains(0);
+          final lastRetired = outCount == 1 ? retired : (lastOutSource ?? 0) - 1;
+          final forced = lastRetired >= 0 &&
+              destinations[lastRetired] == -(lastRetired + 2) &&
+              List.generate(lastRetired, (i) => i).every(
+                (i) => destinations[i] != null && destinations[i]! >= 0,
+              );
+          final timePlay = live.outs + outCount == 3 && lastRetired >= 0 && !forced &&
+              destinations.skip(lastRetired + 1).contains(0);
           int? runs;
-          try {
-            final preview = live.playState.hit(
+          if (!defensiveError) {
+            try {
+              final preview = live.playState.hit(
               batterBase: batterBase, firstTo: firstTo,
               secondTo: secondTo, thirdTo: thirdTo,
               countRunsOnThirdOut: timePlay && countRunsOnThirdOut,
             );
-            runs = live.isTop ? preview.awayRuns - live.awayRuns :
-                preview.homeRuns - live.homeRuns;
-          } on StateError {
-            // El motor local de vista previa puede rechazar destinos negativos
-            // aunque LAB admita un único corredor retirado durante un hit.
-            // Solo habilitar ese caso si la ocupación y el orden son coherentes.
-            if (outCount == 1 &&
+              runs = live.isTop ? preview.awayRuns - live.awayRuns :
+                  preview.homeRuns - live.homeRuns;
+            } on StateError {
+              // Se revalida abajo con los destinos del anotador.
+            }
+          }
+          if (runs == null) {
+            // El error permite conservar bases y registrar varios outs.
+            // Para el hit se conserva la validación de un solo out adicional.
+            if ((outCount == 1 || defensiveError) && live.outs + outCount <= 3 &&
                 batterBase >= 1 && batterBase <= 3) {
               final origins = <int>[if (first) 1, if (second) 2, if (third) 3];
               final moves = <int?>[firstTo, secondTo, thirdTo];
@@ -3172,7 +3207,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                   2 => const [0, 3, -3, -4],
                   _ => const [0, -4],
                 };
-                if (!allowed.contains(dest) && !(defensiveError && dest == -origin)) { valid = false; break; }
+                if (!allowed.contains(dest) &&
+                    !(defensiveError && (dest == -origin || dest == origin))) {
+                  valid = false; break;
+                }
                 if (dest < 0) continue;
                 final target = dest == 0 ? 4 : dest;
                 if (target < lastTarget || (target == lastTarget && target != 4)) {
@@ -3188,9 +3226,9 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               if (valid) {
                 // Con dos outs, la carrera solo vale en jugada de tiempo
                 // confirmada y si el tercer out no fue forzado.
-                if (live.outs == 2) {
+                if (live.outs + outCount == 3) {
                   candidateRuns = timePlay && countRunsOnThirdOut
-                      ? destinations.skip(retired + 1).where((d) => d == 0).length
+                      ? destinations.skip(lastRetired + 1).where((d) => d == 0).length
                       : 0;
                 }
                 runs = candidateRuns;
@@ -3210,11 +3248,11 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                 }, batter: true),
                 if (first && batterBase != 4) choice('Corredor en primera', firstTo!, [2, 3, 0, if (defensiveError) -1, -2, -3, -4],
                     (n) => firstTo = n),
-                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [3, 0, if (defensiveError) -2, -3, -4],
+                if (second && batterBase != 4) choice('Corredor en segunda', secondTo!, [if (defensiveError) 2, 3, 0, if (defensiveError) -2, -3, -4],
                     (n) => secondTo = n),
-                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [0, if (defensiveError) -3, -4],
+                if (third && batterBase != 4) choice('Corredor en tercera', thirdTo!, [if (defensiveError) 3, 0, if (defensiveError) -3, -4],
                     (n) => thirdTo = n),
-                if (outCount > 1)
+                if (defensiveError && outCount > 1 && live.outs + outCount == 3)
                   DropdownButtonFormField<int>(
                     key: ValueKey('last-out-$lastOutSource-${outSources.join("-")}'),
                     initialValue: lastOutSource,
@@ -3228,7 +3266,10 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                           child: Text('Corredor de ${source == 1 ? "primera" : source == 2 ? "segunda" : "tercera"}'),
                         ),
                     ],
-                    onChanged: (source) => update(() => lastOutSource = source),
+                    onChanged: (source) => update(() {
+                      lastOutSource = source;
+                      countRunsOnThirdOut = false;
+                    }),
                   ),
                 if (timePlay)
                   CheckboxListTile(
@@ -3236,7 +3277,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     value: countRunsOnThirdOut,
                     onChanged: (value) => update(() => countRunsOnThirdOut = value == true),
                   ),
-                if (outCount > 1)
+                if (!defensiveError && outCount > 1)
                   const Text(
                     'Esta jugada admite un solo out de corredor.',
                     style: TextStyle(color: Colors.amber, fontSize: 12)),
@@ -3258,8 +3299,8 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
               TextButton(onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('CANCELAR')),
               FilledButton(onPressed: runs == null ||
-                  (outCount > 1 && lastOutSource == null) ||
-                  outCount > 1 ? null : () =>
+                  (outCount > 1 && live.outs + outCount == 3 && lastOutSource == null) ||
+                  (!defensiveError && outCount > 1) ? null : () =>
                   Navigator.pop(dialogContext, {
                     'p_batter_id': batterId,
                     'p_batter_base': batterBase,
@@ -3267,7 +3308,7 @@ class _ScoreboardScreenState extends State<SwlAdvancedScoreboard> {
                     'p_second_to': secondTo,
                     'p_third_to': thirdTo,
                     if (outCount > 0) 'count_runs_on_third_out': timePlay && countRunsOnThirdOut,
-                    if (outCount > 1) 'p_last_out_source': lastOutSource,
+                    if (outCount > 1 && live.outs + outCount == 3) 'p_last_out_source': lastOutSource,
                   }), child: Text(defensiveError ? 'REGISTRAR ERROR' : 'CONFIRMAR BATAZO')),
             ],
           );

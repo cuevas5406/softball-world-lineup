@@ -31,3 +31,8 @@ flutter:
     - android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
     - assets/fonts/NotoSans-Regular.ttf
     - assets/fonts/NotoSans-Bold.ttf
+  fonts:
+    - family: SwlReport
+      fonts:
+        - asset: assets/fonts/NotoSans-Bold.ttf
+          weight: 700

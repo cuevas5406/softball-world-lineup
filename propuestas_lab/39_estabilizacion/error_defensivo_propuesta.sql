@@ -12,7 +12,8 @@ DECLARE
  new_players uuid[]:=ARRAY[NULL,NULL,NULL]::uuid[]; new_occ boolean[]:=ARRAY[false,false,false];
  i integer; d integer; target integer; last_target integer; outs_made integer:=0; scored integer:=0;
  scoring_players uuid[]:=ARRAY[]::uuid[];
- terminal boolean:=false; retired_source integer; forced_out boolean:=false; confirmed_timing boolean:=false;
+ terminal boolean:=false; retired_source integer;
+ retired_players uuid[]:=ARRAY[]::uuid[]; forced_out boolean:=false; confirmed_timing boolean:=false;
  new_bases jsonb; new_innings jsonb; new_home integer; new_away integer; result jsonb;
 BEGIN
  IF p_action IS DISTINCT FROM 'ERROR' OR p_data IS NULL OR jsonb_typeof(p_data)<>'object' THEN
@@ -31,13 +32,23 @@ BEGIN
  END LOOP;
  IF p_data ? 'count_runs_on_third_out' AND jsonb_typeof(p_data->'count_runs_on_third_out') <> 'boolean' THEN
    RAISE EXCEPTION 'INVALID_TIMING_CONFIRMATION'; END IF;
- IF p_data ? 'p_last_out_source' AND p_data->'p_last_out_source' IS DISTINCT FROM 'null'::jsonb
- THEN RAISE EXCEPTION 'V57_COMPLEX_PLAY_NOT_ENABLED'; END IF;
  confirmed_timing:=coalesce((p_data->>'count_runs_on_third_out')::boolean,false);
  outs_made:=(SELECT count(*) FROM unnest(moves) x WHERE x<0);
- IF outs_made>1 THEN RAISE EXCEPTION 'V57_COMPLEX_PLAY_NOT_ENABLED'; END IF;
  g:=public.swl_v56_lock_batting_turn(p_game_id,p_expected_version);
- terminal := g.outs=2 AND outs_made=1;
+ IF g.outs+outs_made>3 THEN RAISE EXCEPTION 'INVALID_OUT_COUNT'; END IF;
+ terminal:=g.outs+outs_made=3;
+ IF terminal AND outs_made>1 THEN
+   IF coalesce(p_data->>'p_last_out_source','') !~ '^[1-3]$' THEN
+     RAISE EXCEPTION 'LAST_OUT_REQUIRED';
+   END IF;
+   retired_source:=(p_data->>'p_last_out_source')::integer;
+   IF moves[retired_source] IS NULL OR moves[retired_source]>=0 THEN
+     RAISE EXCEPTION 'INVALID_LAST_OUT';
+   END IF;
+ ELSIF outs_made=1 THEN
+   SELECT x.origin INTO retired_source
+   FROM unnest(moves) WITH ORDINALITY AS x(destination,origin) WHERE x.destination<0;
+ END IF;
  team:=CASE WHEN g.is_top THEN g.away_team_id ELSE g.home_team_id END;
  SELECT l.lineup INTO lineup FROM public.swl_game_lineups l WHERE l.game_id=g.id AND l.team_id=team;
  IF lineup IS NULL OR jsonb_typeof(lineup)<>'array' OR jsonb_array_length(lineup) NOT BETWEEN 9 AND 13 THEN
@@ -57,10 +68,10 @@ BEGIN
    IF occ[i] IS DISTINCT FROM (d IS NOT NULL) THEN RAISE EXCEPTION 'RUNNER_DESTINATIONS_REQUIRED'; END IF;
    IF d IS NOT NULL THEN
      IF (i=1 AND d NOT IN (0,2,3,-1,-2,-3,-4))
-     OR (i=2 AND d NOT IN (0,3,-2,-3,-4))
-     OR (i=3 AND d NOT IN (0,-3,-4)) THEN RAISE EXCEPTION 'INVALID_RUNNER_DESTINATION'; END IF;
+     OR (i=2 AND d NOT IN (0,2,3,-2,-3,-4))
+     OR (i=3 AND d NOT IN (0,3,-3,-4)) THEN RAISE EXCEPTION 'INVALID_RUNNER_DESTINATION'; END IF;
      IF d<0 THEN
-       retired_source:=i;
+       retired_players:=array_append(retired_players,players[i]);
        IF -d<i THEN RAISE EXCEPTION 'INVALID_OUT_BASE'; END IF;
      ELSE
        target:=CASE WHEN d=0 THEN 4 ELSE d END;
@@ -81,7 +92,8 @@ BEGIN
  new_occ[bbase]:=true;new_players[bbase]:=p_batter_id;
  IF terminal THEN
    forced_out := moves[retired_source] = -(retired_source+1)
-     AND (retired_source=1 OR (occ[1] AND (retired_source=2 OR occ[2])));
+     AND NOT EXISTS (SELECT FROM generate_series(1,retired_source-1) src(origin)
+       WHERE moves[src.origin] IS NULL OR moves[src.origin]<0);
    scored:=0;
    scoring_players:=ARRAY[]::uuid[];
    IF confirmed_timing AND NOT forced_out THEN
@@ -128,9 +140,10 @@ BEGIN
  'batting_order',batting_order,'batter_base',bbase,'first_to',moves[1],'second_to',moves[2],
  'third_to',moves[3],'outs_added',outs_made,'runs',scored,'scoring_player_ids',to_jsonb(scoring_players),'rbi',0,
  'third_out',terminal,'out_at_base',-moves[retired_source],
- 'out_runner_id',players[(SELECT x.i FROM unnest(moves) WITH ORDINALITY AS x(destination,i) WHERE x.destination<0 LIMIT 1)]::text),g.version+1);
+ 'out_runner_id',players[retired_source]::text,'out_runner_ids',to_jsonb(retired_players),
+ 'last_out_source',CASE WHEN terminal THEN retired_source END),g.version+1);
  IF pitcher IS NULL THEN RAISE EXCEPTION 'PITCHER_REQUIRED'; END IF;
- PERFORM public.swl_v56_accumulate_pitching(g,pitcher,'ERROR');
+ PERFORM public.swl_v56_accumulate_pitching(g,pitcher,'OUT'); -- Contacto sin hit ni ponche.
  PERFORM public.swl_v56_close_after_play(g);
  RETURN jsonb_build_object('id',g.id,'version',g.version+1,'action','ERROR','runs',scored,'outs_added',outs_made,'third_out',terminal,'bases',new_bases);
 END $function$;
